@@ -73,12 +73,41 @@ int main() {
   expect(
       std::holds_alternative<ConfigError>(parse_listen_endpoint("127.0.0.1")),
       "endpoint requires a port", failures);
+  expect(std::holds_alternative<ConfigError>(parse_listen_endpoint(":50051")),
+         "endpoint rejects an empty host", failures);
+  expect(
+      std::holds_alternative<ConfigError>(parse_listen_endpoint("127.0.0.1:")),
+      "endpoint rejects an empty port", failures);
+  expect(std::holds_alternative<ConfigError>(
+             parse_listen_endpoint("127.0.0.1:not-a-port")),
+         "endpoint rejects a non-numeric port", failures);
   expect(
       std::holds_alternative<ConfigError>(parse_listen_endpoint("127.0.0.1:0")),
       "port zero is rejected", failures);
+  expect(std::holds_alternative<ListenEndpoint>(
+             parse_listen_endpoint("127.0.0.1:65535")),
+         "maximum port is accepted", failures);
+  expect(std::holds_alternative<ConfigError>(
+             parse_listen_endpoint("127.0.0.1:65536")),
+         "port above the maximum is rejected", failures);
   expect(
       std::holds_alternative<ConfigError>(parse_listen_endpoint("::1:50051")),
       "unbracketed IPv6 is rejected", failures);
+  expect(
+      std::holds_alternative<ConfigError>(parse_listen_endpoint("[::1:50051")),
+      "unterminated bracketed host is rejected", failures);
+  expect(
+      std::holds_alternative<ConfigError>(parse_listen_endpoint("[::1]50051")),
+      "bracketed host requires a colon before the port", failures);
+  expect(std::holds_alternative<ConfigError>(
+             parse_listen_endpoint("[::1]:50051:extra")),
+         "bracketed host rejects an invalid port suffix", failures);
+  expect(std::holds_alternative<ListenEndpoint>(
+             parse_listen_endpoint(std::string(253U, 'a') + ":1")),
+         "253-byte host token is accepted", failures);
+  expect(std::holds_alternative<ConfigError>(
+             parse_listen_endpoint(std::string(254U, 'a') + ":1")),
+         "254-byte host token is rejected", failures);
 
   const auto validated = validate_config(valid_config());
   expect(std::holds_alternative<ValidatedGatewayConfig>(validated),

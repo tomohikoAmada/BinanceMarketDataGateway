@@ -47,8 +47,9 @@ struct ListenEndpoint final {
 
 using EndpointResult = std::variant<ListenEndpoint, ConfigError>;
 
-// Parses host:port without resolving or binding the endpoint. Bracketed IPv6 is
-// accepted.
+// Parses host:port without resolving or binding the endpoint. The host is only
+// checked as a non-empty safe ASCII host token; this is not full DNS/IP syntax
+// validation. Bracketed host tokens containing colons are accepted.
 [[nodiscard]] EndpointResult parse_listen_endpoint(std::string_view value);
 
 struct GatewayConfig final {

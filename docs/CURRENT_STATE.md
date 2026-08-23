@@ -34,10 +34,10 @@ RECORDER_DEPENDENCY=NO
   and [issue #48](https://github.com/tomohikoAmada/BinanceMarketDataProjection/issues/48) remain
   OPEN for the stale ProtoAdapter/reference ASCII-only symbol rule; no merge is claimed. Gateway
   Phase A keeps the public symbol identity strict-UTF-8 and opaque rather than copying that rule.
-- [Contracts issue #17](https://github.com/tomohikoAmada/BinanceMarketDataContracts/issues/17) and
-  [Draft PR #18](https://github.com/tomohikoAmada/BinanceMarketDataContracts/pull/18) remain OPEN
-  and unmerged for the matching Domain/schema correction; reconcile its generated outputs with the
-  concurrent Contracts #13/#16 work before publication.
+- Contracts PR #13 is merged. [Contracts issue #17](https://github.com/tomohikoAmada/BinanceMarketDataContracts/issues/17)
+  and [Draft PR #18](https://github.com/tomohikoAmada/BinanceMarketDataContracts/pull/18) remain
+  OPEN for the matching Domain/schema correction; Draft PR #16 remains OPEN for formal release
+  readiness. Reconcile their generated outputs before publication.
 - A future Phase B implementation must be explicitly authorized before adding transport, REST
   bootstrap, buffering, reconnect/resync, queues, subscriptions, or gRPC service behavior.
 - The remaining G0 integration dependency is publication of the immutable upstream bundle,

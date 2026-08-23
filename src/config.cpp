@@ -93,7 +93,7 @@ constexpr std::size_t kMaxHostLength = 253U;
   return true;
 }
 
-[[nodiscard]] bool valid_host(std::string_view value) noexcept {
+[[nodiscard]] bool valid_host_token(std::string_view value) noexcept {
   if (value.empty() || value.size() > kMaxHostLength) {
     return false;
   }
@@ -112,9 +112,10 @@ constexpr std::size_t kMaxHostLength = 253U;
 
 [[nodiscard]] EndpointResult parse_port(std::string_view host,
                                         std::string_view port) {
-  if (!valid_host(host) || port.empty()) {
-    return error(ConfigErrorCode::InvalidEndpoint, "grpc-listen",
-                 "endpoint must contain a valid host and port");
+  if (!valid_host_token(host) || port.empty()) {
+    return error(
+        ConfigErrorCode::InvalidEndpoint, "grpc-listen",
+        "endpoint must contain a non-empty safe ASCII host token and port");
   }
 
   std::uint32_t parsed_port = 0U;
@@ -132,9 +133,10 @@ constexpr std::size_t kMaxHostLength = 253U;
 
 [[nodiscard]] ConfigResult validate_endpoint(const GatewayConfig &config) {
   const auto &endpoint = config.grpc_listen;
-  if (!valid_host(endpoint.host) || endpoint.port == 0U) {
-    return error(ConfigErrorCode::InvalidEndpoint, "grpc-listen",
-                 "endpoint must contain a valid host and port");
+  if (!valid_host_token(endpoint.host) || endpoint.port == 0U) {
+    return error(
+        ConfigErrorCode::InvalidEndpoint, "grpc-listen",
+        "endpoint must contain a non-empty safe ASCII host token and port");
   }
   return detail::ConfigValidationAccess::create(config);
 }

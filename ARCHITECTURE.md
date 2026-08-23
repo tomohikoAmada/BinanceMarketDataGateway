@@ -23,7 +23,9 @@ in later phases.
 
 - `config.hpp` defines `Venue`, `Market`, `ListenEndpoint`, `GatewayConfig`, and typed validation
   errors. The only configuration fields are venue, market, symbol, a future gRPC listen endpoint,
-  and a nonzero queue-capacity value. The symbol is an opaque, exact, non-empty strict UTF-8
+  and a nonzero queue-capacity value. The listen endpoint performs only shallow, no-I/O validation
+  of a non-empty safe ASCII host token and port; it does not claim full DNS/IP syntax validation.
+  The symbol is an opaque, exact, non-empty strict UTF-8
   scalar identity without ASCII C0, DEL, or ASCII-whitespace bytes. Validation preserves the
   original bytes and does not normalize, case-fold, impose a length/alphabet rule, or assert
   exchange membership. Later transport code must map the configured identity to the official
