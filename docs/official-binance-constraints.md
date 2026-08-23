@@ -41,9 +41,11 @@ These are concise conclusions derived from the retrieved pages; they are not imp
   return a pong copying the ping payload within one minute. A connection permits 5 incoming
   messages/second, at most 1024 streams, and 300 connection attempts per 5 minutes per IP.
 - Keep the documented Spot bootstrap acquisition rule separate from apply-time continuity. The
-  Host snapshot/buffer procedure obtains `GET /api/v3/depth`, calls its `lastUpdateId` value `L`,
-  discards buffered events with `u <= L`, and requires the first retained event to contain `L`
-  within `[U,u]`. This is the official snapshot reacquisition and buffering instruction.
+  Host snapshot/buffer procedure first records the `U` of the first received event, obtains
+  `GET /api/v3/depth` and calls its `lastUpdateId` value `L`, and reacquires the snapshot if
+  `L < first_received_U`. It then discards buffered events with `u <= L`. The official page says
+  the first retained event should contain `L` within `[U,u]`; that is acquisition guidance, not a
+  Gateway-created second apply-time classifier or a separate rejection condition.
 - At apply time, after a local update id `C` has been established, the official gap condition is
   `U > local_update_id + 1`; a normal next update has `U = previous_event.u + 1`. Projection
   ADR-0008/Core classifies this with the overflow-safe relation `U <= C + 1 <= u`, where an
