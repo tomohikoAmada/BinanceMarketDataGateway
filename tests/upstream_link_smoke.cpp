@@ -4,6 +4,7 @@
 #include <binance_market_data/projection/v1/projection_state/book_projection.hpp>
 #include <binance_market_data/projection_adapter/v1/proto_adapter.hpp>
 
+#include <concepts>
 #include <cstdlib>
 #include <memory>
 #include <variant>
@@ -13,9 +14,12 @@ int main() {
   using projection::v1::BookProjection;
   using projection::v1::NumericSpec;
   using projection::v1::SequencePolicyKind;
+  using GatewayService = gateway::v1::BinanceMarketDataGatewayService::Service;
+
+  static_assert(std::derived_from<GatewayService, grpc::Service>);
 
   gateway::v1::EventSubscriptionRequest message;
-  gateway::v1::BinanceMarketDataGatewayService::Service service;
+  [[maybe_unused]] GatewayService service;
   const auto price_scale = projection::v1::DecimalScale::create(2U);
   const auto quantity_scale = projection::v1::DecimalScale::create(3U);
   if (!price_scale.has_value() || !quantity_scale.has_value()) {
@@ -29,7 +33,6 @@ int main() {
   // link consumes the Contracts message target, Contracts gRPC service target,
   // Projection Core, and adapter.
   return message.GetDescriptor() != nullptr &&
-                 static_cast<grpc::Service *>(&service) != nullptr &&
                  book_projection.status() ==
                      projection::v1::ProjectionStatus::AwaitingBaseline &&
                  std::holds_alternative<projection_adapter::v1::DepthLimit>(
