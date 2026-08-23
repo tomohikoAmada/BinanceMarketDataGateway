@@ -41,6 +41,15 @@ The single smoke executable links all four upstream targets and includes their p
 Contracts package publication/revision and the final Projection candidate gate remain pending;
 therefore no RREV, SHA, or floating source is recorded here.
 
+When the upstream releases are formally published, the staged prefix supplied to this option must
+be produced from the exact platform/linkage-specific Conan cache bundle and its published hashes.
+The clean-cache procedure is: verify the bundle and hashes, restore the bundle into the isolated
+Conan cache, install the exact package graph with `--build=never`, and expose only the resulting
+installed prefixes through `BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH`. The Gateway smoke validates
+the exact CMake package versions and exported targets; it does not authenticate a bundle or invent
+upstream revisions. Until those release identities exist, keep this option disabled and do not
+replace it with a source checkout, a floating dependency, or a locally invented SHA.
+
 ## Scope and ownership
 
 The dependency and ownership decisions are recorded in [ARCHITECTURE.md](ARCHITECTURE.md),

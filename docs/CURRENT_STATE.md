@@ -20,6 +20,10 @@ RECORDER_DEPENDENCY=NO
 - Linux-only CI foundation for independent GCC/Clang builds/tests and sanitizer jobs.
 - Default-off upstream link-smoke target that discovers the exact named Contracts and Projection
   package components without copying `.proto` files.
+- The future upstream smoke input is deliberately an installed prefix restored from a verified,
+  platform/linkage-specific exact Conan cache bundle. Bundle verification, cache restoration, and
+  `--build=never` graph replay are release-consumer steps; this repository does not claim to
+  authenticate them while the formal Contracts/Projection releases are absent.
 - Checked-in Binance source acquisition status and G0 evidence record.
 
 ## Pending gates
@@ -36,6 +40,9 @@ RECORDER_DEPENDENCY=NO
   concurrent Contracts #13/#16 work before publication.
 - A future Phase B implementation must be explicitly authorized before adding transport, REST
   bootstrap, buffering, reconnect/resync, queues, subscriptions, or gRPC service behavior.
+- The remaining G0 integration dependency is publication of the immutable upstream bundle,
+  hashes, and package identities. The staged-prefix smoke is intentionally not a substitute for
+  that release evidence.
 - Official Binance constraints are recorded from the current Agent Native `.md` pages with UTC,
   exact response hashes, and an ephemeral local acquisition manifest; no downloaded body is
   committed or executed, and the manifest is not a remote/build dependency.

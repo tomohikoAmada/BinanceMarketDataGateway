@@ -27,6 +27,10 @@ claim a production Gateway pipeline or an upstream package integration.
   transport boundary.
 - No `.proto` source is copied or generated in this repository.
 - No Contracts/Projection package was fetched, pinned, or linked during the offline default build.
+- The smoke's explicit staged prefix is only a CMake discovery/link input. It is not a release
+  attestation. Formal acceptance additionally requires the exact platform/linkage-specific Conan
+  cache bundle, published hashes, clean-cache restoration, and `--build=never` graph replay from
+  the Contracts/Projection release process.
 - No network, REST, WebSocket, gRPC business flow, snapshot handoff, reconnect, or sequence policy
   behavior is implemented.
 
