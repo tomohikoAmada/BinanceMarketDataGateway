@@ -30,14 +30,13 @@ RECORDER_DEPENDENCY=NO
 
 - Contracts #14: formal/public package artifact and revision for the message-only and separate gRPC
   packages.
-- As of the 2026-08-23 review snapshot, [Projection PR #45](https://github.com/tomohikoAmada/BinanceMarketDataProjection/pull/45)
-  and [issue #48](https://github.com/tomohikoAmada/BinanceMarketDataProjection/issues/48) remain
-  OPEN for the stale ProtoAdapter/reference ASCII-only symbol rule; no merge is claimed. Gateway
-  Phase A keeps the public symbol identity strict-UTF-8 and opaque rather than copying that rule.
-- Contracts PR #13 is merged. [Contracts issue #17](https://github.com/tomohikoAmada/BinanceMarketDataContracts/issues/17)
-  and [Draft PR #18](https://github.com/tomohikoAmada/BinanceMarketDataContracts/pull/18) remain
-  OPEN for the matching Domain/schema correction; Draft PR #16 remains OPEN for formal release
-  readiness. Reconcile their generated outputs before publication.
+- Contracts PRs #13 and #18 are merged; issues #15 and #17 are closed. Draft PR #16 remains OPEN
+  for the package split and formal release-readiness surface. Its latest local, unpushed release
+  candidate still has P1 gaps in exact base package-ID/PREV provenance and full frozen/replayed
+  graph-node comparison, so it is not release-ready.
+- Projection PR #49 is merged and issue #48 is closed. [Projection PR #45](https://github.com/tomohikoAmada/BinanceMarketDataProjection/pull/45)
+  remains OPEN and Draft until it is repinned to the final Contracts release identities and its
+  formal package gate passes. Gateway Phase A keeps the same strict-UTF-8 opaque identity.
 - A future Phase B implementation must be explicitly authorized before adding transport, REST
   bootstrap, buffering, reconnect/resync, queues, subscriptions, or gRPC service behavior.
 - The remaining G0 integration dependency is publication of the immutable upstream bundle,
@@ -51,3 +50,6 @@ The official Spot and USD-M bootstrap notes are source-acquisition facts only. P
 open a WebSocket, call REST, allocate a queue, or implement either product's sequence policy;
 continuous-update classification remains Projection `Core` behavior under ADR-0008 and must not
 be duplicated in Gateway. Refresh the source record and repeat hash/term validation before Phase B.
+
+The cross-repository checkpoint, exact heads, blockers, next-action order, and agent rules are in
+[HANDOFF_2026-08-23.md](HANDOFF_2026-08-23.md).

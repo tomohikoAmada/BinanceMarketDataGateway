@@ -56,3 +56,5 @@ The dependency and ownership decisions are recorded in [ARCHITECTURE.md](ARCHITE
 [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md), and [docs/adr/ADR-0001-g0-foundation-boundaries.md](docs/adr/ADR-0001-g0-foundation-boundaries.md).
 Official Binance source acquisition status is recorded in
 [docs/official-binance-constraints.md](docs/official-binance-constraints.md).
+The current cross-repository completion state and continuation order are recorded in
+[docs/HANDOFF_2026-08-23.md](docs/HANDOFF_2026-08-23.md).
