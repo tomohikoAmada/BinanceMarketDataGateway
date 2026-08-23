@@ -1,0 +1,73 @@
+name: Gateway foundation
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  foundation:
+    name: Foundation ${{ matrix.compiler }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build/foundation-${{ matrix.compiler }}
+          -DCMAKE_BUILD_TYPE=Debug
+          -DBMD_GATEWAY_BUILD_TESTS=ON
+          -DBMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE=OFF
+      - name: Build
+        run: cmake --build build/foundation-${{ matrix.compiler }} --parallel
+      - name: Test
+        run: ctest --test-dir build/foundation-${{ matrix.compiler }} --output-on-failure
+      - name: CLI lifecycle smoke
+        run: >-
+          build/foundation-${{ matrix.compiler }}/bmd-gatewayd
+          --venue binance --market spot --symbol BTCUSDT
+          --grpc-listen 127.0.0.1:50051 --queue-capacity 1024
+
+  sanitizers:
+    name: Sanitizer ${{ matrix.sanitizer }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [asan, ubsan, tsan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build/sanitizer-${{ matrix.sanitizer }}
+          -DCMAKE_BUILD_TYPE=Debug
+          -DBMD_GATEWAY_BUILD_TESTS=ON
+          -DBMD_GATEWAY_ENABLE_ASAN=${{ matrix.sanitizer == 'asan' && 'ON' || 'OFF' }}
+          -DBMD_GATEWAY_ENABLE_UBSAN=${{ matrix.sanitizer == 'ubsan' && 'ON' || 'OFF' }}
+          -DBMD_GATEWAY_ENABLE_TSAN=${{ matrix.sanitizer == 'tsan' && 'ON' || 'OFF' }}
+      - name: Build
+        run: cmake --build build/sanitizer-${{ matrix.sanitizer }} --parallel
+      - name: Test
+        run: ctest --test-dir build/sanitizer-${{ matrix.sanitizer }} --output-on-failure
+
+  format:
+    name: C++ format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang-format
+        run: scripts/format-check.sh
