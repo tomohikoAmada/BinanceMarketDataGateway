@@ -40,9 +40,17 @@ These are concise conclusions derived from the retrieved pages; they are not imp
 - A connection is valid for 24 hours. The server sends a ping every 20 seconds; the client must
   return a pong copying the ping payload within one minute. A connection permits 5 incoming
   messages/second, at most 1024 streams, and 300 connection attempts per 5 minutes per IP.
-- The documented depth bootstrap obtains `GET /api/v3/depth`, buffers updates, discards buffered
-  events with `u <= lastUpdateId`, and requires the first remaining event to contain
-  `lastUpdateId` within `[U,u]`. A later event with `U > local_update_id + 1` is a gap.
+- Keep the documented Spot bootstrap acquisition rule separate from apply-time continuity. The
+  Host snapshot/buffer procedure obtains `GET /api/v3/depth`, calls its `lastUpdateId` value `L`,
+  discards buffered events with `u <= L`, and requires the first retained event to contain `L`
+  within `[U,u]`. This is the official snapshot reacquisition and buffering instruction.
+- At apply time, after a local update id `C` has been established, the official gap condition is
+  `U > local_update_id + 1`; a normal next update has `U = previous_event.u + 1`. Projection
+  ADR-0008/Core classifies this with the overflow-safe relation `U <= C + 1 <= u`, where an
+  exact-next event is continuous. Gateway must not add a second classifier or overwrite this
+  accepted Projection semantic merely because the first retained range after the Host's `u <= L`
+  filter does not contain `L`. The future Host owns snapshot reacquisition, buffering, and feeding
+  order to Projection; it does not reinterpret apply-time continuity.
 - The documented snapshot has a maximum of 5000 price levels on each side; levels outside the
   snapshot are not known until changed. Zero quantity removes a level.
 
