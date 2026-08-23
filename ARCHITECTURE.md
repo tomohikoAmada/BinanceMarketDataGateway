@@ -23,12 +23,11 @@ in later phases.
 
 - `config.hpp` defines `Venue`, `Market`, `ListenEndpoint`, `GatewayConfig`, and typed validation
   errors. The only configuration fields are venue, market, symbol, a future gRPC listen endpoint,
-  and a nonzero queue-capacity value. The symbol is an opaque, non-empty byte string without NUL,
-  control, or ASCII-whitespace bytes; current validation accepts a known non-ASCII UTF-8 example
-  but does not validate UTF-8 or invent exchange symbol grammar/case-folding. Later transport code
-  must map the configured
-  identity to the official lowercase stream name and use exchangeInfo for existence/market
-  membership.
+  and a nonzero queue-capacity value. The symbol is an opaque, exact, non-empty strict UTF-8
+  scalar identity without ASCII C0, DEL, or ASCII-whitespace bytes. Validation preserves the
+  original bytes and does not normalize, case-fold, impose a length/alphabet rule, or assert
+  exchange membership. Later transport code must map the configured identity to the official
+  lowercase stream name and use exchangeInfo for existence/market membership.
 - `lifecycle.hpp` defines `Foundation` and the explicit states `Constructed`, `Running`, and
   `Stopped`. `Foundation` owns only validated configuration and state; it creates no threads,
   sockets, queues, clocks, callbacks, or asynchronous work.

@@ -20,15 +20,17 @@ claim a production Gateway pipeline or an upstream package integration.
 
 - The endpoint flag is validated but never bound.
 - The queue capacity is a typed future-runtime parameter; no queue is allocated.
-- Symbol text is treated as an opaque non-empty UTF-8 identity (NUL/control bytes are rejected);
-  G0 does not normalize case or assert exchange membership. Official lowercase stream mapping and
-  `exchangeInfo` membership checks belong to the later transport boundary.
+- Symbol text is treated as an opaque, exact, non-empty strict UTF-8 scalar identity (ASCII C0,
+  space/ASCII whitespace, DEL, malformed encodings, and surrogate code points are rejected);
+  original bytes, case, and normalization are preserved. G0 does not assert exchange membership.
+  Official lowercase stream mapping and `exchangeInfo` membership checks belong to the later
+  transport boundary.
 - No `.proto` source is copied or generated in this repository.
 - No Contracts/Projection package was fetched, pinned, or linked during the offline default build.
 - No network, REST, WebSocket, gRPC business flow, snapshot handoff, reconnect, or sequence policy
   behavior is implemented.
 
-The temporary source manifest for the recorded retrieval was
-`/private/tmp/gateway-binance-docs-minimal/manifest.json` with
-`remote_content_executed=false` and `llms_full_loaded=false`; it is not a repository dependency or
-committed artifact.
+The ephemeral local acquisition manifest for the recorded retrieval was
+`/private/tmp/gateway-binance-docs-20260823/manifest.json` with
+`remote_content_executed=false` and `llms_full_loaded=false`; it is not a remote dependency, build
+input, repository dependency, or committed artifact.

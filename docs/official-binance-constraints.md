@@ -4,9 +4,9 @@ This is a checked-in evidence record, not a runtime dependency. Exact text-only 
 bytes were retrieved on **2026-08-23T07:22:34.921794Z UTC** through an allowlisted updater that
 validated credential-free HTTPS redirects, bounded the response size, wrote only to
 `/private/tmp/gateway-binance-docs-20260823`, and marked `remote_content_executed=false` and
-`llms_full_loaded=false`. The reproducible manifest is
-`/private/tmp/gateway-binance-docs-20260823/manifest.json`. No downloaded body was executed or
-committed.
+`llms_full_loaded=false`. The ephemeral local acquisition manifest is
+`/private/tmp/gateway-binance-docs-20260823/manifest.json`; it is not a remote dependency or build
+input. No downloaded body was executed or committed.
 
 The portal's old, extensionless catalog URLs returned an HTTP 202 WAF challenge in an earlier
 probe. The current `.md` URLs listed below are the working official Agent Native paths and were

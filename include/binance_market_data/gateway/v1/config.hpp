@@ -90,8 +90,10 @@ private:
 
 using ConfigResult = std::variant<ValidatedGatewayConfig, ConfigError>;
 
-// Validates the small Phase A configuration surface. Symbols remain opaque;
-// validation only rejects empty values and NUL/control/ASCII-whitespace bytes.
+// Validates the small Phase A configuration surface. Symbols remain opaque
+// exact strict-UTF-8 scalar identities: validation rejects empty values,
+// malformed UTF-8, Unicode surrogate code points, and ASCII C0/DEL/whitespace
+// bytes without normalizing or case-folding the original string.
 // This performs no I/O or runtime setup.
 [[nodiscard]] ConfigResult validate_config(GatewayConfig config);
 

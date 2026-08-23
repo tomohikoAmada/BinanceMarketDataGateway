@@ -31,13 +31,64 @@ constexpr std::size_t kMaxHostLength = 253U;
   if (value.empty()) {
     return false;
   }
-  for (const char character : value) {
-    const auto byte = static_cast<unsigned char>(character);
-    const bool ascii_whitespace = byte == ' ' || byte == '\t' || byte == '\n' ||
-                                  byte == '\r' || byte == '\f' || byte == '\v';
-    if (byte == 0U || byte < 0x20U || byte == 0x7FU || ascii_whitespace) {
-      return false;
+
+  const auto is_continuation = [](unsigned char byte) noexcept {
+    return byte >= 0x80U && byte <= 0xBFU;
+  };
+
+  std::size_t offset = 0U;
+  while (offset < value.size()) {
+    const auto lead = static_cast<unsigned char>(value[offset]);
+    if (lead <= 0x7FU) {
+      if (lead <= 0x20U || lead == 0x7FU) {
+        return false;
+      }
+      ++offset;
+      continue;
     }
+
+    if (lead >= 0xC2U && lead <= 0xDFU) {
+      if (offset + 1U >= value.size() ||
+          !is_continuation(static_cast<unsigned char>(value[offset + 1U]))) {
+        return false;
+      }
+      offset += 2U;
+      continue;
+    }
+
+    if (lead >= 0xE0U && lead <= 0xEFU) {
+      if (offset + 2U >= value.size()) {
+        return false;
+      }
+      const auto second = static_cast<unsigned char>(value[offset + 1U]);
+      const auto third = static_cast<unsigned char>(value[offset + 2U]);
+      if (!is_continuation(third) || (lead == 0xE0U && second < 0xA0U) ||
+          (lead == 0xEDU && second >= 0xA0U) || !is_continuation(second)) {
+        return false;
+      }
+      offset += 3U;
+      continue;
+    }
+
+    if (lead >= 0xF0U && lead <= 0xF4U) {
+      if (offset + 3U >= value.size()) {
+        return false;
+      }
+      const auto second = static_cast<unsigned char>(value[offset + 1U]);
+      const auto third = static_cast<unsigned char>(value[offset + 2U]);
+      const auto fourth = static_cast<unsigned char>(value[offset + 3U]);
+      if (!is_continuation(third) || !is_continuation(fourth) ||
+          (lead == 0xF0U && second < 0x90U) ||
+          (lead == 0xF4U && second > 0x8FU) || !is_continuation(second)) {
+        return false;
+      }
+      offset += 4U;
+      continue;
+    }
+
+    // Invalid UTF-8 lead bytes C0/C1, isolated continuation bytes, and lead
+    // bytes above F4 cannot encode Unicode scalar values.
+    return false;
   }
   return true;
 }
@@ -128,7 +179,8 @@ ConfigResult validate_config(GatewayConfig config) {
   if (!valid_symbol(config.symbol)) {
     return error(
         ConfigErrorCode::InvalidSymbol, "symbol",
-        "symbol must be non-empty and contain no NUL/control/ASCII whitespace");
+        "symbol must be a non-empty strict UTF-8 scalar identity without "
+        "ASCII C0/whitespace or DEL bytes");
   }
   if (config.queue_capacity == 0U) {
     return error(ConfigErrorCode::InvalidQueueCapacity, "queue-capacity",

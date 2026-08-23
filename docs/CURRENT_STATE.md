@@ -12,9 +12,9 @@ RECORDER_DEPENDENCY=NO
 ## Implemented in this Phase A branch
 
 - CMake 3.24+ C++20 foundation library and `bmd-gatewayd` executable.
-- Strict, finite typed configuration for Binance, Spot/USD-M perpetual, opaque non-empty symbol
-  (without NUL, control, or ASCII-whitespace bytes), future gRPC endpoint, and nonzero queue
-  capacity.
+- Strict, finite typed configuration for Binance, Spot/USD-M perpetual, opaque exact non-empty
+  strict UTF-8 scalar symbol (without malformed encodings, Unicode surrogates, ASCII C0, DEL, or
+  ASCII whitespace), future gRPC endpoint, and nonzero queue capacity.
 - Synchronous constructed/running/stopped lifecycle with typed transition errors.
 - Offline unit tests and CTest; GCC/Clang warning configuration; ASan, UBSan, and TSan options.
 - Linux-only CI foundation for independent GCC/Clang builds/tests and sanitizer jobs.
@@ -26,15 +26,19 @@ RECORDER_DEPENDENCY=NO
 
 - Contracts #14: formal/public package artifact and revision for the message-only and separate gRPC
   packages.
-- Projection #45/#47: refreshed candidate package/adapter evidence suitable for the final link
-  smoke.
-- The current Projection ProtoAdapter still carries an older ASCII-only symbol rule. That is a
-  separate upstream compatibility correction; Gateway Phase A deliberately keeps the symbol
-  opaque and non-empty rather than copying that restriction.
+- As of the 2026-08-23 review snapshot, [Projection PR #45](https://github.com/tomohikoAmada/BinanceMarketDataProjection/pull/45)
+  and [issue #48](https://github.com/tomohikoAmada/BinanceMarketDataProjection/issues/48) remain
+  OPEN for the stale ProtoAdapter/reference ASCII-only symbol rule; no merge is claimed. Gateway
+  Phase A keeps the public symbol identity strict-UTF-8 and opaque rather than copying that rule.
+- [Contracts issue #17](https://github.com/tomohikoAmada/BinanceMarketDataContracts/issues/17) and
+  [Draft PR #18](https://github.com/tomohikoAmada/BinanceMarketDataContracts/pull/18) remain OPEN
+  and unmerged for the matching Domain/schema correction; reconcile its generated outputs with the
+  concurrent Contracts #13/#16 work before publication.
 - A future Phase B implementation must be explicitly authorized before adding transport, REST
   bootstrap, buffering, reconnect/resync, queues, subscriptions, or gRPC service behavior.
 - Official Binance constraints are recorded from the current Agent Native `.md` pages with UTC,
-  exact response hashes, and a temporary manifest; no downloaded body is committed or executed.
+  exact response hashes, and an ephemeral local acquisition manifest; no downloaded body is
+  committed or executed, and the manifest is not a remote/build dependency.
 
 The official Spot and USD-M bootstrap notes are source-acquisition facts only. Phase A does not
 open a WebSocket, call REST, allocate a queue, or implement either product's sequence policy;

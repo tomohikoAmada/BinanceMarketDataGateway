@@ -15,14 +15,17 @@ phase.
 Phase A contains only:
 
 1. a typed, synchronously validated configuration for Binance venue, Spot/USD-M perpetual market,
-   one opaque non-empty symbol (without NUL, control, or ASCII-whitespace bytes), a future gRPC
-   listen endpoint, and a nonzero finite queue-capacity value; and
+   one opaque, exact, non-empty strict UTF-8 scalar symbol (without malformed encodings, Unicode
+   surrogate code points, ASCII C0, DEL, or ASCII-whitespace bytes), a future gRPC listen endpoint,
+   and a nonzero finite queue-capacity value; and
 2. a synchronous foundation lifecycle with explicit constructed/running/stopped states.
 
 The foundation creates no threads, sockets, queues, clocks, callbacks, or asynchronous work. The
 daemon validates its flags and demonstrates the lifecycle, then exits. The endpoint is not bound.
-G0 does not invent symbol grammar, normalize case, or assert exchange membership; later transport
-code owns official lowercase stream mapping and exchangeInfo validation.
+G0 does not invent symbol grammar, impose an arbitrary length, normalize/case-fold the identity,
+or assert exchange membership; later transport code owns official lowercase stream mapping and
+exchangeInfo validation. The strict UTF-8 check is allocation-free and preserves the configured
+string exactly.
 
 An opt-in link smoke discovers the Contracts message-only package, the separate Contracts gRPC
 package, and Projection Core/ProtoAdapter using their exported target names. It links those targets
