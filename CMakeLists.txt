@@ -10,7 +10,7 @@ include(CTest)
 
 option(BMD_GATEWAY_BUILD_TESTS "Build the offline Gateway foundation tests" ${BUILD_TESTING})
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
-       "Build the opt-in Contracts/Projection consumer link smoke" OFF)
+       "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
 option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
 option(BMD_GATEWAY_WARNINGS_AS_ERRORS "Treat project warnings as errors" ON)
 option(BMD_GATEWAY_ENABLE_ASAN "Enable AddressSanitizer" OFF)
@@ -124,18 +124,24 @@ if(BMD_GATEWAY_BUILD_TESTS)
 endif()
 
 if(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE)
-    set(BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH "" CACHE STRING
-        "Semicolon-separated staged prefixes for the exact Contracts/Projection packages")
-    if(NOT BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH)
-        message(FATAL_ERROR
-            "Link smoke requires an explicit staged package prefix; final package pins remain "
-            "pending Contracts #14 and Projection #45")
-    endif()
-
-    list(PREPEND CMAKE_PREFIX_PATH ${BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH})
     find_package(BinanceMarketDataContracts 0.1.0 EXACT CONFIG REQUIRED COMPONENTS Protobuf)
     find_package(BinanceMarketDataContractsGrpc 0.1.0 EXACT CONFIG REQUIRED)
     find_package(BinanceMarketDataProjection 0.1.0 EXACT CONFIG REQUIRED COMPONENTS Core ProtoAdapter)
+
+    foreach(bmd_gateway_package IN ITEMS
+            BinanceMarketDataContracts
+            BinanceMarketDataContractsGrpc
+            BinanceMarketDataProjection)
+        if(NOT DEFINED ${bmd_gateway_package}_DIR)
+            message(FATAL_ERROR "G1 package directory was not resolved: ${bmd_gateway_package}_DIR")
+        endif()
+        set(bmd_gateway_config
+            "${${bmd_gateway_package}_DIR}/${bmd_gateway_package}Config.cmake")
+        if(NOT EXISTS "${bmd_gateway_config}")
+            message(FATAL_ERROR "G1 canonical package config is missing: ${bmd_gateway_config}")
+        endif()
+        message(STATUS "G1 canonical config: ${bmd_gateway_package}=${bmd_gateway_config}")
+    endforeach()
 
     add_executable(bmd_gateway_upstream_link_smoke tests/upstream_link_smoke.cpp)
     set_target_properties(
