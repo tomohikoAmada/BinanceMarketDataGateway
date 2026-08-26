@@ -10,7 +10,7 @@ include(CTest)
 
 option(BMD_GATEWAY_BUILD_TESTS "Build the offline Gateway foundation tests" ${BUILD_TESTING})
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
-       "Build the opt-in Contracts/Projection consumer link smoke" OFF)
+       "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
 option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
 option(BMD_GATEWAY_WARNINGS_AS_ERRORS "Treat project warnings as errors" ON)
 option(BMD_GATEWAY_ENABLE_ASAN "Enable AddressSanitizer" OFF)
@@ -128,8 +128,8 @@ if(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE)
         "Semicolon-separated staged prefixes for the exact Contracts/Projection packages")
     if(NOT BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH)
         message(FATAL_ERROR
-            "Link smoke requires an explicit staged package prefix; final package pins remain "
-            "pending Contracts #14 and Projection #45")
+            "Link smoke requires an explicit candidate package prefix; use scripts/g1-candidate-proof.sh "
+            "or provide BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH")
     endif()
 
     list(PREPEND CMAKE_PREFIX_PATH ${BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH})

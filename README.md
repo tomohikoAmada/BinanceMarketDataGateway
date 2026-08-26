@@ -57,6 +57,11 @@ development may use explicitly identified exact candidates, but formal integrati
 deployment acceptance still requires the final identities, immutable supported artifacts, exact
 consumer/link proof, and appropriate clean-cache evidence.
 
+The G1 exact candidate proof is documented in [docs/G1_CANDIDATE.md](docs/G1_CANDIDATE.md). Run
+`scripts/g1-candidate-proof.sh` only with a Conan cache containing the exact candidate packages;
+it performs the one-process four-target compile/link smoke and rejects a second Contracts message
+lineage. G1 remains dependency proof only and does not add Gateway runtime behavior.
+
 ## Scope and ownership
 
 The dependency and ownership decisions are recorded in [ARCHITECTURE.md](ARCHITECTURE.md),
