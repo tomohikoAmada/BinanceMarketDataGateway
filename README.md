@@ -31,7 +31,7 @@ does not bind the endpoint, start a thread, open a WebSocket, or start a gRPC se
 ## Upstream link smoke
 
 `BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE` is `OFF` by default. When explicitly enabled, the build
-requires an exact staged package prefix and discovers, without copying schemas:
+requires Conan-generated package metadata for an exact graph and discovers, without copying schemas:
 
 - `BinanceMarketDataContracts::Protobuf`;
 - `BinanceMarketDataContracts::Grpc` from `BinanceMarketDataContractsGrpc`; and
@@ -42,14 +42,12 @@ Contracts package publication/revision and the final Projection candidate gate r
 therefore no RREV, SHA, or floating source is recorded here. This is not a blocker for G0
 foundation acceptance; it remains a later integration/release/deployment gate.
 
-When the upstream releases are formally published, the staged prefix supplied to this option must
-be produced from the exact platform/linkage-specific Conan cache bundle and its published hashes.
-The clean-cache procedure is: verify the bundle and hashes, restore the bundle into the isolated
-Conan cache, install the exact package graph with `--build=never`, and expose only the resulting
-installed prefixes through `BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH`. The Gateway smoke validates
-the exact CMake package versions and exported targets; it does not authenticate a bundle or invent
-upstream revisions. Until those release identities exist, keep this option disabled and do not
-replace it with a source checkout, a floating dependency, or a locally invented SHA.
+When the upstream releases are formally published, the exact platform/linkage-specific Conan graph
+must be installed with `--build=never` and consumed through Conan’s generated CMake toolchain and
+package metadata. The Gateway smoke validates the exact CMake package versions and exported
+targets; it does not authenticate a bundle or invent upstream revisions. Until those release
+identities exist, keep this option disabled and do not replace it with a source checkout, a
+floating dependency, or a locally invented SHA.
 
 G0 foundation acceptance is separate from formal upstream release acceptance. G0 claims no formal
 Contracts or Projection release identity and no formal upstream link proof. Later G1/G2 candidate

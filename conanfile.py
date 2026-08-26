@@ -1,5 +1,5 @@
 from conan import ConanFile
-from conan.tools.cmake import CMakeToolchain
+from conan.tools.cmake import CMakeConfigDeps, CMakeToolchain
 
 
 class BinanceMarketDataGatewayG1Consumer(ConanFile):
@@ -21,9 +21,12 @@ class BinanceMarketDataGatewayG1Consumer(ConanFile):
         "binance-market-data-projection/*:shared": False,
     }
 
-    generators = "CMakeDeps"
-
     def generate(self):
+        dependencies = CMakeConfigDeps(self)
+        # The installed Contracts config asks CMake for the canonical Protobuf package name.
+        dependencies.set_property("protobuf", "cmake_file_name", "Protobuf")
+        dependencies.generate()
+
         # Keep Conan-generated presets inside the caller's output directory.
         toolchain = CMakeToolchain(self)
         toolchain.user_presets_path = False

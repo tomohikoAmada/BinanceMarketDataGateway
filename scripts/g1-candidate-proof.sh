@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 conan_home="${BMD_GATEWAY_CONAN_HOME:-$repo_root/build/g1-conan-home}"
 conan="${BMD_GATEWAY_CONAN:-conan}"
+mkdir -p "$repo_root/build"
 work_dir="$(mktemp -d "$repo_root/build/g1-candidate-proof.XXXXXX")"
 
 cleanup() {
@@ -19,6 +20,18 @@ deps_dir="$work_dir/conan"
 cmake_build="$work_dir/cmake"
 graph_file="$work_dir/graph.json"
 prefix_file="$work_dir/package-prefixes.txt"
+configure_log="$work_dir/cmake-configure.log"
+
+unset CMAKE_PREFIX_PATH
+unset CMAKE_MODULE_PATH
+unset CMAKE_LIBRARY_PATH
+unset CMAKE_INCLUDE_PATH
+unset CMAKE_PROGRAM_PATH
+unset CMAKE_TOOLCHAIN_FILE
+unset BinanceMarketDataProjection_DIR
+unset BinanceMarketDataContracts_DIR
+unset BinanceMarketDataContractsGrpc_DIR
+unset BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH
 
 "$conan" install "$repo_root" \
     --output-folder="$deps_dir" \
@@ -28,7 +41,7 @@ prefix_file="$work_dir/package-prefixes.txt"
     --format=json \
     > "$graph_file"
 
-"$repo_root/scripts/g1-verify-graph.py" "$graph_file" "$prefix_file"
+"$repo_root/scripts/g1-verify-graph.py" "$graph_file" "$prefix_file" "$repo_root/docs/G1_CANDIDATE.md"
 
 contracts_prefix=""
 grpc_prefix=""
@@ -41,9 +54,12 @@ while IFS='=' read -r package_name package_prefix; do
     esac
 done < "$prefix_file"
 
-candidate_prefixes="$contracts_prefix;$grpc_prefix;$projection_prefix"
+if [[ -z "$contracts_prefix" || -z "$grpc_prefix" || -z "$projection_prefix" ]]; then
+    echo "G1 graph verifier did not return all required package folders" >&2
+    exit 1
+fi
 
-cmake \
+cmake_args=(
     -S "$repo_root" \
     -B "$cmake_build" \
     -G "Unix Makefiles" \
@@ -51,9 +67,19 @@ cmake \
     -DCMAKE_TOOLCHAIN_FILE="$deps_dir/conan_toolchain.cmake" \
     -DBMD_GATEWAY_BUILD_TESTS=ON \
     -DBMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE=ON \
-    -DBMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH="$candidate_prefixes" \
     -DBMD_GATEWAY_ENABLE_WARNINGS=ON \
     -DBMD_GATEWAY_WARNINGS_AS_ERRORS=ON
+)
+
+cmake "${cmake_args[@]}" >"$configure_log" 2>&1 || {
+    cat "$configure_log" >&2
+    exit 1
+}
+
+"$repo_root/scripts/g1-verify-cmake-resolution.py" \
+    "$cmake_build/CMakeCache.txt" \
+    "$configure_log" \
+    "$prefix_file"
 
 cmake --build "$cmake_build" --parallel
 ctest --test-dir "$cmake_build" --output-on-failure
@@ -75,7 +101,11 @@ if [[ "$message_owner_count" != "1" || "$grpc_owner_count" != "0" || "$binary_ow
     exit 1
 fi
 
-core_targets="$projection_prefix/lib/cmake/BinanceMarketDataProjection/BinanceMarketDataProjectionCoreTargets-release.cmake"
+core_targets="$projection_prefix/lib/cmake/BinanceMarketDataProjection/BinanceMarketDataProjectionCoreTargets.cmake"
+if [[ ! -f "$core_targets" ]]; then
+    echo "Projection Core main target export is missing: $core_targets" >&2
+    exit 1
+fi
 if rg -n -i 'contracts|protobuf' "$core_targets" >/dev/null; then
     echo "Projection Core target unexpectedly mentions Contracts/Protobuf" >&2
     exit 1

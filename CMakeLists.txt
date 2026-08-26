@@ -124,18 +124,24 @@ if(BMD_GATEWAY_BUILD_TESTS)
 endif()
 
 if(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE)
-    set(BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH "" CACHE STRING
-        "Semicolon-separated staged prefixes for the exact Contracts/Projection packages")
-    if(NOT BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH)
-        message(FATAL_ERROR
-            "Link smoke requires an explicit candidate package prefix; use scripts/g1-candidate-proof.sh "
-            "or provide BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH")
-    endif()
-
-    list(PREPEND CMAKE_PREFIX_PATH ${BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH})
     find_package(BinanceMarketDataContracts 0.1.0 EXACT CONFIG REQUIRED COMPONENTS Protobuf)
     find_package(BinanceMarketDataContractsGrpc 0.1.0 EXACT CONFIG REQUIRED)
     find_package(BinanceMarketDataProjection 0.1.0 EXACT CONFIG REQUIRED COMPONENTS Core ProtoAdapter)
+
+    foreach(bmd_gateway_package IN ITEMS
+            BinanceMarketDataContracts
+            BinanceMarketDataContractsGrpc
+            BinanceMarketDataProjection)
+        if(NOT DEFINED ${bmd_gateway_package}_DIR)
+            message(FATAL_ERROR "G1 package directory was not resolved: ${bmd_gateway_package}_DIR")
+        endif()
+        set(bmd_gateway_config
+            "${${bmd_gateway_package}_DIR}/${bmd_gateway_package}Config.cmake")
+        if(NOT EXISTS "${bmd_gateway_config}")
+            message(FATAL_ERROR "G1 canonical package config is missing: ${bmd_gateway_config}")
+        endif()
+        message(STATUS "G1 canonical config: ${bmd_gateway_package}=${bmd_gateway_config}")
+    endforeach()
 
     add_executable(bmd_gateway_upstream_link_smoke tests/upstream_link_smoke.cpp)
     set_target_properties(

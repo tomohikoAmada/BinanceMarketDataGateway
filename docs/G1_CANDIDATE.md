@@ -11,7 +11,9 @@ The proof consumes one exact candidate lineage:
 | Contracts gRPC | `9c34199f42467b92a4380c6e88617dde0e54ae13` | `c3661aa735e1eb6450c1a93f635dbc20` |
 | Projection | `87d05af38d7173ca2d5cae13e7592c38495ec895` | `58ab66309450bdc2035b3e5935220348` |
 
-The observed Mac ARM64 Release/static package identities used for this proof are:
+The observed Mac ARM64 Release/static package identities used for this proof are recorded below.
+The graph verifier derives and checks each package ID and PREV from the actual Conan graph node;
+it also checks these documented values:
 
 | Package | Package ID | PREV |
 |---|---|---|
@@ -24,6 +26,11 @@ Run the focused proof with the isolated Conan cache containing those exact candi
 ```sh
 BMD_GATEWAY_CONAN=/path/to/conan scripts/g1-candidate-proof.sh
 ```
+
+The proof clears external CMake package-path hints, installs the graph with `--build=never`, and
+lets Conan's `CMakeToolchain` consume the package `cpp_info.builddirs` metadata. Projection,
+Contracts, and Contracts gRPC therefore resolve their installed canonical configs under
+`lib/cmake/<PackageName>` while retaining `cmake_find_mode=none`.
 
 The graph verifier requires the message package RREV to appear only as
 `binance-market-data-contracts-cpp/0.1.0#53713fb82c27cf6ea0395f6b8a853006`. The CMake smoke
