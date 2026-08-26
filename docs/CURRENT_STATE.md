@@ -1,11 +1,11 @@
 # Current state
 
 ```text
-G0_PHASE_A=IMPLEMENTED_PENDING_REVIEW
+G0_PHASE_A=IMPLEMENTED_ACCEPTED
 GATEWAY_NETWORK=NOT_IMPLEMENTED
 GATEWAY_GRPC_BUSINESS_FLOW=NOT_IMPLEMENTED
 PROJECTION_INTEGRATION=NOT_IMPLEMENTED
-UPSTREAM_LINK_SMOKE=OPT_IN_BLOCKED_ON_FORMAL_PACKAGE_PINS
+UPSTREAM_LINK_SMOKE=OPT_IN_NOT_FORMALLY_VERIFIED
 RECORDER_DEPENDENCY=NO
 ```
 
@@ -26,7 +26,19 @@ RECORDER_DEPENDENCY=NO
   authenticate them while the formal Contracts/Projection releases are absent.
 - Checked-in Binance source acquisition status and G0 evidence record.
 
-## Pending gates
+## Gate distinction
+
+G0 foundation acceptance is independent of formal upstream package publication. The focused
+foundation code, tests, CI evidence, and runtime-free scope are accepted here without claiming
+that the upstream link-smoke established any formal package identity.
+
+G1/G2 candidate development may use explicitly identified exact candidate dependencies, but those
+dependencies must not be described as a formal release. Formal integration/release/deployment
+acceptance remains a separate later gate requiring final Contracts and Projection identities,
+immutable supported package artifacts, exact consumer/link proof, and appropriate clean-cache
+evidence.
+
+## Later gates
 
 - Contracts #14: formal/public package artifact and revision for the message-only and separate gRPC
   packages.
@@ -39,9 +51,9 @@ RECORDER_DEPENDENCY=NO
   formal package gate passes. Gateway Phase A keeps the same strict-UTF-8 opaque identity.
 - A future Phase B implementation must be explicitly authorized before adding transport, REST
   bootstrap, buffering, reconnect/resync, queues, subscriptions, or gRPC service behavior.
-- The remaining G0 integration dependency is publication of the immutable upstream bundle,
-  hashes, and package identities. The staged-prefix smoke is intentionally not a substitute for
-  that release evidence.
+- Formal upstream publication of the immutable bundle, hashes, and package identities remains a
+  later integration/release/deployment requirement. The staged-prefix smoke is intentionally not
+  a substitute for that release evidence and is not a G0 merge blocker.
 - Official Binance constraints are recorded from the current Agent Native `.md` pages with UTC,
   exact response hashes, and an ephemeral local acquisition manifest; no downloaded body is
   committed or executed, and the manifest is not a remote/build dependency.

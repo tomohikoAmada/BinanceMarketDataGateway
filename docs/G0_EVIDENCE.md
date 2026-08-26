@@ -13,7 +13,7 @@ claim a production Gateway pipeline or an upstream package integration.
 | Lifecycle seam | `include/.../lifecycle.hpp`, `src/lifecycle.cpp`, daemon smoke | Implemented |
 | Build/test | `CMakeLists.txt`, CTest, `CMakePresets.json` | Implemented; local validation recorded in PR |
 | Sanitizers | CMake ASan/UBSan/TSan options and Linux CI matrix | Implemented; CI executes on push/PR |
-| Upstream link smoke | `BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE` and `tests/upstream_link_smoke.cpp` | Opt-in; blocked until exact packages are published |
+| Upstream link smoke | `BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE` and `tests/upstream_link_smoke.cpp` | Opt-in; not a G0 merge gate; formal verification remains later |
 | Binance protocol record | `docs/official-binance-constraints.md` | Exact `.md` hashes/bytes and concise future constraints recorded; no runtime use |
 
 ## Explicit non-claims
@@ -33,6 +33,10 @@ claim a production Gateway pipeline or an upstream package integration.
   the Contracts/Projection release process.
 - No network, REST, WebSocket, gRPC business flow, snapshot handoff, reconnect, or sequence policy
   behavior is implemented.
+
+G0 acceptance does not claim formal upstream package publication or link proof. Final Contracts and
+Projection identities, immutable supported artifacts, exact consumer/link proof, and clean-cache
+evidence remain required at the later integration/release/deployment gate.
 
 The ephemeral local acquisition manifest for the recorded retrieval was
 `/private/tmp/gateway-binance-docs-20260823/manifest.json` with

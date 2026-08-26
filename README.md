@@ -39,7 +39,8 @@ requires an exact staged package prefix and discovers, without copying schemas:
 
 The single smoke executable links all four upstream targets and includes their public surfaces.
 Contracts package publication/revision and the final Projection candidate gate remain pending;
-therefore no RREV, SHA, or floating source is recorded here.
+therefore no RREV, SHA, or floating source is recorded here. This is not a blocker for G0
+foundation acceptance; it remains a later integration/release/deployment gate.
 
 When the upstream releases are formally published, the staged prefix supplied to this option must
 be produced from the exact platform/linkage-specific Conan cache bundle and its published hashes.
@@ -49,6 +50,12 @@ installed prefixes through `BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH`. The Gateway
 the exact CMake package versions and exported targets; it does not authenticate a bundle or invent
 upstream revisions. Until those release identities exist, keep this option disabled and do not
 replace it with a source checkout, a floating dependency, or a locally invented SHA.
+
+G0 foundation acceptance is separate from formal upstream release acceptance. G0 claims no formal
+Contracts or Projection release identity and no formal upstream link proof. Later G1/G2 candidate
+development may use explicitly identified exact candidates, but formal integration/release/
+deployment acceptance still requires the final identities, immutable supported artifacts, exact
+consumer/link proof, and appropriate clean-cache evidence.
 
 ## Scope and ownership
 
