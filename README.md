@@ -1,9 +1,9 @@
 # Binance Market Data Gateway
 
-This repository is the C++20 Gateway foundation for Issue #1 / G0. Phase A proves a small typed
-configuration surface, a synchronous lifecycle seam, an offline unit-test target, and a minimal
-Linux CI/sanitizer foundation. It deliberately does not connect to Binance or implement a market-
-data pipeline.
+This repository is the C++20 Gateway implementation for Issue #1. G1 is complete as an exact
+candidate dependency proof. G2 is a local implementation candidate for one Binance Spot BTCUSDT
+synthetic host; it uses only deterministic in-memory inputs and makes no production or deployment
+claim.
 
 ## Build and test
 
@@ -27,6 +27,29 @@ build/gcc-debug/bmd-gatewayd \
 
 It validates the configuration, transitions `constructed -> running -> stopped`, and exits. It
 does not bind the endpoint, start a thread, open a WebSocket, or start a gRPC server.
+
+## G2 synthetic proof
+
+With the exact G1 candidate Conan graph installed, generate a build-local Conan toolchain and
+configure the opt-in G2 target:
+
+```sh
+conan install . --output-folder=build/g2-conan --build=never \
+  -s build_type=Release -s compiler.cppstd=20
+cmake -S . -B build/g2-synthetic -G "Unix Makefiles" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE=build/g2-conan/conan_toolchain.cmake \
+  -DBMD_GATEWAY_BUILD_TESTS=ON \
+  -DBMD_GATEWAY_BUILD_G2_SYNTHETIC=ON
+cmake --build build/g2-synthetic
+ctest --test-dir build/g2-synthetic --output-on-failure
+build/g2-synthetic/bmd_gateway_g2_synthetic_smoke
+```
+
+The proof covers pre-snapshot buffering, synthetic REST baseline installation, ordered replay,
+Projection-owned Spot sequence handling, LIVE updates, and the real
+`LocalOrderBookSnapshot`. It adds no real network, gRPC runtime, owner thread, bounded queue, or
+Recorder dependency.
 
 ## Upstream link smoke
 
@@ -58,7 +81,7 @@ consumer/link proof, and appropriate clean-cache evidence.
 The G1 exact candidate proof is documented in [docs/G1_CANDIDATE.md](docs/G1_CANDIDATE.md). Run
 `scripts/g1-candidate-proof.sh` only with a Conan cache containing the exact candidate packages;
 it performs the one-process four-target compile/link smoke and rejects a second Contracts message
-lineage. G1 remains dependency proof only and does not add Gateway runtime behavior.
+lineage. G1 remains complete dependency proof; G2 is the local synthetic-only runtime candidate.
 
 ## Scope and ownership
 

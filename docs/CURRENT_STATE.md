@@ -2,9 +2,11 @@
 
 ```text
 G0_PHASE_A=IMPLEMENTED_ACCEPTED
+G1_EXACT_CANDIDATE=COMPLETE
+G2_LOCAL_SYNTHETIC_CANDIDATE=IMPLEMENTED
 GATEWAY_NETWORK=NOT_IMPLEMENTED
 GATEWAY_GRPC_BUSINESS_FLOW=NOT_IMPLEMENTED
-PROJECTION_INTEGRATION=NOT_IMPLEMENTED
+PROJECTION_INTEGRATION=G2_SYNTHETIC_ONLY
 UPSTREAM_LINK_SMOKE=OPT_IN_NOT_FORMALLY_VERIFIED
 RECORDER_DEPENDENCY=NO
 ```
@@ -25,6 +27,16 @@ RECORDER_DEPENDENCY=NO
   `--build=never` graph replay are release-consumer steps; this repository does not claim to
   authenticate them while the formal Contracts/Projection releases are absent.
 - Checked-in Binance source acquisition status and G0 evidence record.
+
+## G2 local implementation candidate
+
+- One deterministic in-memory Binance Spot `BTCUSDT` host uses the exact G1 Contracts and
+  Projection candidate graph.
+- Synthetic depth diffs are buffered before a synthetic REST snapshot, then replayed in arrival
+  order through `Projection::ProtoAdapter` and `Projection::Core`; later diffs use the same path.
+- The host exposes the real `LocalOrderBookSnapshot` contract with fixed synthetic metadata.
+- This is not a real network client, gRPC runtime, production service, deployment artifact, or G3+
+  runtime. There are no threads, queues, clocks, reconnects, subscriptions, or Recorder links.
 
 ## Gate distinction
 

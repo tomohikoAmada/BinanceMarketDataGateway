@@ -11,6 +11,8 @@ include(CTest)
 option(BMD_GATEWAY_BUILD_TESTS "Build the offline Gateway foundation tests" ${BUILD_TESTING})
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
        "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
+option(BMD_GATEWAY_BUILD_G2_SYNTHETIC
+       "Build the opt-in deterministic G2 synthetic Spot/BTCUSDT host" OFF)
 option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
 option(BMD_GATEWAY_WARNINGS_AS_ERRORS "Treat project warnings as errors" ON)
 option(BMD_GATEWAY_ENABLE_ASAN "Enable AddressSanitizer" OFF)
@@ -123,7 +125,7 @@ if(BMD_GATEWAY_BUILD_TESTS)
     add_test(NAME gateway_foundation_tests COMMAND bmd_gateway_foundation_tests)
 endif()
 
-if(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE)
+if(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE OR BMD_GATEWAY_BUILD_G2_SYNTHETIC)
     find_package(BinanceMarketDataContracts 0.1.0 EXACT CONFIG REQUIRED COMPONENTS Protobuf)
     find_package(BinanceMarketDataContractsGrpc 0.1.0 EXACT CONFIG REQUIRED)
     find_package(BinanceMarketDataProjection 0.1.0 EXACT CONFIG REQUIRED COMPONENTS Core ProtoAdapter)
@@ -142,6 +144,9 @@ if(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE)
         endif()
         message(STATUS "G1 canonical config: ${bmd_gateway_package}=${bmd_gateway_config}")
     endforeach()
+endif()
+
+if(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE)
 
     add_executable(bmd_gateway_upstream_link_smoke tests/upstream_link_smoke.cpp)
     set_target_properties(
@@ -166,4 +171,68 @@ if(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE)
         enable_testing()
     endif()
     add_test(NAME gateway_upstream_link_smoke COMMAND bmd_gateway_upstream_link_smoke)
+endif()
+
+if(BMD_GATEWAY_BUILD_G2_SYNTHETIC)
+    add_library(bmd_gateway_g2_synthetic src/synthetic_host.cpp)
+    add_library(BinanceMarketDataGateway::G2Synthetic ALIAS bmd_gateway_g2_synthetic)
+    set_target_properties(
+        bmd_gateway_g2_synthetic
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+            POSITION_INDEPENDENT_CODE YES
+    )
+    target_compile_features(bmd_gateway_g2_synthetic PUBLIC cxx_std_20)
+    target_include_directories(
+        bmd_gateway_g2_synthetic
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    )
+    target_link_libraries(
+        bmd_gateway_g2_synthetic
+        PUBLIC
+            BinanceMarketDataContracts::Protobuf
+            BinanceMarketDataProjection::Core
+            BinanceMarketDataProjection::ProtoAdapter
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g2_synthetic)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g2_synthetic)
+
+    add_executable(bmd_gateway_g2_synthetic_smoke app/g2_synthetic_smoke.cpp)
+    set_target_properties(
+        bmd_gateway_g2_synthetic_smoke
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_link_libraries(
+        bmd_gateway_g2_synthetic_smoke
+        PRIVATE
+            BinanceMarketDataGateway::G2Synthetic
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g2_synthetic_smoke)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g2_synthetic_smoke)
+
+    if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_g2_synthetic_tests tests/g2_synthetic_tests.cpp)
+        set_target_properties(
+            bmd_gateway_g2_synthetic_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g2_synthetic_tests
+            PRIVATE
+                BinanceMarketDataGateway::G2Synthetic
+        )
+        bmd_gateway_apply_warnings(bmd_gateway_g2_synthetic_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_g2_synthetic_tests)
+        add_test(NAME gateway_g2_synthetic_tests COMMAND bmd_gateway_g2_synthetic_tests)
+        add_test(NAME gateway_g2_synthetic_smoke COMMAND bmd_gateway_g2_synthetic_smoke)
+    endif()
 endif()
