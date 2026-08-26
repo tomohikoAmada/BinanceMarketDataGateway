@@ -7,7 +7,7 @@ from pathlib import Path
 EXPECTED = {
     "binance-market-data-contracts-cpp/0.1.0#53713fb82c27cf6ea0395f6b8a853006",
     "binance-market-data-contracts-grpc-cpp/0.1.0#c3661aa735e1eb6450c1a93f635dbc20",
-    "binance-market-data-projection/0.1.0#5c8ee9626b652fad1075fa44e480182b",
+    "binance-market-data-projection/0.1.0#58ab66309450bdc2035b3e5935220348",
 }
 
 
@@ -38,7 +38,7 @@ def main() -> int:
                 "binance-market-data-contracts-grpc-cpp/0.1.0#c3661aa735e1eb6450c1a93f635dbc20"
             ]["package_folder"],
             "projection": referenced_nodes[
-                "binance-market-data-projection/0.1.0#5c8ee9626b652fad1075fa44e480182b"
+                "binance-market-data-projection/0.1.0#58ab66309450bdc2035b3e5935220348"
             ]["package_folder"],
         }
         Path(sys.argv[2]).write_text(
@@ -49,7 +49,7 @@ def main() -> int:
     print("G1 exact candidate graph verified")
     print("  Contracts message RREV: 53713fb82c27cf6ea0395f6b8a853006")
     print("  Contracts gRPC RREV: c3661aa735e1eb6450c1a93f635dbc20")
-    print("  Projection RREV: 5c8ee9626b652fad1075fa44e480182b")
+    print("  Projection RREV: 58ab66309450bdc2035b3e5935220348")
     return 0
 
 

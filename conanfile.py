@@ -11,7 +11,7 @@ class BinanceMarketDataGatewayG1Consumer(ConanFile):
     requires = (
         "binance-market-data-contracts-cpp/0.1.0#53713fb82c27cf6ea0395f6b8a853006",
         "binance-market-data-contracts-grpc-cpp/0.1.0#c3661aa735e1eb6450c1a93f635dbc20",
-        "binance-market-data-projection/0.1.0#5c8ee9626b652fad1075fa44e480182b",
+        "binance-market-data-projection/0.1.0#58ab66309450bdc2035b3e5935220348",
     )
 
     default_options = {
