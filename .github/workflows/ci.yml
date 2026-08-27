@@ -46,6 +46,141 @@ jobs:
           --venue binance --market spot --symbol BTCUSDT
           --grpc-listen 127.0.0.1:50051 --queue-capacity 1024
 
+  g2-synthetic:
+    name: G2 synthetic candidate (Ubuntu GCC)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CC: gcc-13
+      CXX: g++-13
+      CONAN_HOME: ${{ github.workspace }}/build/g2-candidate/projection/.cache/conan2
+      PIP_CACHE_DIR: ${{ github.workspace }}/build/g2-candidate/projection/.cache/pip
+      BMD_CONTRACTS_SOURCE_REVISION: 9c34199f42467b92a4380c6e88617dde0e54ae13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: tomohikoAmada/BinanceMarketDataProjection
+          ref: 87d05af38d7173ca2d5cae13e7592c38495ec895
+          path: build/g2-candidate/projection
+      - name: Toolchain identity
+        run: |
+          "$CXX" --version | head -n 1
+          cmake --version | head -n 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Bootstrap exact candidate dependencies
+        working-directory: build/g2-candidate/projection
+        run: |
+          bash scripts/bootstrap.sh
+          bash scripts/bootstrap-contracts.sh
+      - name: Create exact Contracts gRPC candidate
+        working-directory: build/g2-candidate/projection/build/m4-prerequisite/contracts
+        run: >-
+          ../../../.venv-tools/bin/conan create conanfile_grpc.py
+          --test-folder=test_package_grpc
+          --build=missing
+          --lockfile=grpc/conan.lock
+          -pr:h=profiles/conan/cpp20
+          -pr:b=profiles/conan/cpp20
+          -s:h build_type=Release
+          -s:b build_type=Release
+          -o:h '&:shared=False'
+      - name: Create exact Projection ProtoAdapter candidate
+        working-directory: build/g2-candidate/projection
+        run: >-
+          .venv-tools/bin/conan create .
+          --lockfile=conan.lock
+          --build=missing
+          -s build_type=Release
+          -s compiler.cppstd=20
+          -o 'binance-market-data-projection/*:shared=False'
+          -o 'binance-market-data-projection/*:proto_adapter=True'
+          -o 'binance-market-data-contracts-cpp/*:shared=False'
+      - name: Verify exact candidate source checkouts
+        run: |
+          test "$(git -C build/g2-candidate/projection rev-parse HEAD)" = \
+            87d05af38d7173ca2d5cae13e7592c38495ec895
+          test "$(git -C build/g2-candidate/projection/build/m4-prerequisite/contracts rev-parse HEAD)" = \
+            "$BMD_CONTRACTS_SOURCE_REVISION"
+      - name: Resolve exact Gateway G1 graph
+        run: >-
+          build/g2-candidate/projection/.venv-tools/bin/conan install .
+          --output-folder=build/g2-conan
+          --build=never
+          -s build_type=Release
+          -s compiler.cppstd=20
+          --format=json > build/g2-conan-graph.json
+      - name: Verify Linux G1 graph lineage
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          expected = {
+              "binance-market-data-contracts-cpp": "53713fb82c27cf6ea0395f6b8a853006",
+              "binance-market-data-contracts-grpc-cpp": "c3661aa735e1eb6450c1a93f635dbc20",
+              "binance-market-data-projection": "58ab66309450bdc2035b3e5935220348",
+          }
+          graph = json.loads(Path("build/g2-conan-graph.json").read_text())
+          nodes = graph["graph"]["nodes"].values()
+          prefixes = {}
+          for name, rrev in expected.items():
+              matches = [
+                  node for node in nodes
+                  if node.get("name") == name
+                  and node.get("rrev") == rrev
+                  and node.get("package_folder")
+              ]
+              if len(matches) != 1:
+                  raise SystemExit(f"expected one exact {name} node, found {len(matches)}")
+              prefixes[name] = matches[0]["package_folder"]
+
+          message_rrevs = {
+              node.get("rrev")
+              for node in nodes
+              if node.get("name") == "binance-market-data-contracts-cpp"
+              and node.get("rrev") is not None
+          }
+          if message_rrevs != {expected["binance-market-data-contracts-cpp"]}:
+              raise SystemExit(f"unexpected Contracts message RREVs: {message_rrevs}")
+
+          Path("build/g2-package-prefixes.txt").write_text(
+              "contracts=" + prefixes["binance-market-data-contracts-cpp"] + "\n"
+              "grpc=" + prefixes["binance-market-data-contracts-grpc-cpp"] + "\n"
+              "projection=" + prefixes["binance-market-data-projection"] + "\n"
+          )
+          print("Linux G1 exact source/RREV graph verified")
+          PY
+      # The complete G1 proof asserts the documented macOS ARM64 package IDs. Linux GCC has
+      # profile-specific package IDs, so use its portable CMake-resolution verifier here and
+      # run the same G1 upstream link smoke in the combined consumer build below.
+      - name: Configure exact G1/G2 consumer
+        run: |
+          set -o pipefail
+          cmake -S . -B build/g2-candidate -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=build/g2-conan/conan_toolchain.cmake \
+            -DBMD_GATEWAY_BUILD_TESTS=ON \
+            -DBMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE=ON \
+            -DBMD_GATEWAY_BUILD_G2_SYNTHETIC=ON \
+            -DBMD_GATEWAY_ENABLE_WARNINGS=ON \
+            -DBMD_GATEWAY_WARNINGS_AS_ERRORS=ON 2>&1 | tee build/g2-configure.log
+      - name: Verify canonical G1 package resolution
+        run: >-
+          python3 scripts/g1-verify-cmake-resolution.py
+          build/g2-candidate/CMakeCache.txt
+          build/g2-configure.log
+          build/g2-package-prefixes.txt
+      - name: Build G1 link smoke and G2 candidate
+        run: cmake --build build/g2-candidate --parallel
+      - name: Test G1 boundary and focused G2 targets
+        run: >-
+          ctest --test-dir build/g2-candidate --output-on-failure
+      - name: First-runnable G2 smoke
+        run: build/g2-candidate/bmd_gateway_g2_synthetic_smoke
+
   sanitizers:
     name: Sanitizer ${{ matrix.sanitizer }}
     runs-on: ubuntu-24.04
