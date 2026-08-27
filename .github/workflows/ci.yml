@@ -113,46 +113,11 @@ jobs:
           -s compiler.cppstd=20
           --format=json > build/g2-conan-graph.json
       - name: Verify Linux G1 graph lineage
-        run: |
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          expected = {
-              "binance-market-data-contracts-cpp": "53713fb82c27cf6ea0395f6b8a853006",
-              "binance-market-data-contracts-grpc-cpp": "c3661aa735e1eb6450c1a93f635dbc20",
-              "binance-market-data-projection": "58ab66309450bdc2035b3e5935220348",
-          }
-          graph = json.loads(Path("build/g2-conan-graph.json").read_text())
-          nodes = graph["graph"]["nodes"].values()
-          prefixes = {}
-          for name, rrev in expected.items():
-              matches = [
-                  node for node in nodes
-                  if node.get("name") == name
-                  and node.get("rrev") == rrev
-                  and node.get("package_folder")
-              ]
-              if len(matches) != 1:
-                  raise SystemExit(f"expected one exact {name} node, found {len(matches)}")
-              prefixes[name] = matches[0]["package_folder"]
-
-          message_rrevs = {
-              node.get("rrev")
-              for node in nodes
-              if node.get("name") == "binance-market-data-contracts-cpp"
-              and node.get("rrev") is not None
-          }
-          if message_rrevs != {expected["binance-market-data-contracts-cpp"]}:
-              raise SystemExit(f"unexpected Contracts message RREVs: {message_rrevs}")
-
-          Path("build/g2-package-prefixes.txt").write_text(
-              "contracts=" + prefixes["binance-market-data-contracts-cpp"] + "\n"
-              "grpc=" + prefixes["binance-market-data-contracts-grpc-cpp"] + "\n"
-              "projection=" + prefixes["binance-market-data-projection"] + "\n"
-          )
-          print("Linux G1 exact source/RREV graph verified")
-          PY
+        run: >-
+          python3 scripts/g1-verify-graph.py --portable-lineage
+          build/g2-conan-graph.json build/g2-package-prefixes.txt
+      - name: Test repository-owned G1 graph verifier
+        run: python3 tests/g1_verify_graph_test.py
       # The complete G1 proof asserts the documented macOS ARM64 package IDs. Linux GCC has
       # profile-specific package IDs, so use its portable CMake-resolution verifier here and
       # run the same G1 upstream link smoke in the combined consumer build below.
