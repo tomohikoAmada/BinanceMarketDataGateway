@@ -20,12 +20,16 @@ constexpr std::uint64_t kSyntheticGeneratedMonotonicNs = 42'000'000ULL;
 }
 
 [[nodiscard]] bool
-accepted_by_projection(const core::ApplyResult &result) noexcept {
+accepted_by_projection(const core::ApplyResult &result,
+                       SyntheticHostState host_state) noexcept {
   switch (result.disposition) {
   case core::ApplyDisposition::Applied:
+    return result.status_after == core::ProjectionStatus::Synchronized;
   case core::ApplyDisposition::IgnoredStale:
   case core::ApplyDisposition::IgnoredDuplicate:
-    return result.status_after == core::ProjectionStatus::Synchronized;
+    return result.status_after == core::ProjectionStatus::Synchronized ||
+           (host_state == SyntheticHostState::ReplayingBuffer &&
+            result.status_after == core::ProjectionStatus::AwaitingBridge);
   case core::ApplyDisposition::GapDetected:
   case core::ApplyDisposition::RejectedWrongState:
     return false;
@@ -147,7 +151,7 @@ SyntheticSpotBtcusdtHost::apply_update(const DepthUpdate &update) {
   }
 
   last_projection_apply_ = std::get<core::ApplyResult>(result);
-  if (!accepted_by_projection(*last_projection_apply_)) {
+  if (!accepted_by_projection(*last_projection_apply_, state_)) {
     return processing_failure(SyntheticHostErrorCode::ProjectionRejected);
   }
   return state_;

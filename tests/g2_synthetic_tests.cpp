@@ -81,6 +81,14 @@ update_fixture(std::uint64_t first, std::uint64_t final, std::string bid_price,
   return update_fixture(99U, 101U, "100.00", "3.000", "102.00", "0.500");
 }
 
+[[nodiscard]] market_wire::DepthUpdate stale_bootstrap_prefix_update() {
+  return update_fixture(90U, 99U, "97.00", "7.000", "104.00", "8.000");
+}
+
+[[nodiscard]] market_wire::DepthUpdate duplicate_bootstrap_prefix_update() {
+  return update_fixture(99U, 100U, "96.00", "6.000", "105.00", "9.000");
+}
+
 [[nodiscard]] market_wire::DepthUpdate contiguous_update() {
   return update_fixture(102U, 103U, "98.00", "1.000", "101.00", "0");
 }
@@ -91,6 +99,83 @@ update_fixture(std::uint64_t first, std::uint64_t final, std::string bid_price,
 
 [[nodiscard]] market_wire::DepthUpdate gap_update() {
   return update_fixture(107U, 107U, "97.00", "1.000", "103.00", "1.000");
+}
+
+void test_bootstrap_ignored_prefix_replays(int &failures) {
+  gateway::SyntheticSpotBtcusdtHost host;
+  static_cast<void>(host.receive_depth_update(stale_bootstrap_prefix_update()));
+  static_cast<void>(
+      host.receive_depth_update(duplicate_bootstrap_prefix_update()));
+  static_cast<void>(host.receive_depth_update(bridge_update()));
+  static_cast<void>(host.receive_depth_update(contiguous_update()));
+
+  expect(host.buffered_depth_update_count() == 4U,
+         "stale/duplicate prefix, bridge, and successor are buffered in order",
+         failures);
+  static_cast<void>(host.install_snapshot(snapshot_fixture()));
+
+  const auto replay = host.replay_buffer();
+  expect(std::holds_alternative<gateway::SyntheticHostState>(replay),
+         "Projection ignored prefix results do not abort replay", failures);
+  expect(host.projection_status() == core::ProjectionStatus::Synchronized,
+         "valid bridge synchronizes Projection after ignored prefix results",
+         failures);
+  expect(host.state() == gateway::SyntheticHostState::Live,
+         "host enters LIVE only after the complete prefix replay", failures);
+  expect(host.buffered_depth_update_count() == 0U,
+         "complete bootstrap buffer is consumed", failures);
+  expect(host.last_projection_apply().has_value() &&
+             host.last_projection_apply()->disposition ==
+                 core::ApplyDisposition::Applied &&
+             host.last_projection_apply()->status_after ==
+                 core::ProjectionStatus::Synchronized,
+         "contiguous successor remains an Applied synchronized result",
+         failures);
+
+  const auto output = host.local_order_book_snapshot();
+  expect(std::holds_alternative<core::LocalOrderBookSnapshot>(output),
+         "prefix replay produces a local snapshot", failures);
+  if (!std::holds_alternative<core::LocalOrderBookSnapshot>(output)) {
+    return;
+  }
+
+  const auto &book = std::get<core::LocalOrderBookSnapshot>(output);
+  expect(book.synchronized() && book.last_update_id() == 103U,
+         "prefix replay book is synchronized at the successor final id",
+         failures);
+  expect(book.bids_size() == 3 && book.bids(0).price() == "100.00" &&
+             book.bids(0).quantity() == "3.000" &&
+             book.bids(1).price() == "99.00" &&
+             book.bids(1).quantity() == "1.000" &&
+             book.bids(2).price() == "98.00" &&
+             book.bids(2).quantity() == "1.000",
+         "stale/duplicate levels do not mutate the bid book", failures);
+  expect(book.asks_size() == 1 && book.asks(0).price() == "102.00" &&
+             book.asks(0).quantity() == "0.500",
+         "stale/duplicate levels do not mutate the ask book", failures);
+}
+
+void test_bootstrap_without_bridge_stays_non_live(int &failures) {
+  gateway::SyntheticSpotBtcusdtHost host;
+  static_cast<void>(host.receive_depth_update(stale_bootstrap_prefix_update()));
+  static_cast<void>(
+      host.receive_depth_update(duplicate_bootstrap_prefix_update()));
+  static_cast<void>(host.install_snapshot(snapshot_fixture()));
+
+  const auto replay = host.replay_buffer();
+  expect(std::holds_alternative<gateway::SyntheticHostError>(replay),
+         "replay without a bridge fails bootstrap", failures);
+  if (std::holds_alternative<gateway::SyntheticHostError>(replay)) {
+    expect(std::get<gateway::SyntheticHostError>(replay).code ==
+               gateway::SyntheticHostErrorCode::BootstrapNotSynchronized,
+           "missing bridge reports BootstrapNotSynchronized", failures);
+  }
+  expect(host.projection_status() == core::ProjectionStatus::AwaitingBridge,
+         "Projection remains AwaitingBridge without a bridge", failures);
+  expect(host.state() == gateway::SyntheticHostState::Failed,
+         "host cannot enter LIVE without a synchronized Projection", failures);
+  expect(host.buffered_depth_update_count() == 0U,
+         "no-bridge replay still finishes consuming its buffer", failures);
 }
 
 [[nodiscard]] std::optional<core::LocalOrderBookSnapshot>
@@ -219,6 +304,8 @@ void test_determinism(int &failures) {
 int main() {
   int failures = 0;
   static_cast<void>(run_happy_path(failures));
+  test_bootstrap_ignored_prefix_replays(failures);
+  test_bootstrap_without_bridge_stays_non_live(failures);
   test_sequence_result_ownership(failures);
   test_determinism(failures);
 
