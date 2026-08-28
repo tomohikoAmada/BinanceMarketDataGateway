@@ -97,7 +97,9 @@ not the normal G2–G6 runtime dependency lane.
 
 ## GW-PREQ-002 — Runtime Dependency Lane Decoupling
 
-**STATUS=NEXT**
+**STATUS=COMPLETE**
+
+`GW-PREQ-002=COMPLETE`.
 
 This is a prerequisite, not a new G-numbered product milestone. It establishes
 the normal current Gateway runtime development dependency lane.
@@ -110,6 +112,14 @@ complete gRPC dependency graph merely to prove runtime development.
 The historical G1 four-target proof remains explicit and opt-in. Contracts gRPC
 enters the normal runtime/server dependency graph when G7 implements gRPC
 publication. No runtime behavior is added in this prerequisite.
+
+The normal root recipe is `conanfile.py`. The frozen historical proof recipe is
+`conanfile_g1.py`, and `scripts/g1-candidate-proof.sh` selects it explicitly.
+The normal graph is verified by
+`scripts/gw-preq-002-verify-graph.py`; its invariant is one Contracts message
+lineage plus Projection, with no Contracts gRPC package and no `grpc` package.
+
+`NEXT=G2`.
 
 ## G2 — Deterministic Synthetic Host
 

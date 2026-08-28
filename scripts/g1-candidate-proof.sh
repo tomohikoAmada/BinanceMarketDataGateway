@@ -33,7 +33,7 @@ unset BinanceMarketDataContracts_DIR
 unset BinanceMarketDataContractsGrpc_DIR
 unset BMD_GATEWAY_UPSTREAM_CMAKE_PREFIX_PATH
 
-"$conan" install "$repo_root" \
+"$conan" install "$repo_root/conanfile_g1.py" \
     --output-folder="$deps_dir" \
     --build=never \
     -s build_type=Release \
