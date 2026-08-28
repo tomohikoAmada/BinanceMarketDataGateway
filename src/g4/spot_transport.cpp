@@ -96,6 +96,11 @@ void configure_ssl_context(ssl::context &context) {
 #endif
 }
 
+[[nodiscard]] bool is_clean_cancellation(const ErrorCode &error_code,
+                                         bool clean_cancel_requested) {
+  return clean_cancel_requested && error_code == asio::error::operation_aborted;
+}
+
 class AsyncExchangeInfoGet final
     : public std::enable_shared_from_this<AsyncExchangeInfoGet> {
 public:
@@ -300,10 +305,19 @@ public:
       return;
     }
     arm_timeout("depth-dns");
+    io_pending_ = true;
     resolver_.async_resolve(
         std::string{kRestHost}, std::string{kRestPort},
         [self = shared_from_this()](const ErrorCode &error_code,
                                     tcp::resolver::results_type results) {
+          self->io_pending_ = false;
+          if (self->done_) {
+            return;
+          }
+          if (self->handle_cancelled_io(error_code, NetworkErrorCode::Dns,
+                                        "depth-dns")) {
+            return;
+          }
           self->disarm_timeout();
           if (error_code) {
             self->finish(error_from_code(NetworkErrorCode::Dns, "depth-dns",
@@ -315,20 +329,40 @@ public:
   }
 
   void cancel() noexcept {
-    done_ = true;
+    if (done_ || cancel_requested_) {
+      return;
+    }
+    cancel_requested_ = true;
+    cancellation_completions_pending_ =
+        static_cast<std::size_t>(io_pending_) +
+        static_cast<std::size_t>(timer_pending_);
     resolver_.cancel();
-    timer_.cancel();
+    if (timer_pending_) {
+      timer_.cancel();
+    }
     ErrorCode ignored;
     beast::get_lowest_layer(stream_).socket().cancel(ignored);
     beast::get_lowest_layer(stream_).socket().close(ignored);
+    if (cancellation_completions_pending_ == 0U) {
+      retire_cleanly();
+    }
   }
 
 private:
   void connect(tcp::resolver::results_type results) {
     arm_timeout("depth-tcp-connect");
+    io_pending_ = true;
     beast::get_lowest_layer(stream_).async_connect(
         results, [self = shared_from_this()](const ErrorCode &error_code,
                                              const tcp::endpoint &) {
+          self->io_pending_ = false;
+          if (self->done_) {
+            return;
+          }
+          if (self->handle_cancelled_io(error_code, NetworkErrorCode::Tcp,
+                                        "depth-tcp-connect")) {
+            return;
+          }
           self->disarm_timeout();
           if (error_code) {
             self->finish(error_from_code(NetworkErrorCode::Tcp,
@@ -341,9 +375,18 @@ private:
 
   void handshake() {
     arm_timeout("depth-tls-handshake");
+    io_pending_ = true;
     stream_.async_handshake(
         ssl::stream_base::client,
         [self = shared_from_this()](const ErrorCode &error_code) {
+          self->io_pending_ = false;
+          if (self->done_) {
+            return;
+          }
+          if (self->handle_cancelled_io(error_code, NetworkErrorCode::Tls,
+                                        "depth-tls-handshake")) {
+            return;
+          }
           self->disarm_timeout();
           if (error_code) {
             self->finish(error_from_code(NetworkErrorCode::Tls,
@@ -356,9 +399,18 @@ private:
 
   void write_request() {
     arm_timeout("depth-http-write");
+    io_pending_ = true;
     http::async_write(
         stream_, request_,
         [self = shared_from_this()](const ErrorCode &error_code, std::size_t) {
+          self->io_pending_ = false;
+          if (self->done_) {
+            return;
+          }
+          if (self->handle_cancelled_io(error_code, NetworkErrorCode::HttpWrite,
+                                        "depth-http-write")) {
+            return;
+          }
           self->disarm_timeout();
           if (error_code) {
             self->finish(error_from_code(NetworkErrorCode::HttpWrite,
@@ -371,48 +423,98 @@ private:
 
   void read_response() {
     arm_timeout("depth-http-read");
+    io_pending_ = true;
     http::async_read(
         stream_, buffer_, parser_,
         [self = shared_from_this()](const ErrorCode &error_code, std::size_t) {
+          self->io_pending_ = false;
+          if (self->done_) {
+            return;
+          }
+          if (self->cancel_requested_) {
+            if (error_code &&
+                !is_clean_cancellation(error_code, self->cancel_requested_)) {
+              self->finish(error_from_code(NetworkErrorCode::HttpRead,
+                                           "depth-http-read", error_code));
+              return;
+            }
+            if (!error_code) {
+              self->cancelled_result_.emplace(self->response_result());
+            }
+            self->complete_cancelled_piece();
+            return;
+          }
           self->disarm_timeout();
           if (error_code) {
             self->finish(error_from_code(NetworkErrorCode::HttpRead,
                                          "depth-http-read", error_code));
             return;
           }
-          g3::ClockSample received_at{};
-          try {
-            received_at = self->clock_();
-          } catch (const std::exception &failure) {
-            self->finish(network_error(NetworkErrorCode::Internal,
-                                       "depth-receive-clock", failure.what()));
-            return;
-          } catch (...) {
-            self->finish(network_error(NetworkErrorCode::Internal,
-                                       "depth-receive-clock",
-                                       "receive clock failed"));
-            return;
-          }
-          auto response = self->parser_.release();
-          if (response.result_int() != 200) {
-            self->finish(network_error(
-                NetworkErrorCode::HttpStatus, "depth-http-status",
-                "Binance depth request returned non-200", response.result_int(),
-                retry_after_from(response)));
-            return;
-          }
-          self->finish(std::make_pair(std::move(response), received_at));
+          self->finish(self->response_result());
         });
+  }
+
+  [[nodiscard]] Result response_result() {
+    g3::ClockSample received_at{};
+    try {
+      received_at = clock_();
+    } catch (const std::exception &failure) {
+      return network_error(NetworkErrorCode::Internal, "depth-receive-clock",
+                           failure.what());
+    } catch (...) {
+      return network_error(NetworkErrorCode::Internal, "depth-receive-clock",
+                           "receive clock failed");
+    }
+    auto response = parser_.release();
+    if (response.result_int() != 200) {
+      return network_error(NetworkErrorCode::HttpStatus, "depth-http-status",
+                           "Binance depth request returned non-200",
+                           response.result_int(), retry_after_from(response));
+    }
+    return std::make_pair(std::move(response), received_at);
+  }
+
+  [[nodiscard]] bool handle_cancelled_io(const ErrorCode &error_code,
+                                         NetworkErrorCode code,
+                                         std::string stage) {
+    if (!cancel_requested_) {
+      return false;
+    }
+    if (error_code && !is_clean_cancellation(error_code, cancel_requested_)) {
+      finish(error_from_code(code, std::move(stage), error_code));
+      return true;
+    }
+    complete_cancelled_piece();
+    return true;
   }
 
   void arm_timeout(std::string stage) {
     ++timeout_generation_;
     const auto generation = timeout_generation_;
+    timer_pending_ = true;
     timer_.expires_after(kStageTimeout);
     timer_.async_wait([self = shared_from_this(), generation,
                        stage = std::move(stage)](const ErrorCode &error_code) {
-      if (!error_code && !self->done_ &&
-          generation == self->timeout_generation_) {
+      if (generation != self->timeout_generation_) {
+        return;
+      }
+      self->timer_pending_ = false;
+      if (self->done_) {
+        return;
+      }
+      if (self->cancel_requested_) {
+        if (!error_code) {
+          self->finish(network_error(NetworkErrorCode::Timeout, stage,
+                                     "network stage timed out"));
+        } else if (is_clean_cancellation(error_code, self->cancel_requested_)) {
+          self->complete_cancelled_piece();
+        } else {
+          self->finish(error_from_code(NetworkErrorCode::Internal,
+                                       stage + "-timer", error_code));
+        }
+        return;
+      }
+      if (!error_code) {
         self->finish(network_error(NetworkErrorCode::Timeout, stage,
                                    "network stage timed out"));
       }
@@ -421,7 +523,35 @@ private:
 
   void disarm_timeout() noexcept {
     ++timeout_generation_;
+    timer_pending_ = false;
     timer_.cancel();
+  }
+
+  void complete_cancelled_piece() {
+    if (cancellation_completions_pending_ > 0U) {
+      --cancellation_completions_pending_;
+    }
+    if (cancellation_completions_pending_ != 0U || done_) {
+      return;
+    }
+    if (cancelled_result_.has_value()) {
+      auto result = std::move(*cancelled_result_);
+      cancelled_result_.reset();
+      finish(std::move(result));
+      return;
+    }
+    retire_cleanly();
+  }
+
+  void retire_cleanly() noexcept {
+    if (done_) {
+      return;
+    }
+    done_ = true;
+    resolver_.cancel();
+    ErrorCode ignored;
+    beast::get_lowest_layer(stream_).socket().cancel(ignored);
+    beast::get_lowest_layer(stream_).socket().close(ignored);
   }
 
   void finish(Result result) {
@@ -429,7 +559,12 @@ private:
       return;
     }
     done_ = true;
+    cancellation_completions_pending_ = 0U;
     disarm_timeout();
+    resolver_.cancel();
+    ErrorCode ignored;
+    beast::get_lowest_layer(stream_).socket().cancel(ignored);
+    beast::get_lowest_layer(stream_).socket().close(ignored);
     completion_(std::move(result));
   }
 
@@ -441,7 +576,12 @@ private:
   http::response_parser<http::string_body> parser_;
   g3::RuntimeClock clock_;
   Completion completion_;
+  std::optional<Result> cancelled_result_;
   std::uint64_t timeout_generation_{0U};
+  std::size_t cancellation_completions_pending_{0U};
+  bool io_pending_{false};
+  bool timer_pending_{false};
+  bool cancel_requested_{false};
   bool done_{false};
 };
 
@@ -470,10 +610,19 @@ public:
       return;
     }
     arm_timeout("websocket-dns");
+    io_pending_ = true;
     resolver_.async_resolve(
         std::string{kWebSocketHost}, std::string{kWebSocketPort},
         [self = shared_from_this()](const ErrorCode &error_code,
                                     tcp::resolver::results_type results) {
+          self->io_pending_ = false;
+          if (self->done_) {
+            return;
+          }
+          if (self->handle_cancelled_io(error_code, NetworkErrorCode::Dns,
+                                        "websocket-dns")) {
+            return;
+          }
           self->disarm_timeout();
           if (error_code) {
             self->fail(error_from_code(NetworkErrorCode::Dns, "websocket-dns",
@@ -485,20 +634,40 @@ public:
   }
 
   void cancel() noexcept {
-    done_ = true;
+    if (done_ || cancel_requested_) {
+      return;
+    }
+    cancel_requested_ = true;
+    cancellation_completions_pending_ =
+        static_cast<std::size_t>(io_pending_) +
+        static_cast<std::size_t>(timer_pending_);
     resolver_.cancel();
-    timer_.cancel();
+    if (timer_pending_) {
+      timer_.cancel();
+    }
     ErrorCode ignored;
     beast::get_lowest_layer(stream_).socket().cancel(ignored);
     beast::get_lowest_layer(stream_).socket().close(ignored);
+    if (cancellation_completions_pending_ == 0U) {
+      retire_cleanly();
+    }
   }
 
 private:
   void connect(tcp::resolver::results_type results) {
     arm_timeout("websocket-tcp-connect");
+    io_pending_ = true;
     beast::get_lowest_layer(stream_).async_connect(
         results, [self = shared_from_this()](const ErrorCode &error_code,
                                              const tcp::endpoint &) {
+          self->io_pending_ = false;
+          if (self->done_) {
+            return;
+          }
+          if (self->handle_cancelled_io(error_code, NetworkErrorCode::Tcp,
+                                        "websocket-tcp-connect")) {
+            return;
+          }
           self->disarm_timeout();
           if (error_code) {
             self->fail(error_from_code(NetworkErrorCode::Tcp,
@@ -511,9 +680,18 @@ private:
 
   void tls_handshake() {
     arm_timeout("websocket-tls-handshake");
+    io_pending_ = true;
     stream_.next_layer().async_handshake(
         ssl::stream_base::client,
         [self = shared_from_this()](const ErrorCode &error_code) {
+          self->io_pending_ = false;
+          if (self->done_) {
+            return;
+          }
+          if (self->handle_cancelled_io(error_code, NetworkErrorCode::Tls,
+                                        "websocket-tls-handshake")) {
+            return;
+          }
           self->disarm_timeout();
           if (error_code) {
             self->fail(error_from_code(NetworkErrorCode::Tls,
@@ -536,9 +714,19 @@ private:
           request.set(http::field::user_agent, "bmd-gateway-g4/1.0.0");
         }));
     arm_timeout("websocket-handshake");
+    io_pending_ = true;
     stream_.async_handshake(
         std::string{kWebSocketHost}, std::string{kWebSocketTarget},
         [self = shared_from_this()](const ErrorCode &error_code) {
+          self->io_pending_ = false;
+          if (self->done_) {
+            return;
+          }
+          if (self->handle_cancelled_io(error_code,
+                                        NetworkErrorCode::WebSocketHandshake,
+                                        "websocket-handshake")) {
+            return;
+          }
           self->disarm_timeout();
           if (error_code) {
             self->fail(error_from_code(NetworkErrorCode::WebSocketHandshake,
@@ -563,10 +751,17 @@ private:
     if (done_) {
       return;
     }
+    io_pending_ = true;
     stream_.async_read(buffer_, [self = shared_from_this()](
                                     const ErrorCode &error_code, std::size_t) {
+      self->io_pending_ = false;
+      if (self->done_) {
+        return;
+      }
       if (error_code) {
-        if (error_code == beast::error::timeout) {
+        if (is_clean_cancellation(error_code, self->cancel_requested_)) {
+          self->complete_cancelled_piece();
+        } else if (error_code == beast::error::timeout) {
           self->fail(error_from_code(NetworkErrorCode::Timeout,
                                      "websocket-idle", error_code));
         } else {
@@ -575,6 +770,7 @@ private:
         }
         return;
       }
+      const bool retire_after_message = self->cancel_requested_;
       g3::ClockSample received_at{};
       try {
         received_at = self->clock_();
@@ -596,21 +792,58 @@ private:
       auto payload = beast::buffers_to_string(self->buffer_.data());
       self->buffer_.consume(self->buffer_.size());
       if (!self->callbacks_.message(std::move(payload), received_at)) {
-        self->cancel();
+        self->retire_cleanly();
+        return;
+      }
+      if (retire_after_message) {
+        self->complete_cancelled_piece();
         return;
       }
       self->read();
     });
   }
 
+  [[nodiscard]] bool handle_cancelled_io(const ErrorCode &error_code,
+                                         NetworkErrorCode code,
+                                         std::string stage) {
+    if (!cancel_requested_) {
+      return false;
+    }
+    if (error_code && !is_clean_cancellation(error_code, cancel_requested_)) {
+      fail(error_from_code(code, std::move(stage), error_code));
+      return true;
+    }
+    complete_cancelled_piece();
+    return true;
+  }
+
   void arm_timeout(std::string stage) {
     ++timeout_generation_;
     const auto generation = timeout_generation_;
+    timer_pending_ = true;
     timer_.expires_after(kStageTimeout);
     timer_.async_wait([self = shared_from_this(), generation,
                        stage = std::move(stage)](const ErrorCode &error_code) {
-      if (!error_code && !self->done_ &&
-          generation == self->timeout_generation_) {
+      if (generation != self->timeout_generation_) {
+        return;
+      }
+      self->timer_pending_ = false;
+      if (self->done_) {
+        return;
+      }
+      if (self->cancel_requested_) {
+        if (!error_code) {
+          self->fail(network_error(NetworkErrorCode::Timeout, stage,
+                                   "network stage timed out"));
+        } else if (is_clean_cancellation(error_code, self->cancel_requested_)) {
+          self->complete_cancelled_piece();
+        } else {
+          self->fail(error_from_code(NetworkErrorCode::Internal,
+                                     stage + "-timer", error_code));
+        }
+        return;
+      }
+      if (!error_code) {
         self->fail(network_error(NetworkErrorCode::Timeout, stage,
                                  "network stage timed out"));
       }
@@ -619,7 +852,28 @@ private:
 
   void disarm_timeout() noexcept {
     ++timeout_generation_;
+    timer_pending_ = false;
     timer_.cancel();
+  }
+
+  void complete_cancelled_piece() noexcept {
+    if (cancellation_completions_pending_ > 0U) {
+      --cancellation_completions_pending_;
+    }
+    if (cancellation_completions_pending_ == 0U) {
+      retire_cleanly();
+    }
+  }
+
+  void retire_cleanly() noexcept {
+    if (done_) {
+      return;
+    }
+    done_ = true;
+    resolver_.cancel();
+    ErrorCode ignored;
+    beast::get_lowest_layer(stream_).socket().cancel(ignored);
+    beast::get_lowest_layer(stream_).socket().close(ignored);
   }
 
   void fail(NetworkError failure) {
@@ -627,8 +881,12 @@ private:
       return;
     }
     done_ = true;
+    cancellation_completions_pending_ = 0U;
     resolver_.cancel();
     disarm_timeout();
+    ErrorCode ignored;
+    beast::get_lowest_layer(stream_).socket().cancel(ignored);
+    beast::get_lowest_layer(stream_).socket().close(ignored);
     callbacks_.failure(std::move(failure));
   }
 
@@ -639,6 +897,10 @@ private:
   g3::RuntimeClock clock_;
   WebSocketCallbacks callbacks_;
   std::uint64_t timeout_generation_{0U};
+  std::size_t cancellation_completions_pending_{0U};
+  bool io_pending_{false};
+  bool timer_pending_{false};
+  bool cancel_requested_{false};
   bool done_{false};
 };
 
@@ -725,9 +987,10 @@ bool detail::live_acceptance_ready(
 
 class SpotTransport::Impl final {
 public:
-  Impl(g3::MarketRuntime &runtime, g3::RuntimeClock clock)
+  Impl(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+       detail::TransportTestOptions test_options)
       : runtime_{runtime}, clock_{std::move(clock)},
-        tls_context_{ssl::context::tls_client} {
+        tls_context_{ssl::context::tls_client}, test_options_{test_options} {
     if (!clock_) {
       throw std::invalid_argument{"G4 transport clock must be injected"};
     }
@@ -750,7 +1013,14 @@ public:
     observation_.started = true;
     work_guard_.emplace(asio::make_work_guard(context_));
     network_thread_ = std::thread{[this] { context_.run(); }};
-    asio::post(context_, [this] { start_websocket(); });
+    asio::post(context_, [this] {
+      if (test_options_.stop_cut_mode ==
+          detail::TransportStopCutTestMode::None) {
+        start_websocket();
+      } else {
+        start_stop_cut_test_transport();
+      }
+    });
     condition_.wait(lock, [this] {
       return observation_.websocket_handshake ||
              observation_.terminal_error.has_value();
@@ -760,27 +1030,19 @@ public:
   }
 
   void stop() noexcept {
+    bool started = false;
     {
       std::lock_guard lock{mutex_};
       if (observation_.stopped) {
         return;
       }
-      user_stopping_ = true;
+      stop_requested_ = true;
       observation_.running = false;
+      started = observation_.started;
     }
-    if (observation_.started) {
-      asio::post(context_, [this] {
-        if (websocket_) {
-          websocket_->cancel();
-        }
-        if (depth_request_) {
-          depth_request_->cancel();
-        }
-        if (work_guard_.has_value()) {
-          work_guard_->reset();
-        }
-        context_.stop();
-      });
+    condition_.notify_all();
+    if (started) {
+      asio::post(context_, [this] { begin_clean_shutdown(); });
       if (network_thread_.joinable()) {
         try {
           network_thread_.join();
@@ -803,6 +1065,48 @@ public:
   }
 
 private:
+  void start_stop_cut_test_transport() {
+    test_cancel_timer_.emplace(context_);
+    test_cancel_timer_->expires_after(std::chrono::hours{24});
+    test_cancel_timer_->async_wait([this](const ErrorCode &error_code) {
+      if (is_clean_cancellation(error_code, network_clean_cancel_requested_)) {
+        return;
+      }
+      terminal_failure(error_from_code(NetworkErrorCode::Internal,
+                                       "test-clean-cancellation", error_code),
+                       false);
+    });
+    {
+      std::lock_guard lock{mutex_};
+      observation_.tls_verified = true;
+      observation_.websocket_handshake = true;
+      observation_.rest_depth_fetched = true;
+      observation_.depth_frame_count = 1U;
+      observation_.running = true;
+    }
+    condition_.notify_all();
+
+    if (test_options_.stop_cut_mode !=
+        detail::TransportStopCutTestMode::PreexistingFailure) {
+      return;
+    }
+
+    {
+      std::unique_lock lock{mutex_};
+      condition_.wait(lock, [this] { return stop_requested_; });
+    }
+    // This models an I/O failure already ready at the stop boundary while
+    // deterministically exercising the adverse order: clean cancellation is
+    // established first in the network domain, then the genuine completion is
+    // delivered. terminal_failure() must still preserve it.
+    begin_clean_shutdown();
+    terminal_failure(
+        network_error(NetworkErrorCode::WebSocketRead,
+                      "test-preexisting-network-failure",
+                      "genuine failure was ready before the stop cut"),
+        false);
+  }
+
   void start_websocket() {
     WebSocketCallbacks callbacks;
     callbacks.tls_verified = [this] {
@@ -830,7 +1134,7 @@ private:
   void websocket_active() {
     {
       std::lock_guard lock{mutex_};
-      if (user_stopping_) {
+      if (stop_requested_) {
         return;
       }
       observation_.websocket_handshake = true;
@@ -919,7 +1223,7 @@ private:
   void terminal_failure(NetworkError failure, bool snapshot_failure) {
     {
       std::lock_guard lock{mutex_};
-      if (user_stopping_ || observation_.terminal_error.has_value()) {
+      if (observation_.terminal_error.has_value()) {
         return;
       }
       observation_.terminal_error = std::move(failure);
@@ -930,16 +1234,36 @@ private:
     } else {
       static_cast<void>(runtime_.submit_transport_failure());
     }
+    cancel_network_operations();
+    release_network_work();
+    condition_.notify_all();
+  }
+
+  void begin_clean_shutdown() noexcept {
+    if (network_clean_cancel_requested_) {
+      return;
+    }
+    network_clean_cancel_requested_ = true;
+    cancel_network_operations();
+    release_network_work();
+  }
+
+  void cancel_network_operations() noexcept {
     if (websocket_) {
       websocket_->cancel();
     }
     if (depth_request_) {
       depth_request_->cancel();
     }
+    if (test_cancel_timer_.has_value()) {
+      test_cancel_timer_->cancel();
+    }
+  }
+
+  void release_network_work() noexcept {
     if (work_guard_.has_value()) {
       work_guard_->reset();
     }
-    condition_.notify_all();
   }
 
   g3::MarketRuntime &runtime_;
@@ -950,16 +1274,20 @@ private:
       work_guard_;
   std::shared_ptr<AsyncWebSocket> websocket_;
   std::shared_ptr<AsyncHttpsGet> depth_request_;
+  std::optional<asio::steady_timer> test_cancel_timer_;
   std::thread network_thread_;
+  detail::TransportTestOptions test_options_;
 
   mutable std::mutex mutex_;
   std::condition_variable condition_;
   TransportObservation observation_;
-  bool user_stopping_{false};
+  bool stop_requested_{false};
+  bool network_clean_cancel_requested_{false};
 };
 
-SpotTransport::SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock)
-    : impl_{std::make_unique<Impl>(runtime, std::move(clock))} {}
+SpotTransport::SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                             detail::TransportTestOptions test_options)
+    : impl_{std::make_unique<Impl>(runtime, std::move(clock), test_options)} {}
 
 SpotTransport::~SpotTransport() = default;
 

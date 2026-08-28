@@ -105,6 +105,65 @@ namespace g4 = binance_market_data::gateway::g4;
   return !g4::detail::live_acceptance_ready(transport, runtime);
 }
 
+[[nodiscard]] bool
+clean_started_stop_has_no_false_failure(const g3::RuntimeClock &clock) {
+  g3::MarketRuntime runtime{{4U, 4U}, clock, numeric_spec()};
+  if (runtime.start() != g3::StartResult::Started) {
+    return false;
+  }
+  g4::SpotTransport transport{
+      runtime,
+      clock,
+      {g4::detail::TransportStopCutTestMode::CleanCancellation}};
+  if (transport.start() != g4::TransportStartResult::Started) {
+    transport.stop();
+    runtime.stop();
+    return false;
+  }
+  transport.stop();
+  transport.stop();
+  const auto observation = transport.observe();
+  const auto runtime_observation = runtime.observe();
+  runtime.stop();
+  return observation.stopped && !observation.running &&
+         !observation.terminal_error.has_value() &&
+         !runtime_observation.fault_reason.has_value();
+}
+
+[[nodiscard]] bool
+preexisting_failure_survives_stop_cut(const g3::RuntimeClock &clock) {
+  g3::MarketRuntime runtime{{4U, 4U}, clock, numeric_spec()};
+  if (runtime.start() != g3::StartResult::Started) {
+    return false;
+  }
+  g4::SpotTransport transport{
+      runtime,
+      clock,
+      {g4::detail::TransportStopCutTestMode::PreexistingFailure}};
+  if (transport.start() != g4::TransportStartResult::Started) {
+    transport.stop();
+    runtime.stop();
+    return false;
+  }
+  transport.stop();
+  const auto observation = transport.observe();
+  const auto runtime_observation = runtime.observe();
+  const bool rejected =
+      !g4::detail::live_acceptance_ready(observation, runtime_observation);
+  runtime.stop();
+
+  return observation.stopped && !observation.running &&
+         observation.terminal_error.has_value() &&
+         observation.terminal_error->code ==
+             g4::NetworkErrorCode::WebSocketRead &&
+         observation.terminal_error->stage ==
+             "test-preexisting-network-failure" &&
+         runtime_observation.state == g3::RuntimeState::Faulted &&
+         runtime_observation.fault_reason ==
+             g3::FaultReason::TransportFailure &&
+         rejected;
+}
+
 } // namespace
 
 int main() {
@@ -121,6 +180,13 @@ int main() {
   g3::RuntimeClock clock = [] {
     return g3::ClockSample{1700000000123456000ULL, 9000000000999ULL};
   };
+  if (!clean_started_stop_has_no_false_failure(clock)) {
+    return EXIT_FAILURE;
+  }
+  if (!preexisting_failure_survives_stop_cut(clock)) {
+    return EXIT_FAILURE;
+  }
+
   g3::MarketRuntime runtime{{4U, 4U}, clock, numeric_spec()};
   g4::SpotTransport transport{runtime, clock};
 
@@ -142,6 +208,8 @@ int main() {
   std::cout << "EXCHANGE_INFO_ASYNC_TIMEOUT=PASS\n"
                "WEBSOCKET_IDLE_POLICY=PASS\n"
                "FINAL_ACCEPTANCE_REJECTION=PASS\n"
+               "CLEAN_STARTED_STOP_NO_FALSE_FAILURE=PASS\n"
+               "PREEXISTING_FAILURE_SURVIVES_STOP_CUT=PASS\n"
                "CLEAN_TRANSPORT_STOP_CORE=PASS\n";
   return EXIT_SUCCESS;
 }

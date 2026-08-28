@@ -75,6 +75,16 @@ namespace detail {
 inline constexpr auto kWebSocketIdleTimeout = std::chrono::seconds{90};
 inline constexpr bool kWebSocketKeepAlivePings = false;
 
+enum class TransportStopCutTestMode : std::uint8_t {
+  None,
+  CleanCancellation,
+  PreexistingFailure,
+};
+
+struct TransportTestOptions final {
+  TransportStopCutTestMode stop_cut_mode{TransportStopCutTestMode::None};
+};
+
 struct ExchangeInfoEndpoint final {
   std::string host;
   std::string port;
@@ -95,7 +105,8 @@ live_acceptance_ready(const TransportObservation &transport,
 // are coordinated by the same external lifecycle owner as MarketRuntime.
 class SpotTransport final {
 public:
-  SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock);
+  SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                detail::TransportTestOptions test_options = {});
   ~SpotTransport();
 
   SpotTransport(const SpotTransport &) = delete;
