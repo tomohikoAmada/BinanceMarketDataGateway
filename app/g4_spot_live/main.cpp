@@ -182,10 +182,28 @@ int main() {
     std::this_thread::sleep_for(std::chrono::milliseconds{50});
   }
 
+  // Join the only transport producer before the final runtime barrier. After
+  // this cut no transport callback can submit an update or fault.
+  transport.stop();
+  const auto final_transport = transport.observe();
+  runtime_observation = runtime.observe();
+  if (!g4::detail::live_acceptance_ready(final_transport,
+                                         runtime_observation)) {
+    if (final_transport.terminal_error.has_value()) {
+      print_network_error(*final_transport.terminal_error);
+    }
+    std::cerr << "REAL_BOOTSTRAP=FAIL final_transport_or_runtime"
+              << " projection_status="
+              << projection_status(runtime_observation.projection_status)
+              << " runtime_state=" << runtime_state(runtime_observation.state)
+              << '\n';
+    runtime.stop();
+    return EXIT_FAILURE;
+  }
+
   const auto captured = runtime.capture_snapshot();
   if (!std::holds_alternative<g3::CapturedSnapshot>(captured)) {
     std::cerr << "REAL_OWNER_SNAPSHOT_CAPTURE=FAIL\n";
-    transport.stop();
     runtime.stop();
     return EXIT_FAILURE;
   }
@@ -194,13 +212,10 @@ int main() {
       snapshot.symbol() != "BTCUSDT" || snapshot.bids().empty() ||
       snapshot.asks().empty()) {
     std::cerr << "REAL_OWNER_SNAPSHOT_CAPTURE=FAIL invalid_snapshot\n";
-    transport.stop();
     runtime.stop();
     return EXIT_FAILURE;
   }
 
-  runtime_observation = runtime.observe();
-  const auto final_transport = transport.observe();
   std::cout << "TLS_VERIFY="
             << (exchange_response.tls_verified && final_transport.tls_verified
                     ? "PASS"
@@ -227,9 +242,9 @@ int main() {
             << "OWNER_SNAPSHOT_LAST_UPDATE_ID=" << snapshot.last_update_id()
             << '\n'
             << "SERVER_PING_OBSERVED="
-            << (final_transport.server_ping_observed ? "YES" : "NO") << '\n';
+            << (final_transport.server_ping_observed ? "YES" : "NO") << '\n'
+            << "FINAL_TRANSPORT_TERMINAL_ERROR=NO\n";
 
-  transport.stop();
   runtime.stop();
   return EXIT_SUCCESS;
 }

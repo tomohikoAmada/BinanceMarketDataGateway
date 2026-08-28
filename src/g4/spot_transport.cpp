@@ -96,109 +96,179 @@ void configure_ssl_context(ssl::context &context) {
 #endif
 }
 
-[[nodiscard]] std::variant<tcp::resolver::results_type, NetworkError>
-resolve_with_timeout(asio::io_context &context, std::string_view host,
-                     std::string_view port) {
-  tcp::resolver resolver{context};
-  asio::steady_timer timer{context};
-  std::optional<tcp::resolver::results_type> resolved;
-  std::optional<NetworkError> failure;
-  bool timed_out = false;
+class AsyncExchangeInfoGet final
+    : public std::enable_shared_from_this<AsyncExchangeInfoGet> {
+public:
+  using Completion = std::function<void(ExchangeInfoResult)>;
 
-  resolver.async_resolve(
-      std::string{host}, std::string{port},
-      [&](const ErrorCode &error_code, tcp::resolver::results_type results) {
-        timer.cancel();
-        if (error_code) {
-          if (!timed_out) {
-            failure = error_from_code(NetworkErrorCode::Dns, "dns", error_code);
-          }
-          return;
-        }
-        resolved = std::move(results);
-      });
-  timer.expires_after(kStageTimeout);
-  timer.async_wait([&](const ErrorCode &error_code) {
-    if (!error_code && !resolved.has_value() && !failure.has_value()) {
-      timed_out = true;
-      resolver.cancel();
-      failure = network_error(NetworkErrorCode::Timeout, "dns",
-                              "DNS resolution timed out");
-    }
-  });
-  context.run();
-  context.restart();
-  if (failure.has_value()) {
-    return std::move(*failure);
+  AsyncExchangeInfoGet(asio::io_context &context, ssl::context &tls_context,
+                       detail::ExchangeInfoEndpoint endpoint,
+                       Completion completion)
+      : resolver_{context}, stream_{context, tls_context}, timer_{context},
+        endpoint_{std::move(endpoint)}, completion_{std::move(completion)} {
+    request_.method(http::verb::get);
+    request_.target(endpoint_.target);
+    request_.version(11);
+    request_.set(http::field::host, endpoint_.host);
+    request_.set(http::field::user_agent, "bmd-gateway-g4/1.0.0");
+    request_.set(http::field::accept, "application/json");
+    request_.set(http::field::connection, "close");
+    parser_.body_limit(16U * 1024U * 1024U);
   }
-  if (!resolved.has_value()) {
-    return network_error(NetworkErrorCode::Dns, "dns",
-                         "DNS resolution completed without results");
-  }
-  return std::move(*resolved);
-}
 
-[[nodiscard]] std::variant<http::response<http::string_body>, NetworkError>
-blocking_https_get(std::string_view target) {
-  try {
-    asio::io_context context;
-    ssl::context tls_context{ssl::context::tls_client};
-    configure_ssl_context(tls_context);
-    const auto resolved = resolve_with_timeout(context, kRestHost, kRestPort);
-    if (const auto *failure = std::get_if<NetworkError>(&resolved)) {
-      return *failure;
-    }
-
-    beast::ssl_stream<beast::tcp_stream> stream{context, tls_context};
-    stream.set_verify_callback(
-        ssl::host_name_verification(std::string{kRestHost}));
+  void start() {
+    stream_.set_verify_callback(ssl::host_name_verification(endpoint_.host));
     if (const auto failure =
-            configure_tls_stream(stream.native_handle(), kRestHost)) {
-      return *failure;
+            configure_tls_stream(stream_.native_handle(), endpoint_.host)) {
+      finish(*failure);
+      return;
     }
-
-    ErrorCode error_code;
-    beast::get_lowest_layer(stream).expires_after(kStageTimeout);
-    beast::get_lowest_layer(stream).connect(
-        std::get<tcp::resolver::results_type>(resolved), error_code);
-    if (error_code) {
-      return error_from_code(NetworkErrorCode::Tcp, "tcp-connect", error_code);
-    }
-
-    beast::get_lowest_layer(stream).expires_after(kStageTimeout);
-    stream.handshake(ssl::stream_base::client, error_code);
-    if (error_code) {
-      return error_from_code(NetworkErrorCode::Tls, "tls-handshake",
-                             error_code);
-    }
-
-    http::request<http::empty_body> request{http::verb::get,
-                                            std::string{target}, 11};
-    request.set(http::field::host, kRestHost);
-    request.set(http::field::user_agent, "bmd-gateway-g4/1.0.0");
-    request.set(http::field::accept, "application/json");
-    request.set(http::field::connection, "close");
-    beast::get_lowest_layer(stream).expires_after(kStageTimeout);
-    http::write(stream, request, error_code);
-    if (error_code) {
-      return error_from_code(NetworkErrorCode::HttpWrite, "http-write",
-                             error_code);
-    }
-
-    beast::flat_buffer buffer;
-    http::response_parser<http::string_body> parser;
-    parser.body_limit(16U * 1024U * 1024U);
-    beast::get_lowest_layer(stream).expires_after(kStageTimeout);
-    http::read(stream, buffer, parser, error_code);
-    if (error_code) {
-      return error_from_code(NetworkErrorCode::HttpRead, "http-read",
-                             error_code);
-    }
-    return parser.release();
-  } catch (const std::exception &failure) {
-    return network_error(NetworkErrorCode::Internal, "https", failure.what());
+    arm_timeout("exchange-info-dns");
+    resolver_.async_resolve(
+        endpoint_.host, endpoint_.port,
+        [self = shared_from_this()](const ErrorCode &error_code,
+                                    tcp::resolver::results_type results) {
+          if (self->done_) {
+            return;
+          }
+          self->disarm_timeout();
+          if (error_code) {
+            self->finish(error_from_code(NetworkErrorCode::Dns,
+                                         "exchange-info-dns", error_code));
+            return;
+          }
+          self->connect(std::move(results));
+        });
   }
-}
+
+private:
+  void connect(tcp::resolver::results_type results) {
+    arm_timeout("exchange-info-tcp-connect");
+    beast::get_lowest_layer(stream_).async_connect(
+        results, [self = shared_from_this()](const ErrorCode &error_code,
+                                             const tcp::endpoint &) {
+          if (self->done_) {
+            return;
+          }
+          self->disarm_timeout();
+          if (error_code) {
+            self->finish(error_from_code(NetworkErrorCode::Tcp,
+                                         "exchange-info-tcp-connect",
+                                         error_code));
+            return;
+          }
+          self->handshake();
+        });
+  }
+
+  void handshake() {
+    arm_timeout("exchange-info-tls-handshake");
+    stream_.async_handshake(
+        ssl::stream_base::client,
+        [self = shared_from_this()](const ErrorCode &error_code) {
+          if (self->done_) {
+            return;
+          }
+          self->disarm_timeout();
+          if (error_code) {
+            self->finish(error_from_code(NetworkErrorCode::Tls,
+                                         "exchange-info-tls-handshake",
+                                         error_code));
+            return;
+          }
+          self->write_request();
+        });
+  }
+
+  void write_request() {
+    arm_timeout("exchange-info-http-write");
+    http::async_write(
+        stream_, request_,
+        [self = shared_from_this()](const ErrorCode &error_code, std::size_t) {
+          if (self->done_) {
+            return;
+          }
+          self->disarm_timeout();
+          if (error_code) {
+            self->finish(error_from_code(NetworkErrorCode::HttpWrite,
+                                         "exchange-info-http-write",
+                                         error_code));
+            return;
+          }
+          self->read_response();
+        });
+  }
+
+  void read_response() {
+    arm_timeout("exchange-info-http-read");
+    http::async_read(
+        stream_, buffer_, parser_,
+        [self = shared_from_this()](const ErrorCode &error_code, std::size_t) {
+          if (self->done_) {
+            return;
+          }
+          self->disarm_timeout();
+          if (error_code) {
+            self->finish(error_from_code(NetworkErrorCode::HttpRead,
+                                         "exchange-info-http-read",
+                                         error_code));
+            return;
+          }
+          auto response = self->parser_.release();
+          if (response.result_int() != 200) {
+            self->finish(network_error(
+                NetworkErrorCode::HttpStatus, "exchange-info-http-status",
+                "Binance exchangeInfo returned non-200", response.result_int(),
+                retry_after_from(response)));
+            return;
+          }
+          self->finish(ExchangeInfoResponse{std::move(response.body()), true});
+        });
+  }
+
+  void arm_timeout(std::string stage) {
+    ++timeout_generation_;
+    const auto generation = timeout_generation_;
+    timer_.expires_after(endpoint_.stage_timeout);
+    timer_.async_wait([self = shared_from_this(), generation,
+                       stage = std::move(stage)](const ErrorCode &error_code) {
+      if (!error_code && !self->done_ &&
+          generation == self->timeout_generation_) {
+        self->finish(network_error(NetworkErrorCode::Timeout, stage,
+                                   "network stage timed out"));
+      }
+    });
+  }
+
+  void disarm_timeout() noexcept {
+    ++timeout_generation_;
+    timer_.cancel();
+  }
+
+  void finish(ExchangeInfoResult result) {
+    if (done_) {
+      return;
+    }
+    done_ = true;
+    disarm_timeout();
+    resolver_.cancel();
+    ErrorCode ignored;
+    beast::get_lowest_layer(stream_).socket().cancel(ignored);
+    beast::get_lowest_layer(stream_).socket().close(ignored);
+    completion_(std::move(result));
+  }
+
+  tcp::resolver resolver_;
+  beast::ssl_stream<beast::tcp_stream> stream_;
+  asio::steady_timer timer_;
+  beast::flat_buffer buffer_;
+  http::request<http::empty_body> request_;
+  http::response_parser<http::string_body> parser_;
+  detail::ExchangeInfoEndpoint endpoint_;
+  Completion completion_;
+  std::uint64_t timeout_generation_{0U};
+  bool done_{false};
+};
 
 class AsyncHttpsGet final : public std::enable_shared_from_this<AsyncHttpsGet> {
 public:
@@ -458,8 +528,8 @@ private:
   void websocket_handshake() {
     websocket::stream_base::timeout timeouts;
     timeouts.handshake_timeout = kStageTimeout;
-    timeouts.idle_timeout = websocket::stream_base::none();
-    timeouts.keep_alive_pings = false;
+    timeouts.idle_timeout = detail::kWebSocketIdleTimeout;
+    timeouts.keep_alive_pings = detail::kWebSocketKeepAlivePings;
     stream_.set_option(timeouts);
     stream_.set_option(
         websocket::stream_base::decorator([](websocket::request_type &request) {
@@ -496,8 +566,13 @@ private:
     stream_.async_read(buffer_, [self = shared_from_this()](
                                     const ErrorCode &error_code, std::size_t) {
       if (error_code) {
-        self->fail(error_from_code(NetworkErrorCode::WebSocketRead,
-                                   "websocket-read", error_code));
+        if (error_code == beast::error::timeout) {
+          self->fail(error_from_code(NetworkErrorCode::Timeout,
+                                     "websocket-idle", error_code));
+        } else {
+          self->fail(error_from_code(NetworkErrorCode::WebSocketRead,
+                                     "websocket-read", error_code));
+        }
         return;
       }
       g3::ClockSample received_at{};
@@ -593,20 +668,59 @@ g3::ClockSample sample_real_clock() noexcept {
   return {safe(utc), safe(monotonic)};
 }
 
+ExchangeInfoResult
+detail::fetch_exchange_info_https(const ExchangeInfoEndpoint &endpoint) {
+  if (endpoint.host.empty() || endpoint.port.empty() ||
+      endpoint.target.empty() ||
+      endpoint.stage_timeout <= std::chrono::steady_clock::duration::zero()) {
+    return network_error(NetworkErrorCode::Internal, "exchange-info-config",
+                         "exchangeInfo endpoint and timeout must be finite");
+  }
+  try {
+    asio::io_context context;
+    ssl::context tls_context{ssl::context::tls_client};
+    configure_ssl_context(tls_context);
+    std::optional<ExchangeInfoResult> result;
+    const auto operation = std::make_shared<AsyncExchangeInfoGet>(
+        context, tls_context, endpoint,
+        [&result](ExchangeInfoResult completed) {
+          if (!result.has_value()) {
+            result.emplace(std::move(completed));
+          }
+        });
+    operation->start();
+    context.run();
+    if (!result.has_value()) {
+      return network_error(NetworkErrorCode::Internal, "exchange-info-https",
+                           "exchangeInfo operation completed without a result");
+    }
+    return std::move(*result);
+  } catch (const std::exception &failure) {
+    return network_error(NetworkErrorCode::Internal, "exchange-info-https",
+                         failure.what());
+  } catch (...) {
+    return network_error(NetworkErrorCode::Internal, "exchange-info-https",
+                         "exchangeInfo operation failed");
+  }
+}
+
 ExchangeInfoResult fetch_exchange_info_https() {
-  auto response = blocking_https_get(kExchangeInfoTarget);
-  if (const auto *failure = std::get_if<NetworkError>(&response)) {
-    return *failure;
-  }
-  auto successful =
-      std::get<http::response<http::string_body>>(std::move(response));
-  if (successful.result_int() != 200) {
-    return network_error(NetworkErrorCode::HttpStatus,
-                         "exchange-info-http-status",
-                         "Binance exchangeInfo returned non-200",
-                         successful.result_int(), retry_after_from(successful));
-  }
-  return ExchangeInfoResponse{std::move(successful.body()), true};
+  return detail::fetch_exchange_info_https(
+      {std::string{kRestHost}, std::string{kRestPort},
+       std::string{kExchangeInfoTarget}, kStageTimeout});
+}
+
+bool detail::live_acceptance_ready(
+    const TransportObservation &transport,
+    const g3::RuntimeObservation &runtime) noexcept {
+  return transport.stopped && !transport.running &&
+         !transport.terminal_error.has_value() && transport.tls_verified &&
+         transport.websocket_handshake && transport.rest_depth_fetched &&
+         transport.depth_frame_count > 0U &&
+         runtime.state == g3::RuntimeState::Live &&
+         runtime.projection_status == core::ProjectionStatus::Synchronized &&
+         runtime.last_update_id.has_value() &&
+         !runtime.fault_reason.has_value();
 }
 
 class SpotTransport::Impl final {

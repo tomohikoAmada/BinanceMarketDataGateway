@@ -2,6 +2,7 @@
 
 #include "market_runtime.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -66,6 +67,29 @@ struct TransportObservation final {
   std::uint64_t connection_generation{1U};
   std::optional<NetworkError> terminal_error;
 };
+
+// Internal G4 policy and deterministic test seams. This header is exposed only
+// by the opt-in G4 build target; it is not an installed API.
+namespace detail {
+
+inline constexpr auto kWebSocketIdleTimeout = std::chrono::seconds{90};
+inline constexpr bool kWebSocketKeepAlivePings = false;
+
+struct ExchangeInfoEndpoint final {
+  std::string host;
+  std::string port;
+  std::string target;
+  std::chrono::steady_clock::duration stage_timeout;
+};
+
+[[nodiscard]] ExchangeInfoResult
+fetch_exchange_info_https(const ExchangeInfoEndpoint &endpoint);
+
+[[nodiscard]] bool
+live_acceptance_ready(const TransportObservation &transport,
+                      const g3::RuntimeObservation &runtime) noexcept;
+
+} // namespace detail
 
 // One concrete Binance Spot BTCUSDT transport. start(), stop(), and destruction
 // are coordinated by the same external lifecycle owner as MarketRuntime.
