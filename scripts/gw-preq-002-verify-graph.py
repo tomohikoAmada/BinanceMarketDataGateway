@@ -45,13 +45,12 @@ def main() -> int:
         fail(f"expected exactly one Contracts message node, found {len(message_nodes)}")
 
     projection_nodes = [node for node in node_list if node.get("name") == PROJECTION]
-    projection_matches = [
-        node for node in projection_nodes if node.get("rrev") == PROJECTION_RREV
-    ]
-    if len(projection_matches) != 1:
+    if len(projection_nodes) != 1:
+        fail(f"expected exactly one Projection node, found {len(projection_nodes)}")
+    if projection_nodes[0].get("rrev") != PROJECTION_RREV:
         fail(
             f"expected one Projection node at RREV {PROJECTION_RREV}, "
-            f"found {len(projection_matches)}"
+            f"found {projection_nodes[0].get('rrev')!r}"
         )
 
     print("NORMAL_GRAPH_CONTRACTS_MESSAGE=YES")
