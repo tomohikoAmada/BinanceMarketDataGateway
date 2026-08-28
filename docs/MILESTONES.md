@@ -1,14 +1,15 @@
 # Gateway milestones
 
-This is the authoritative development plan for the Gateway. It is aligned to
-Gateway `main` at `05f11fe506e92fe409082af1f5aa98a07001827d`; the related
-upstream authority checked for this checkpoint is Contracts
+This is the authoritative development plan for the Gateway. The G3
+implementation baseline is Gateway `main` at
+`d99ab4512c251316cc71d4ba1a5ec390e4224d48`; the related upstream authority
+checked for this checkpoint is Contracts
 `518880bdfa60948c3b65b6b3525d024526995166` and Projection
 `01a66aa80c764d2600da2cc309c0fd69655b55c`.
 
-The current implementation is G0, G1, GW-PREQ-002, and G2 complete. The deterministic
-synthetic host is implemented, while `REAL_GATEWAY_NETWORK_RUNTIME_IMPLEMENTED=NO` and
-`CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=NO` remain true for the production transport runtime.
+The current implementation is G0, G1, GW-PREQ-002, G2, and G3 complete. The
+deterministic synthetic host and serialized `MarketRuntime` are implemented,
+while `REAL_GATEWAY_NETWORK_RUNTIME_IMPLEMENTED=NO` remains true.
 Historical G2/G3 attempts, including the deleted `feat/g2-deterministic-synthetic-host`
 branch and its recovery bundle, are not implementation authority. Historical PR #5 is
 retained only as a closed, not-merged, abandoned implementation attempt.
@@ -64,16 +65,21 @@ runtime framework.
 - `G0=COMPLETE`.
 - `G1=COMPLETE`.
 - `G2=COMPLETE`.
+- `G3=COMPLETE`.
 - `G2_SYNTHETIC_HOST_IMPLEMENTED=YES`.
-- `CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=NO`.
+- `G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES`.
+- `CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES`.
 - `REAL_GATEWAY_NETWORK_RUNTIME_IMPLEMENTED=NO`.
 
 Gateway `main` currently has typed configuration, synchronous Foundation
 lifecycle, a daemon CLI that immediately starts and stops Foundation, Foundation
 tests, build/CI/sanitizers, the explicit G1 dependency proof, and the deterministic
-in-memory G2 synthetic Spot BTCUSDT host. There is no current production WebSocket,
-REST transport, `MarketRuntime`, owner thread, runtime ingress queue, bootstrap buffer,
-reconnect runtime, gRPC server, or subscription runtime.
+in-memory G2 synthetic Spot BTCUSDT host. G3 adds one fixed Spot BTCUSDT
+`MarketRuntime` with one private `BookProjection`, one owner thread, bounded
+ingress and bootstrap buffers, injected clock/input/faults, copied owner-domain
+observation and snapshot capture, and deterministic joined shutdown. There is no
+production WebSocket or REST transport, reconnect/recovery runtime, gRPC server,
+publication queue, or subscription runtime.
 
 ## G0 — Repository Foundation
 
@@ -124,7 +130,7 @@ The normal graph is verified by
 `scripts/gw-preq-002-verify-graph.py`; its invariant is one Contracts message
 lineage plus Projection, with no Contracts gRPC package and no `grpc` package.
 
-`NEXT=G3`.
+`NEXT=G4`.
 
 ## G2 — Deterministic Synthetic Host
 
@@ -153,7 +159,7 @@ snapshot, and reset/rebootstrap. Do not add a second sequence classifier.
 
 ## G3 — Serialized MarketRuntime and Bounded Runtime
 
-**STATUS=NOT_STARTED**
+**STATUS=COMPLETE**
 
 For one `(venue, market, symbol)`, own one `MarketRuntime`, one `BookProjection`,
 and one serialized mutation owner. Add bounded ingress, bounded bootstrap buffer,
@@ -170,6 +176,19 @@ V1, prefer simple serialization over parallel parsing plus a reorder buffer.
 Prefer standard synchronization and simple bounded structures. Do not require
 lock-free queues, custom allocators, busy-spin, CPU affinity, or generic
 executors before measurement.
+
+G3 is implemented as an opt-in internal target for exactly Binance Spot
+BTCUSDT. Producer admission is nonblocking and preserves complete-frame FIFO
+order. Ingress and the distinct owner-local bootstrap buffer are independently
+bounded with configurable nonzero capacities and defaults of 64. Overflow,
+adapter errors, transport failure, snapshot failure, and Projection gap state
+fail closed without recovery. Synchronous observation and snapshot requests are
+serialized behind earlier admitted work and return owning copies; the owned
+Projection has no escape hatch. Graceful stop drains finite admitted work in
+FIFO order unless a terminal fault forbids further mutation, signals shutdown
+outside the bounded data queue, and joins the owner.
+
+`NEXT=G4`.
 
 ## G4 — Real Spot Transport and Bootstrap
 
