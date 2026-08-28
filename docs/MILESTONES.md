@@ -7,9 +7,9 @@ checked for this checkpoint is Contracts
 `518880bdfa60948c3b65b6b3525d024526995166` and Projection
 `01a66aa80c764d2600da2cc309c0fd69655b55c`.
 
-The current implementation is G0, G1, GW-PREQ-002, G2, and G3 complete. The
-deterministic synthetic host and serialized `MarketRuntime` are implemented,
-while `REAL_GATEWAY_NETWORK_RUNTIME_IMPLEMENTED=NO` remains true.
+The current implementation is G0, G1, GW-PREQ-002, G2, G3, and G4 complete. The
+deterministic synthetic host, serialized `MarketRuntime`, and first real Binance
+Spot BTCUSDT network/bootstrap runtime are implemented.
 Historical G2/G3 attempts, including the deleted `feat/g2-deterministic-synthetic-host`
 branch and its recovery bundle, are not implementation authority. Historical PR #5 is
 retained only as a closed, not-merged, abandoned implementation attempt.
@@ -66,10 +66,13 @@ runtime framework.
 - `G1=COMPLETE`.
 - `G2=COMPLETE`.
 - `G3=COMPLETE`.
+- `G4=COMPLETE`.
 - `G2_SYNTHETIC_HOST_IMPLEMENTED=YES`.
 - `G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES`.
 - `CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES`.
-- `REAL_GATEWAY_NETWORK_RUNTIME_IMPLEMENTED=NO`.
+- `REAL_GATEWAY_NETWORK_RUNTIME_IMPLEMENTED=YES`.
+- `GATEWAY_NETWORK=SPOT_BTCUSDT_IMPLEMENTED`.
+- `NEXT=G5`.
 
 Gateway `main` currently has typed configuration, synchronous Foundation
 lifecycle, a daemon CLI that immediately starts and stops Foundation, Foundation
@@ -77,9 +80,12 @@ tests, build/CI/sanitizers, the explicit G1 dependency proof, and the determinis
 in-memory G2 synthetic Spot BTCUSDT host. G3 adds one fixed Spot BTCUSDT
 `MarketRuntime` with one private `BookProjection`, one owner thread, bounded
 ingress and bootstrap buffers, injected clock/input/faults, copied owner-domain
-observation and snapshot capture, and deterministic joined shutdown. There is no
-production WebSocket or REST transport, reconnect/recovery runtime, gRPC server,
-publication queue, or subscription runtime.
+observation and snapshot capture, and deterministic joined shutdown. G4 adds
+verified TLS Binance exchangeInfo/depth REST, raw Spot diff-depth WebSocket,
+strict transport JSON decoding, real receive timestamps, connection generation
+1 identity, authoritative NumericSpec derivation, and bounded real bootstrap
+through that runtime. Reconnect/recovery, planned rotation, gRPC, publication,
+and subscriptions are not implemented.
 
 ## G0 — Repository Foundation
 
@@ -130,7 +136,7 @@ The normal graph is verified by
 `scripts/gw-preq-002-verify-graph.py`; its invariant is one Contracts message
 lineage plus Projection, with no Contracts gRPC package and no `grpc` package.
 
-`NEXT=G4`.
+`NEXT=G5`.
 
 ## G2 — Deterministic Synthetic Host
 
@@ -188,22 +194,22 @@ Projection has no escape hatch. Graceful stop drains finite admitted work in
 FIFO order unless a terminal fault forbids further mutation, signals shutdown
 outside the bounded data queue, and joins the owner.
 
-`NEXT=G4`.
+`NEXT=G5`.
 
 ## G4 — Real Spot Transport and Bootstrap
 
-**STATUS=NOT_STARTED**
+**STATUS=COMPLETE**
 
 `FIRST_REAL_NETWORK=G4`.
 
-Implement Binance Spot BTCUSDT diff-depth WebSocket and REST depth snapshot,
+G4 implements Binance Spot BTCUSDT diff-depth WebSocket and REST depth snapshot,
 receive timestamps, `connection_id`, and `connection_generation` starting at 1
-for the first real applicable source. Add bounded pre-snapshot handoff, real
+for the first real applicable source. It uses bounded pre-snapshot handoff, real
 bootstrap into Projection, and the synchronized LIVE state.
 
-### NumericSpec authority — required
+### NumericSpec authority
 
-Before constructing `BookProjection`:
+Before constructing `BookProjection`, G4:
 
 - acquire authoritative Binance Spot symbol metadata;
 - validate configured BTCUSDT market membership;
@@ -211,16 +217,23 @@ Before constructing `BookProjection`:
   metadata under Projection's accepted fixed-point semantics;
 - validate transport-name mapping at the Host boundary.
 
-Never infer `price_scale` or `quantity_scale` from observed snapshot/update
-decimal strings. Do not freeze speculative Binance filter-to-`NumericSpec` field
-mapping in this document. At G4 implementation start, refresh the relevant
-current official Binance Spot symbol/filter documentation and freeze the exact
-mapping then.
+The official Binance Spot documentation was refreshed at implementation on
+2026-08-28. The frozen G4 mapping is `PRICE_FILTER.tickSize` to price storage
+scale and `LOT_SIZE.stepSize` to quantity storage scale after strict positive
+plain-decimal quantum normalization. Observed values, precision fields, and
+`MARKET_LOT_SIZE` do not determine Projection NumericSpec.
 
-Implement the current Binance WebSocket liveness behavior applicable at
-implementation time, including ping/pong/close behavior. Before implementation,
-refresh only the official Binance pages materially relevant to G4. G4 has no
-gRPC.
+The implementation uses Boost.Asio/Beast, OpenSSL peer and hostname
+verification with SNI, and nlohmann_json. One networking I/O thread maintains
+the WebSocket read while the REST snapshot is in flight; complete frames are
+timestamped before serialized parsing and nonblocking admission. Beast processes
+server ping frames and returns the required payload pong. `serverShutdown`,
+close, TLS/socket errors, malformed payload, REST failure, and bounded handoff
+failure are terminal. G4 has no retry, reconnect, rotation, or gRPC.
+
+The opt-in `bmd-gateway-g4-spot-live` acceptance reached synchronized LIVE,
+applied a later real update, captured an owner-domain local-book snapshot, and
+stopped cleanly in the required local run.
 
 ## G5 — Reconnect / Resync / Recovery
 

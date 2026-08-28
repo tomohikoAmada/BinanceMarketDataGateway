@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <condition_variable>
-#include <cstdlib>
 #include <deque>
 #include <exception>
 #include <mutex>
@@ -14,15 +13,6 @@
 namespace binance_market_data::gateway::g3 {
 
 namespace {
-
-[[nodiscard]] core::NumericSpec make_numeric_spec() {
-  const auto price_scale = core::DecimalScale::create(2U);
-  const auto quantity_scale = core::DecimalScale::create(3U);
-  if (!price_scale.has_value() || !quantity_scale.has_value()) {
-    std::abort();
-  }
-  return {*price_scale, *quantity_scale};
-}
 
 [[nodiscard]] adapter::ExpectedIdentity make_expected_identity() {
   return {"BTCUSDT", core::SequencePolicyKind::Spot};
@@ -61,11 +51,11 @@ state_for_projection(core::ProjectionStatus status) noexcept {
 
 class MarketRuntime::Impl final {
 public:
-  Impl(RuntimeLimits limits, RuntimeClock clock,
+  Impl(RuntimeLimits limits, RuntimeClock clock, core::NumericSpec numeric_spec,
        RuntimeTestOptions test_options)
       : limits_{limits}, clock_{std::move(clock)},
         expected_identity_{make_expected_identity()},
-        projection_{make_numeric_spec(), core::SequencePolicyKind::Spot},
+        projection_{numeric_spec, core::SequencePolicyKind::Spot},
         owner_paused_{test_options.owner_starts_paused} {
     if (limits_.ingress_capacity == 0U || limits_.bootstrap_capacity == 0U) {
       throw std::invalid_argument{"G3 runtime capacities must be nonzero"};
@@ -487,14 +477,20 @@ private:
   void perform_snapshot_request() noexcept {
     SnapshotResult result{SnapshotRequestError::NotLive};
     ClockSample sample{};
-    try {
-      bool live = false;
-      {
-        std::lock_guard lock{mutex_};
-        live = observation_.state == RuntimeState::Live;
-      }
-      if (live) {
+    bool live = false;
+    {
+      std::lock_guard lock{mutex_};
+      live = observation_.state == RuntimeState::Live;
+    }
+    if (live) {
+      try {
         sample = clock_();
+      } catch (...) {
+        complete_snapshot_request(SnapshotRequestError::ClockError);
+        return;
+      }
+
+      try {
         adapter::SnapshotContext context{expected_identity_,
                                          "gateway-g3-runtime",
                                          "1.0.0",
@@ -511,11 +507,15 @@ private:
               std::get<core::LocalOrderBookSnapshot>(std::move(snapshot)),
               sample, std::this_thread::get_id()};
         }
+      } catch (...) {
+        result = SnapshotRequestError::InternalError;
       }
-    } catch (...) {
-      result = SnapshotRequestError::ClockError;
     }
 
+    complete_snapshot_request(std::move(result));
+  }
+
+  void complete_snapshot_request(SnapshotResult result) noexcept {
     {
       std::lock_guard lock{mutex_};
       if (snapshot_request_.has_value()) {
@@ -549,8 +549,10 @@ private:
 };
 
 MarketRuntime::MarketRuntime(RuntimeLimits limits, RuntimeClock clock,
+                             core::NumericSpec numeric_spec,
                              RuntimeTestOptions test_options)
-    : impl_{std::make_unique<Impl>(limits, std::move(clock), test_options)} {}
+    : impl_{std::make_unique<Impl>(limits, std::move(clock), numeric_spec,
+                                   test_options)} {}
 
 MarketRuntime::~MarketRuntime() = default;
 

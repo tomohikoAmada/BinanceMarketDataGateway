@@ -7,13 +7,15 @@ Read in this order before making Gateway changes:
 3. [ARCHITECTURE.md](ARCHITECTURE.md)
 4. milestone-specific evidence as needed
 
-G0, G1, GW-PREQ-002, G2, and G3 are complete. The deterministic G2 synthetic
-host and serialized G3 `MarketRuntime` are implemented, while real Gateway
-network transport is not. Keep Phase A small and independently buildable.
+G0, G1, GW-PREQ-002, G2, G3, and G4 are complete. The deterministic G2
+synthetic host, serialized G3 `MarketRuntime`, and real G4 Binance Spot BTCUSDT
+transport/bootstrap are implemented. Keep Phase A small and independently
+buildable.
 
 This repository contains the G0 foundation, frozen G1 proof, deterministic G2
-synthetic host, and serialized G3 runtime; future runtime work follows the
-milestone authority. Keep Phase A small and independently buildable.
+synthetic host, serialized G3 runtime, and real G4 Spot transport; future runtime
+work follows the milestone authority. Keep Phase A small and independently
+buildable.
 
 ## Boundaries
 
@@ -27,6 +29,10 @@ milestone authority. Keep Phase A small and independently buildable.
   an injected clock. It still has no network clients, gRPC business flow,
   Gateway-owned Projection business logic, order-book implementation, sequence
   classifier, storage, event bus, DI, plugins, or generic runtime framework.
+- G4 is exactly Binance Spot BTCUSDT, has one networking I/O thread and one
+  connection generation, and drives Projection only through G3's bounded owner
+  boundary. It has no reconnect, automatic recovery, planned rotation, gRPC,
+  publication, or subscriptions.
 - Do not copy Contracts `.proto` files or introduce floating FetchContent dependencies.
 
 ## Phase A implementation rules

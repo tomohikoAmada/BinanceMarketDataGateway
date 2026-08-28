@@ -2,12 +2,12 @@
 
 The detailed, ordered development authority is
 [docs/MILESTONES.md](docs/MILESTONES.md). This document records only the
-responsibility split and the current foundation/G3 boundary.
+responsibility split and the current foundation/G4 boundary.
 
 ## Dependency direction
 
 ```text
-Binance public APIs (future Gateway runtime)
+Binance public APIs
         |
         v
 BinanceMarketDataGateway
@@ -63,10 +63,21 @@ G3 accepts only already-parsed synthetic Contracts messages and explicit
 transport/snapshot fault events. It has no sockets, HTTP, WebSocket, JSON,
 reconnect, retry, publication, subscription, or gRPC behavior.
 
+The opt-in G4 targets add exactly one real Binance Spot BTCUSDT transport. Before
+runtime construction, verified HTTPS exchangeInfo validates `TRADING` Spot
+membership and derives Projection NumericSpec from `PRICE_FILTER.tickSize` and
+`LOT_SIZE.stepSize`. A separate networking I/O thread owns verified TLS DNS/TCP,
+the raw `btcusdt@depth@100ms` WebSocket, and asynchronous HTTPS depth snapshot.
+It timestamps each complete frame before strict JSON parsing, preserves receive
+order, and submits only complete Contracts messages through G3's existing
+bounded ingress. Projection remains private to the G3 owner. G4 assigns one
+stable connection ID and generation 1, handles server ping/pong and
+`serverShutdown`, fails closed without retry/reconnect, and stops/join cleanly.
+
 ## MarketRuntime Projection boundary
 
-The G3 `MarketRuntime` uses, and future Gateway runtime work must continue to
-use, the existing Projection APIs directly:
+The G3 `MarketRuntime` and G4 transport use, and future Gateway runtime work must
+continue to use, the existing Projection APIs directly:
 construct one `BookProjection` per `venue + market + symbol`, adapt Contracts
 messages with `ProtoAdapter`, feed updates in source receive order, and follow
 Projection's returned classification. It must not add a
@@ -76,6 +87,6 @@ generic runtime framework.
 
 The foundation and frozen G1 link proof remain runtime-free. The completed G2
 synthetic host remains the deterministic direct-Projection proof. G3 establishes
-serialized concurrency and bounded runtime ownership without real transport.
-Real network, recovery, publication, and gRPC behavior remain G4, G5, and G7
-work respectively.
+serialized concurrency and bounded runtime ownership independently of transport.
+G4 is the first real network/bootstrap implementation. Recovery, planned
+rotation, publication, and gRPC remain G5, G6, and G7 work respectively.
