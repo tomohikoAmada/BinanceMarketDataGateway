@@ -7,12 +7,13 @@ Read in this order before making Gateway changes:
 3. [ARCHITECTURE.md](ARCHITECTURE.md)
 4. milestone-specific evidence as needed
 
-G0 and G1 are complete; the current Gateway runtime is not implemented. Keep
-Phase A small and independently buildable.
+G0, G1, GW-PREQ-002, and G2 are complete; the deterministic G2 synthetic host is
+implemented, while the production Gateway runtime is not. Keep Phase A small and
+independently buildable.
 
-This repository contains the G0 foundation and frozen G1 proof; future runtime
-work follows the milestone authority. Keep Phase A small and independently
-buildable.
+This repository contains the G0 foundation, frozen G1 proof, and deterministic G2
+synthetic host; future runtime work follows the milestone authority. Keep Phase A
+small and independently buildable.
 
 ## Boundaries
 

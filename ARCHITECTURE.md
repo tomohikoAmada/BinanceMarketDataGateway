@@ -2,7 +2,7 @@
 
 The detailed, ordered development authority is
 [docs/MILESTONES.md](docs/MILESTONES.md). This document records only the
-responsibility split and the current foundation boundary.
+responsibility split and the current foundation/G2 boundary.
 
 ## Dependency direction
 
@@ -44,7 +44,9 @@ isolation, and the Gateway gRPC runtime.
 
 `bmd-gatewayd` is an offline lifecycle demonstration. It parses the five flags, validates them,
 starts the foundation, reports `running`, stops it, reports `stopped`, and exits. The endpoint is
-not bound and no transport is attempted.
+not bound and no transport is attempted. The separate `bmd-gateway-g2-synthetic`
+executable drives one deterministic in-memory Spot BTCUSDT scenario through the
+direct Projection APIs; it is not a production transport runtime.
 
 ## Future Host boundary
 
@@ -56,4 +58,7 @@ Projection's returned classification. It must not add a
 Projection lifecycle, generic event bus, DI framework, plugin framework, or
 generic runtime framework.
 
-The current foundation and G1 link proof implement none of that runtime behavior.
+The current foundation and frozen G1 link proof remain runtime-free. The completed G2
+synthetic host implements only the deterministic in-memory scenario described in the
+milestone authority; real network, concurrency, recovery, publication, and gRPC
+behavior remain future milestones.
