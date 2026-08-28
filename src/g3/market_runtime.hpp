@@ -101,6 +101,7 @@ enum class SnapshotRequestError : std::uint8_t {
   Stopping,
   Stopped,
   ClockError,
+  InternalError,
 };
 
 struct CapturedSnapshot final {
@@ -118,9 +119,14 @@ struct RuntimeTestOptions final {
 
 // Internal G3 runtime for exactly BINANCE + SPOT + BTCUSDT. This header is
 // exposed only by the opt-in G3 build target; it is not an installed API.
+// start(), stop(), and destruction must be coordinated by one external
+// lifecycle owner. Concurrent lifecycle operations are not supported.
+// RuntimeClock runs on the serialized owner thread and must not call or
+// re-enter MarketRuntime; in particular, it must never call stop().
 class MarketRuntime final {
 public:
   explicit MarketRuntime(RuntimeLimits limits, RuntimeClock clock,
+                         core::NumericSpec numeric_spec,
                          RuntimeTestOptions test_options = {});
   ~MarketRuntime();
 

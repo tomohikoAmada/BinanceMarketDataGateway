@@ -13,6 +13,8 @@ option(BMD_GATEWAY_BUILD_G2_SYNTHETIC_HOST
        "Build the deterministic G2 synthetic Spot host and focused tests" OFF)
 option(BMD_GATEWAY_BUILD_G3_RUNTIME
        "Build the serialized G3 MarketRuntime and focused tests" OFF)
+option(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT
+       "Build the real G4 Binance Spot BTCUSDT transport and offline tests" OFF)
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
        "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
 option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
@@ -20,6 +22,10 @@ option(BMD_GATEWAY_WARNINGS_AS_ERRORS "Treat project warnings as errors" ON)
 option(BMD_GATEWAY_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(BMD_GATEWAY_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(BMD_GATEWAY_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
+
+if(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT)
+    set(BMD_GATEWAY_BUILD_G3_RUNTIME ON)
+endif()
 
 if(BMD_GATEWAY_ENABLE_ASAN AND BMD_GATEWAY_ENABLE_TSAN)
     message(FATAL_ERROR "AddressSanitizer and ThreadSanitizer cannot be enabled together")
@@ -228,6 +234,119 @@ if(BMD_GATEWAY_BUILD_G3_RUNTIME)
         bmd_gateway_apply_warnings(bmd_gateway_g3_runtime_tests)
         bmd_gateway_apply_sanitizers(bmd_gateway_g3_runtime_tests)
         add_test(NAME gateway_g3_market_runtime_tests COMMAND bmd_gateway_g3_runtime_tests)
+    endif()
+endif()
+
+if(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT)
+    find_package(Boost 1.91.0 EXACT CONFIG REQUIRED)
+    find_package(OpenSSL 3.6.3 EXACT CONFIG REQUIRED)
+    find_package(nlohmann_json 3.12.0 EXACT CONFIG REQUIRED)
+
+    add_library(bmd_gateway_g4_spot_protocol
+        src/g4/spot_protocol.cpp
+    )
+    set_target_properties(
+        bmd_gateway_g4_spot_protocol
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_g4_spot_protocol
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g4
+    )
+    target_link_libraries(
+        bmd_gateway_g4_spot_protocol
+        PUBLIC
+            bmd_gateway_g3_runtime
+            nlohmann_json::nlohmann_json
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g4_spot_protocol)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g4_spot_protocol)
+
+    add_library(bmd_gateway_g4_spot_transport
+        src/g4/spot_transport.cpp
+    )
+    set_target_properties(
+        bmd_gateway_g4_spot_transport
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_g4_spot_transport
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g4
+    )
+    target_link_libraries(
+        bmd_gateway_g4_spot_transport
+        PUBLIC
+            bmd_gateway_g4_spot_protocol
+            boost::boost
+            openssl::openssl
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g4_spot_transport)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g4_spot_transport)
+
+    add_executable(bmd-gateway-g4-spot-live app/g4_spot_live/main.cpp)
+    set_target_properties(
+        bmd-gateway-g4-spot-live
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_link_libraries(
+        bmd-gateway-g4-spot-live
+        PRIVATE
+            bmd_gateway_g4_spot_transport
+    )
+    bmd_gateway_apply_warnings(bmd-gateway-g4-spot-live)
+    bmd_gateway_apply_sanitizers(bmd-gateway-g4-spot-live)
+
+    if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_g4_spot_protocol_tests
+            tests/g4_spot_protocol_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_g4_spot_protocol_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g4_spot_protocol_tests
+            PRIVATE
+                bmd_gateway_g4_spot_protocol
+        )
+        bmd_gateway_apply_warnings(bmd_gateway_g4_spot_protocol_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_g4_spot_protocol_tests)
+        add_test(NAME gateway_g4_spot_protocol_tests
+                 COMMAND bmd_gateway_g4_spot_protocol_tests)
+
+        add_executable(bmd_gateway_g4_spot_transport_tests
+            tests/g4_spot_transport_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_g4_spot_transport_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g4_spot_transport_tests
+            PRIVATE
+                bmd_gateway_g4_spot_transport
+        )
+        bmd_gateway_apply_warnings(bmd_gateway_g4_spot_transport_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_g4_spot_transport_tests)
+        add_test(NAME gateway_g4_spot_transport_tests
+                 COMMAND bmd_gateway_g4_spot_transport_tests)
     endif()
 endif()
 

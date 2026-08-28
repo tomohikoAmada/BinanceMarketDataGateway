@@ -64,6 +64,17 @@ static_assert(!ExposesProjection<g3::MarketRuntime>);
   return [] { return g3::ClockSample{kSnapshotUtcNs, kSnapshotMonotonicNs}; };
 }
 
+[[nodiscard]] core::NumericSpec
+numeric_spec(std::uint32_t price_scale = 2U,
+             std::uint32_t quantity_scale = 3U) {
+  const auto price = core::DecimalScale::create(price_scale);
+  const auto quantity = core::DecimalScale::create(quantity_scale);
+  if (!price.has_value() || !quantity.has_value()) {
+    throw TestFailure{"invalid test NumericSpec"};
+  }
+  return {*price, *quantity};
+}
+
 [[nodiscard]] market_wire::ExchangeDepthSnapshot
 make_snapshot(std::uint64_t last_update_id = 100U) {
   market_wire::ExchangeDepthSnapshot snapshot;
@@ -149,7 +160,7 @@ require_captured(const g3::SnapshotResult &result) {
 }
 
 void normal_serialized_bootstrap() {
-  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock()};
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
   bootstrap_live(runtime);
   REQUIRE_EQ(runtime.submit_depth_update(make_post_live_update()),
              g3::AdmissionResult::Accepted);
@@ -177,7 +188,7 @@ void normal_serialized_bootstrap() {
 }
 
 void owner_only_projection_access() {
-  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock()};
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
   bootstrap_live(runtime);
   const auto caller_thread = std::this_thread::get_id();
   const auto observation = runtime.observe();
@@ -189,7 +200,7 @@ void owner_only_projection_access() {
 }
 
 void source_receive_order() {
-  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock()};
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
   REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
   REQUIRE_EQ(runtime.submit_depth_update(make_update(101U, 101U, "4.000")),
              g3::AdmissionResult::Accepted);
@@ -203,7 +214,7 @@ void source_receive_order() {
 }
 
 void ingress_bounded() {
-  g3::MarketRuntime runtime{{2U, 8U}, fixed_clock(), {true}};
+  g3::MarketRuntime runtime{{2U, 8U}, fixed_clock(), numeric_spec(), {true}};
   REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
   REQUIRE_EQ(runtime.submit_depth_update(make_update(101U, 101U, "4.000")),
              g3::AdmissionResult::Accepted);
@@ -225,7 +236,7 @@ void ingress_bounded() {
 }
 
 void bootstrap_buffer_bounded() {
-  g3::MarketRuntime runtime{{8U, 1U}, fixed_clock()};
+  g3::MarketRuntime runtime{{8U, 1U}, fixed_clock(), numeric_spec()};
   REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
   REQUIRE_EQ(runtime.submit_depth_update(make_update(101U, 101U, "4.000")),
              g3::AdmissionResult::Accepted);
@@ -241,7 +252,7 @@ void bootstrap_buffer_bounded() {
 }
 
 void no_bridge_then_later_bridge() {
-  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock()};
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
   REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
   REQUIRE_EQ(runtime.submit_depth_update(make_update(90U, 99U, "9.000")),
              g3::AdmissionResult::Accepted);
@@ -267,7 +278,7 @@ void no_bridge_then_later_bridge() {
 }
 
 void gap_to_needs_resync() {
-  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock()};
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
   bootstrap_live(runtime);
   REQUIRE_EQ(runtime.submit_depth_update(make_update(103U, 103U, "6.000")),
              g3::AdmissionResult::Accepted);
@@ -288,7 +299,7 @@ void gap_to_needs_resync() {
 }
 
 void adapter_failure() {
-  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock()};
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
   bootstrap_live(runtime);
   auto invalid = make_update(102U, 102U, "5.000");
   invalid.mutable_metadata()->set_symbol("ETHUSDT");
@@ -303,7 +314,7 @@ void adapter_failure() {
 }
 
 void transport_failure_injection() {
-  g3::MarketRuntime runtime{{4U, 4U}, fixed_clock()};
+  g3::MarketRuntime runtime{{4U, 4U}, fixed_clock(), numeric_spec()};
   REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
   REQUIRE_EQ(runtime.submit_transport_failure(), g3::AdmissionResult::Accepted);
   const auto observation = runtime.observe();
@@ -313,7 +324,7 @@ void transport_failure_injection() {
 }
 
 void snapshot_failure_injection() {
-  g3::MarketRuntime runtime{{4U, 4U}, fixed_clock()};
+  g3::MarketRuntime runtime{{4U, 4U}, fixed_clock(), numeric_spec()};
   REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
   REQUIRE_EQ(runtime.submit_snapshot_failure(), g3::AdmissionResult::Accepted);
   const auto observation = runtime.observe();
@@ -323,7 +334,7 @@ void snapshot_failure_injection() {
 }
 
 void owner_snapshot_capture() {
-  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock()};
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
   bootstrap_live(runtime);
   REQUIRE_EQ(runtime.submit_depth_update(make_post_live_update()),
              g3::AdmissionResult::Accepted);
@@ -345,7 +356,7 @@ void owner_snapshot_capture() {
 }
 
 [[nodiscard]] std::string run_clock_scenario() {
-  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock()};
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
   bootstrap_live(runtime);
   const auto result = runtime.capture_snapshot();
   return require_captured(result).snapshot.SerializeAsString();
@@ -359,7 +370,7 @@ void deterministic_clock() {
 }
 
 void graceful_shutdown() {
-  g3::MarketRuntime runtime{{4U, 4U}, fixed_clock()};
+  g3::MarketRuntime runtime{{4U, 4U}, fixed_clock(), numeric_spec()};
   REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
   runtime.stop();
   const auto observation = runtime.observe();
@@ -371,7 +382,7 @@ void graceful_shutdown() {
 }
 
 void shutdown_with_pending_work() {
-  g3::MarketRuntime runtime{{4U, 4U}, fixed_clock(), {true}};
+  g3::MarketRuntime runtime{{4U, 4U}, fixed_clock(), numeric_spec(), {true}};
   REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
   REQUIRE_EQ(runtime.submit_depth_update(make_update(101U, 101U, "4.500")),
              g3::AdmissionResult::Accepted);
@@ -391,7 +402,7 @@ void shutdown_with_pending_work() {
 }
 
 void shutdown_when_ingress_full() {
-  g3::MarketRuntime runtime{{2U, 4U}, fixed_clock(), {true}};
+  g3::MarketRuntime runtime{{2U, 4U}, fixed_clock(), numeric_spec(), {true}};
   REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
   REQUIRE_EQ(runtime.submit_depth_update(make_update(101U, 101U, "4.500")),
              g3::AdmissionResult::Accepted);
@@ -409,7 +420,7 @@ void shutdown_when_ingress_full() {
 
 void destructor_safety() {
   {
-    g3::MarketRuntime runtime{{2U, 2U}, fixed_clock(), {true}};
+    g3::MarketRuntime runtime{{2U, 2U}, fixed_clock(), numeric_spec(), {true}};
     REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
     REQUIRE_EQ(runtime.submit_depth_update(make_update(101U, 101U, "4.500")),
                g3::AdmissionResult::Accepted);
@@ -417,6 +428,37 @@ void destructor_safety() {
                g3::AdmissionResult::Accepted);
   }
   REQUIRE(true);
+}
+
+void injected_real_numeric_spec() {
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec(2U, 4U)};
+  REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
+  auto update = make_update(101U, 101U, "4.5001");
+  auto snapshot = make_snapshot();
+  snapshot.mutable_bids(0)->set_quantity("2.5001");
+  snapshot.mutable_asks(0)->set_quantity("3.0001");
+  REQUIRE_EQ(runtime.submit_depth_update(std::move(update)),
+             g3::AdmissionResult::Accepted);
+  REQUIRE_EQ(runtime.submit_snapshot(std::move(snapshot)),
+             g3::AdmissionResult::Accepted);
+  require_live_at(runtime, 101U);
+  const auto captured = runtime.capture_snapshot();
+  REQUIRE_EQ(require_captured(captured).snapshot.bids(0).quantity(), "4.5001");
+}
+
+void snapshot_exception_classification() {
+  g3::RuntimeClock throwing_clock = []() -> g3::ClockSample {
+    throw std::runtime_error{"clock failed"};
+  };
+  g3::MarketRuntime runtime{
+      {8U, 8U}, std::move(throwing_clock), numeric_spec()};
+  bootstrap_live(runtime);
+  const auto result = runtime.capture_snapshot();
+  REQUIRE(std::holds_alternative<g3::SnapshotRequestError>(result));
+  REQUIRE_EQ(std::get<g3::SnapshotRequestError>(result),
+             g3::SnapshotRequestError::ClockError);
+  REQUIRE(g3::SnapshotRequestError::InternalError !=
+          g3::SnapshotRequestError::ClockError);
 }
 
 } // namespace
@@ -439,6 +481,8 @@ int main() {
       {"SHUTDOWN_WITH_PENDING_WORK", shutdown_with_pending_work},
       {"SHUTDOWN_WHEN_INGRESS_FULL", shutdown_when_ingress_full},
       {"DESTRUCTOR_SAFETY", destructor_safety},
+      {"INJECTED_REAL_NUMERIC_SPEC", injected_real_numeric_spec},
+      {"SNAPSHOT_EXCEPTION_CLASSIFICATION", snapshot_exception_classification},
   };
 
   for (const auto &[name, test] : tests) {
