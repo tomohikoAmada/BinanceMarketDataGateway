@@ -10,7 +10,8 @@ CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=NO
 GATEWAY_NETWORK=NOT_IMPLEMENTED
 GATEWAY_GRPC_BUSINESS_FLOW=NOT_IMPLEMENTED
 RECORDER_DEPENDENCY=NO
-NEXT=GW-PREQ-002
+GW-PREQ-002=COMPLETE
+NEXT=G2
 FIRST_RUNNABLE=G2
 FIRST_REAL_NETWORK=G4
 FIRST_GRPC=G7
@@ -35,9 +36,11 @@ or subscription runtime. Historical G2/G3 implementation attempts are abandoned
 and absent from `main`.
 
 G0 acceptance and the frozen G1 candidate dependency proof do not establish a
-formal upstream release or normal runtime dependency lane. G1 must not be
-continuously repinned. GW-PREQ-002 is the next work item and adds no runtime
-behavior; the normal G2–G6 lane does not require Contracts gRPC.
+formal upstream release. G1 must not be continuously repinned. GW-PREQ-002 is
+complete and adds no runtime behavior: the normal G2–G6 lane uses the root
+`conanfile.py` with Contracts message/Protobuf and Projection Core/ProtoAdapter,
+without Contracts gRPC or `grpc`. The historical four-target proof uses
+`conanfile_g1.py` explicitly.
 
 Projection remains the owner of numeric semantics, order-book state, sequence and
 gap classification, lifecycle, reset/resync, ProtoAdapter, and snapshot
