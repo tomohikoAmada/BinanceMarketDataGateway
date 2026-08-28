@@ -6,12 +6,15 @@ development plan is [docs/MILESTONES.md](MILESTONES.md).
 ```text
 G0=COMPLETE
 G1=COMPLETE
+G2=COMPLETE
+G2_SYNTHETIC_HOST_IMPLEMENTED=YES
 CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=NO
+REAL_GATEWAY_NETWORK_RUNTIME_IMPLEMENTED=NO
 GATEWAY_NETWORK=NOT_IMPLEMENTED
 GATEWAY_GRPC_BUSINESS_FLOW=NOT_IMPLEMENTED
 RECORDER_DEPENDENCY=NO
 GW-PREQ-002=COMPLETE
-NEXT=G2
+NEXT=G3
 FIRST_RUNNABLE=G2
 FIRST_REAL_NETWORK=G4
 FIRST_GRPC=G7
@@ -27,13 +30,18 @@ Gateway `main` currently contains:
 - synchronous Foundation lifecycle;
 - a daemon CLI that immediately starts and stops Foundation;
 - deterministic Foundation tests;
-- build/CI/sanitizer support; and
-- the explicit, opt-in G1 dependency proof.
+- build/CI/sanitizer support;
+- the explicit, opt-in G1 dependency proof; and
+- the deterministic in-memory G2 synthetic Spot BTCUSDT host with focused tests
+  and a dedicated executable.
 
 There is no current production WebSocket, REST transport, `MarketRuntime`, owner
 thread, runtime ingress queue, bootstrap buffer, reconnect runtime, gRPC server,
 or subscription runtime. Historical G2/G3 implementation attempts are abandoned
 and absent from `main`.
+
+The completed G2 host is not production transport runtime: it uses only deterministic
+in-memory Contracts messages and direct Projection APIs. G3 remains not started.
 
 G0 acceptance and the frozen G1 candidate dependency proof do not establish a
 formal upstream release. G1 must not be continuously repinned. GW-PREQ-002 is

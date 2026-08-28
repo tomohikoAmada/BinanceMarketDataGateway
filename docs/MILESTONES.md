@@ -1,12 +1,14 @@
 # Gateway milestones
 
 This is the authoritative development plan for the Gateway. It is aligned to
-Gateway `main` at `04e7cc37622a5feb0e416bf75ba000f13aa7f62a`; the related
+Gateway `main` at `05f11fe506e92fe409082af1f5aa98a07001827d`; the related
 upstream authority checked for this checkpoint is Contracts
 `518880bdfa60948c3b65b6b3525d024526995166` and Projection
 `01a66aa80c764d2600da2cc309c0fd69655b55c`.
 
-The current implementation is G0 and G1 complete. `CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=NO`.
+The current implementation is G0, G1, GW-PREQ-002, and G2 complete. The deterministic
+synthetic host is implemented, while `REAL_GATEWAY_NETWORK_RUNTIME_IMPLEMENTED=NO` and
+`CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=NO` remain true for the production transport runtime.
 Historical G2/G3 attempts, including the deleted `feat/g2-deterministic-synthetic-host`
 branch and its recovery bundle, are not implementation authority. Historical PR #5 is
 retained only as a closed, not-merged, abandoned implementation attempt.
@@ -61,14 +63,17 @@ runtime framework.
 
 - `G0=COMPLETE`.
 - `G1=COMPLETE`.
+- `G2=COMPLETE`.
+- `G2_SYNTHETIC_HOST_IMPLEMENTED=YES`.
 - `CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=NO`.
+- `REAL_GATEWAY_NETWORK_RUNTIME_IMPLEMENTED=NO`.
 
-Gateway `main` currently has only typed configuration, synchronous Foundation
+Gateway `main` currently has typed configuration, synchronous Foundation
 lifecycle, a daemon CLI that immediately starts and stops Foundation, Foundation
-tests, build/CI/sanitizers, and the explicit G1 dependency proof. There is no
-current production WebSocket, REST transport, `MarketRuntime`, owner thread,
-runtime ingress queue, bootstrap buffer, reconnect runtime, gRPC server, or
-subscription runtime.
+tests, build/CI/sanitizers, the explicit G1 dependency proof, and the deterministic
+in-memory G2 synthetic Spot BTCUSDT host. There is no current production WebSocket,
+REST transport, `MarketRuntime`, owner thread, runtime ingress queue, bootstrap buffer,
+reconnect runtime, gRPC server, or subscription runtime.
 
 ## G0 — Repository Foundation
 
@@ -119,11 +124,11 @@ The normal graph is verified by
 `scripts/gw-preq-002-verify-graph.py`; its invariant is one Contracts message
 lineage plus Projection, with no Contracts gRPC package and no `grpc` package.
 
-`NEXT=G2`.
+`NEXT=G3`.
 
 ## G2 — Deterministic Synthetic Host
 
-**STATUS=NOT_STARTED**
+**STATUS=COMPLETE**
 
 `FIRST_RUNNABLE=G2`.
 
@@ -133,6 +138,10 @@ pre-snapshot WebSocket diff events, deterministic receive order, and Projection
 ProtoAdapter. Install the baseline, replay buffered updates, let Projection own
 stale/duplicate/bridge/gap classification, reach `Synchronized`, and create a
 `LocalOrderBookSnapshot`.
+
+G2 is implemented as a single-threaded, deterministic in-memory host with a concrete
+development executable and focused acceptance tests. It adds no real Binance network,
+gRPC, concurrency, bounded runtime queue, or recovery behavior.
 
 Use explicit deterministic `NumericSpec`, timestamps, request IDs, connection
 IDs, and ambient inputs. Do not depend on the system clock or random IDs for
