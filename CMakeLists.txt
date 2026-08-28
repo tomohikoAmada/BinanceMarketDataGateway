@@ -11,6 +11,8 @@ include(CTest)
 option(BMD_GATEWAY_BUILD_TESTS "Build the offline Gateway foundation tests" ${BUILD_TESTING})
 option(BMD_GATEWAY_BUILD_G2_SYNTHETIC_HOST
        "Build the deterministic G2 synthetic Spot host and focused tests" OFF)
+option(BMD_GATEWAY_BUILD_G3_RUNTIME
+       "Build the serialized G3 MarketRuntime and focused tests" OFF)
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
        "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
 option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
@@ -179,6 +181,53 @@ if(BMD_GATEWAY_BUILD_G2_SYNTHETIC_HOST)
         bmd_gateway_apply_warnings(bmd_gateway_g2_synthetic_tests)
         bmd_gateway_apply_sanitizers(bmd_gateway_g2_synthetic_tests)
         add_test(NAME gateway_g2_synthetic_host_tests COMMAND bmd_gateway_g2_synthetic_tests)
+    endif()
+endif()
+
+if(BMD_GATEWAY_BUILD_G3_RUNTIME)
+    find_package(Threads REQUIRED)
+    find_package(BinanceMarketDataContracts 0.1.0 EXACT CONFIG REQUIRED COMPONENTS Protobuf)
+    find_package(BinanceMarketDataProjection 0.1.0 EXACT CONFIG REQUIRED COMPONENTS Core ProtoAdapter)
+
+    add_library(bmd_gateway_g3_runtime
+        src/g3/market_runtime.cpp
+    )
+    set_target_properties(
+        bmd_gateway_g3_runtime
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_g3_runtime
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g3
+    )
+    target_link_libraries(
+        bmd_gateway_g3_runtime
+        PUBLIC
+            BinanceMarketDataContracts::Protobuf
+            BinanceMarketDataProjection::Core
+            BinanceMarketDataProjection::ProtoAdapter
+            Threads::Threads
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g3_runtime)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g3_runtime)
+
+    if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_g3_runtime_tests tests/g3_market_runtime_tests.cpp)
+        set_target_properties(
+            bmd_gateway_g3_runtime_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(bmd_gateway_g3_runtime_tests PRIVATE bmd_gateway_g3_runtime)
+        bmd_gateway_apply_warnings(bmd_gateway_g3_runtime_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_g3_runtime_tests)
+        add_test(NAME gateway_g3_market_runtime_tests COMMAND bmd_gateway_g3_runtime_tests)
     endif()
 endif()
 

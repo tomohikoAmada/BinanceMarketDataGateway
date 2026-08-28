@@ -2,7 +2,7 @@
 
 The detailed, ordered development authority is
 [docs/MILESTONES.md](docs/MILESTONES.md). This document records only the
-responsibility split and the current foundation/G2 boundary.
+responsibility split and the current foundation/G3 boundary.
 
 ## Dependency direction
 
@@ -48,9 +48,25 @@ not bound and no transport is attempted. The separate `bmd-gateway-g2-synthetic`
 executable drives one deterministic in-memory Spot BTCUSDT scenario through the
 direct Projection APIs; it is not a production transport runtime.
 
-## Future Host boundary
+The opt-in `bmd_gateway_g3_runtime` target is the first concurrent runtime
+boundary. It implements exactly one Binance Spot BTCUSDT `MarketRuntime`, which
+owns one private `BookProjection` and one dedicated serialized owner thread. Its
+complete-frame ingress FIFO and distinct owner-local bootstrap buffer have
+independent finite capacities. The owner performs all adaptation, Projection
+mutation/state reads, and consumer snapshot capture. External callers receive
+only copied observations or owning protobuf snapshots. An injected clock supplies
+snapshot-generation timestamps. Shutdown admission closure and wakeup are
+out-of-band from the bounded ingress; graceful stop drains accepted work in FIFO
+order unless a terminal fault forbids mutation, then joins the owner.
 
-The future Gateway runtime must reuse the existing Projection APIs directly:
+G3 accepts only already-parsed synthetic Contracts messages and explicit
+transport/snapshot fault events. It has no sockets, HTTP, WebSocket, JSON,
+reconnect, retry, publication, subscription, or gRPC behavior.
+
+## MarketRuntime Projection boundary
+
+The G3 `MarketRuntime` uses, and future Gateway runtime work must continue to
+use, the existing Projection APIs directly:
 construct one `BookProjection` per `venue + market + symbol`, adapt Contracts
 messages with `ProtoAdapter`, feed updates in source receive order, and follow
 Projection's returned classification. It must not add a
@@ -58,7 +74,8 @@ Projection's returned classification. It must not add a
 Projection lifecycle, generic event bus, DI framework, plugin framework, or
 generic runtime framework.
 
-The current foundation and frozen G1 link proof remain runtime-free. The completed G2
-synthetic host implements only the deterministic in-memory scenario described in the
-milestone authority; real network, concurrency, recovery, publication, and gRPC
-behavior remain future milestones.
+The foundation and frozen G1 link proof remain runtime-free. The completed G2
+synthetic host remains the deterministic direct-Projection proof. G3 establishes
+serialized concurrency and bounded runtime ownership without real transport.
+Real network, recovery, publication, and gRPC behavior remain G4, G5, and G7
+work respectively.
