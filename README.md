@@ -1,9 +1,10 @@
 # Binance Market Data Gateway
 
-This repository is the C++20 Gateway foundation for Issue #1 / G0. Phase A proves a small typed
-configuration surface, a synchronous lifecycle seam, an offline unit-test target, and a minimal
-Linux CI/sanitizer foundation. It deliberately does not connect to Binance or implement a market-
-data pipeline.
+This repository is the C++20 Gateway foundation for Issue #1. G0 and G1 are
+complete; the current `main` has no production market-data runtime. The
+authoritative development plan and ownership boundaries are in
+[docs/MILESTONES.md](docs/MILESTONES.md), with current orientation in
+[docs/CURRENT_STATE.md](docs/CURRENT_STATE.md).
 
 ## Build and test
 
@@ -49,11 +50,11 @@ targets; it does not authenticate a bundle or invent upstream revisions. Until t
 identities exist, keep this option disabled and do not replace it with a source checkout, a
 floating dependency, or a locally invented SHA.
 
-G0 foundation acceptance is separate from formal upstream release acceptance. G0 claims no formal
-Contracts or Projection release identity and no formal upstream link proof. Later G1/G2 candidate
-development may use explicitly identified exact candidates, but formal integration/release/
-deployment acceptance still requires the final identities, immutable supported artifacts, exact
-consumer/link proof, and appropriate clean-cache evidence.
+G0 foundation acceptance is separate from formal upstream release acceptance.
+The four-target G1 proof is frozen historical evidence and remains explicit and
+opt-in; it is not the normal G2–G6 runtime dependency lane. Formal release and
+deployment acceptance require final upstream identities and exact consumer/link
+evidence.
 
 The G1 exact candidate proof is documented in [docs/G1_CANDIDATE.md](docs/G1_CANDIDATE.md). Run
 `scripts/g1-candidate-proof.sh` only with a Conan cache containing the exact candidate packages;
@@ -62,9 +63,6 @@ lineage. G1 remains dependency proof only and does not add Gateway runtime behav
 
 ## Scope and ownership
 
-The dependency and ownership decisions are recorded in [ARCHITECTURE.md](ARCHITECTURE.md),
-[docs/CURRENT_STATE.md](docs/CURRENT_STATE.md), and [docs/adr/ADR-0001-g0-foundation-boundaries.md](docs/adr/ADR-0001-g0-foundation-boundaries.md).
-Official Binance source acquisition status is recorded in
-[docs/official-binance-constraints.md](docs/official-binance-constraints.md).
-The current cross-repository completion state and continuation order are recorded in
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the concise responsibility split.
+Historical evidence is retained in
 [docs/HANDOFF_2026-08-23.md](docs/HANDOFF_2026-08-23.md).

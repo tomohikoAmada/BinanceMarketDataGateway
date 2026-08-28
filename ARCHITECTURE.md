@@ -1,21 +1,29 @@
-# G0 architecture
+# Gateway architecture
+
+The detailed, ordered development authority is
+[docs/MILESTONES.md](docs/MILESTONES.md). This document records only the
+responsibility split and the current foundation boundary.
 
 ## Dependency direction
 
 ```text
-Binance public APIs (future Phase B)
+Binance public APIs (future Gateway runtime)
         |
         v
 BinanceMarketDataGateway
         +--> Contracts message-only package
-        +--> Contracts separate gRPC package
         +--> Projection::ProtoAdapter --> Projection::Core
+        +--> Contracts separate gRPC package (G7 publication)
 ```
 
-There is no Gateway-to-Recorder dependency. Contracts owns schemas and service bindings. Projection
-owns numeric semantics, sequence policy, deterministic state, and single-writer mutation. Gateway
-will own transport orchestration, bounded queues, timestamps, subscriptions, and gRPC runtime only
-in later phases.
+There is no Gateway-to-Recorder dependency. Contracts owns Protobuf messages,
+service contracts, wire compatibility, and both C++ message and separate gRPC
+service/stub packages. Projection owns fixed-point semantics, deterministic order
+book state, Spot/USD-M sequence and gap policy, lifecycle, reset/resync,
+ProtoAdapter, and snapshot construction. Gateway owns transport acquisition,
+metadata, timestamps, connection and recovery orchestration, serialized
+Projection scheduling, bounded queues and subscriptions, slow-consumer
+isolation, and the Gateway gRPC runtime.
 
 ## Phase A components
 
@@ -40,10 +48,12 @@ not bound and no transport is attempted.
 
 ## Future Host boundary
 
-The later Gateway Host must reuse the existing Projection M3/M4 APIs directly: construct one
-`BookProjection` per `venue + market + symbol`, adapt Contracts messages with `ProtoAdapter`, feed
-updates in source receive order, and follow Projection's returned classification. It must not add a
-`GatewayProjectionHost`, facade, event bus, second sequence classifier, or second order book.
+The future Gateway runtime must reuse the existing Projection APIs directly:
+construct one `BookProjection` per `venue + market + symbol`, adapt Contracts
+messages with `ProtoAdapter`, feed updates in source receive order, and follow
+Projection's returned classification. It must not add a
+`GatewayProjectionHost`, second sequence classifier, second order book, second
+Projection lifecycle, generic event bus, DI framework, plugin framework, or
+generic runtime framework.
 
-The Phase A link smoke only proves package discovery and one final link across message, service,
-adapter, and Core surfaces. It implements none of that future runtime behavior.
+The current foundation and G1 link proof implement none of that runtime behavior.
