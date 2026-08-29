@@ -2,6 +2,7 @@
 
 #include <binance_market_data/common/v1/enums.pb.h>
 
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <functional>
@@ -517,6 +518,93 @@ void direct_needs_resync_wait() {
   REQUIRE_EQ(waited->projection_status, core::ProjectionStatus::NeedsResync);
 }
 
+void owner_domain_planned_rebootstrap_reset() {
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  bootstrap_live(runtime);
+  const auto before = runtime.observe();
+
+  REQUIRE_EQ(runtime.reset_live_for_planned_rebootstrap(),
+             g3::PlannedRebootstrapResetResult::Reset);
+  const auto reset = runtime.observe();
+  REQUIRE_EQ(reset.state, g3::RuntimeState::Buffering);
+  REQUIRE_EQ(reset.projection_status, core::ProjectionStatus::AwaitingBaseline);
+  REQUIRE_EQ(reset.last_reset_thread_id, reset.owner_thread_id);
+  REQUIRE(reset.last_reset_thread_id != std::this_thread::get_id());
+  REQUIRE_EQ(reset.reset_count, before.reset_count + 1U);
+  REQUIRE(reset.last_admitted_ticket >= before.last_admitted_ticket);
+  REQUIRE(reset.processed_ticket >= before.processed_ticket);
+  REQUIRE(!reset.last_gap.has_value());
+  REQUIRE(!reset.last_install.has_value());
+  REQUIRE(!reset.last_apply.has_value());
+  REQUIRE(!reset.fault_reason.has_value());
+  REQUIRE(!reset.last_update_id.has_value());
+}
+
+void planned_reset_rejects_wrong_state() {
+  {
+    g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+    REQUIRE_EQ(runtime.reset_live_for_planned_rebootstrap(),
+               g3::PlannedRebootstrapResetResult::NotStarted);
+    REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
+    REQUIRE_EQ(runtime.reset_live_for_planned_rebootstrap(),
+               g3::PlannedRebootstrapResetResult::InvalidState);
+    runtime.stop();
+    REQUIRE_EQ(runtime.reset_live_for_planned_rebootstrap(),
+               g3::PlannedRebootstrapResetResult::Stopped);
+  }
+  {
+    g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+    REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
+    REQUIRE_EQ(runtime.submit_transport_failure(),
+               g3::AdmissionResult::Accepted);
+    REQUIRE_EQ(runtime.observe().state, g3::RuntimeState::Faulted);
+    REQUIRE_EQ(runtime.reset_live_for_planned_rebootstrap(),
+               g3::PlannedRebootstrapResetResult::InvalidState);
+    REQUIRE_EQ(runtime.reset_for_rebootstrap(),
+               g3::RebootstrapResetResult::Reset);
+  }
+  {
+    g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+    bootstrap_live(runtime);
+    REQUIRE_EQ(runtime.submit_depth_update(make_update(103U, 103U, "6.000")),
+               g3::AdmissionResult::Accepted);
+    REQUIRE_EQ(runtime.observe().state, g3::RuntimeState::NeedsResync);
+    REQUIRE_EQ(runtime.reset_live_for_planned_rebootstrap(),
+               g3::PlannedRebootstrapResetResult::InvalidState);
+    REQUIRE_EQ(runtime.reset_for_rebootstrap(),
+               g3::RebootstrapResetResult::Reset);
+  }
+}
+
+void timed_recovery_or_deadline_wait() {
+  {
+    g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+    bootstrap_live(runtime);
+    REQUIRE_EQ(runtime.wait_until_recovery_required_for(
+                   std::stop_token{}, std::chrono::nanoseconds::zero()),
+               g3::TimedRecoveryWaitResult::DeadlineReached);
+  }
+  {
+    g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+    bootstrap_live(runtime);
+    REQUIRE_EQ(runtime.submit_depth_update(make_update(103U, 103U, "6.000")),
+               g3::AdmissionResult::Accepted);
+    REQUIRE_EQ(runtime.observe().state, g3::RuntimeState::NeedsResync);
+    REQUIRE_EQ(runtime.wait_until_recovery_required_for(std::stop_token{},
+                                                        std::chrono::hours{1}),
+               g3::TimedRecoveryWaitResult::RecoveryRequired);
+  }
+  {
+    g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+    bootstrap_live(runtime);
+    std::stop_source stop_source;
+    REQUIRE(stop_source.request_stop());
+    REQUIRE_EQ(runtime.wait_until_recovery_required_for(stop_source.get_token(),
+                                                        std::chrono::hours{1}),
+               g3::TimedRecoveryWaitResult::Stopped);
+  }
+}
+
 } // namespace
 
 int main() {
@@ -541,6 +629,10 @@ int main() {
       {"SNAPSHOT_EXCEPTION_CLASSIFICATION", snapshot_exception_classification},
       {"OWNER_DOMAIN_REBOOTSTRAP_RESET", owner_domain_rebootstrap_reset},
       {"DIRECT_NEEDS_RESYNC_WAIT", direct_needs_resync_wait},
+      {"OWNER_DOMAIN_PLANNED_REBOOTSTRAP_RESET",
+       owner_domain_planned_rebootstrap_reset},
+      {"PLANNED_RESET_REJECTS_WRONG_STATE", planned_reset_rejects_wrong_state},
+      {"TIMED_RECOVERY_OR_DEADLINE_WAIT", timed_recovery_or_deadline_wait},
   };
 
   for (const auto &[name, test] : tests) {

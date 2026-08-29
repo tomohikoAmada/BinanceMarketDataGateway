@@ -7,15 +7,16 @@ Read in this order before making Gateway changes:
 3. [ARCHITECTURE.md](ARCHITECTURE.md)
 4. milestone-specific evidence as needed
 
-G0, G1, GW-PREQ-002, G2, G3, G4, and G5 are complete. The deterministic G2
+G0, G1, GW-PREQ-002, G2, G3, G4, G5, and G6 are complete. The deterministic G2
 synthetic host, serialized G3 `MarketRuntime`, real G4 Binance Spot BTCUSDT
-transport/bootstrap, and bounded G5 reconnect/resync recovery are implemented.
+transport/bootstrap, bounded G5 reconnect/resync recovery, and break-before-make
+G6 planned connection rotation are implemented.
 Keep Phase A small and independently buildable.
 
 This repository contains the G0 foundation, frozen G1 proof, deterministic G2
-synthetic host, serialized G3 runtime, real G4 Spot transport, and G5 recovery;
-future runtime work follows the milestone authority. Keep Phase A small and
-independently buildable.
+synthetic host, serialized G3 runtime, real G4 Spot transport, G5 recovery, and
+G6 rotation; future runtime work follows the milestone authority. Keep Phase A
+small and independently buildable.
 
 ## Boundaries
 
@@ -36,6 +37,10 @@ independently buildable.
   transport, quiesces the old network thread before owner-domain reset, and uses
   bounded interruptible rate-limit-aware recovery. It has no second sequence
   classifier, planned rotation, gRPC, publication, or subscriptions.
+- G6 integrates the 23h50m monotonic planned-rotation policy into the G5
+  coordinator. It remains break-before-make, uses the distinct owner-domain
+  healthy reset only after source quiescence and a Live/Synchronized barrier,
+  and has no source stitching, gRPC, publication, or subscriptions.
 - Do not copy Contracts `.proto` files or introduce floating FetchContent dependencies.
 
 ## Phase A implementation rules

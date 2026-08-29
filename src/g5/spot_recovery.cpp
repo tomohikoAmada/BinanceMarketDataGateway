@@ -70,6 +70,9 @@ classify_failure(const g3::RuntimeObservation &runtime,
     case g3::FaultReason::InternalError:
       return decision;
     }
+  } else if (transport.terminal_error.has_value()) {
+    decision.recoverable = true;
+    decision.cause = RecoveryCause::TransportFailure;
   } else {
     return decision;
   }
@@ -160,15 +163,23 @@ detail::normal_backoff_delay(std::size_t recovery_attempt) {
 class SpotRecovery::Impl final {
 public:
   Impl(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+       std::optional<PlannedRotationPolicy> planned_rotation,
        detail::RecoveryTestOptions test_options)
       : runtime_{runtime}, clock_{std::move(clock)},
+        planned_rotation_{planned_rotation},
         attempt_factory_{std::move(test_options.attempt_factory)},
         backoff_waiter_{std::move(test_options.backoff_waiter)},
+        rotation_waiter_{std::move(test_options.rotation_waiter)},
         lifecycle_shutdown_established_{
             std::move(test_options.lifecycle_shutdown_established)},
-        before_backoff_commit_{std::move(test_options.before_backoff_commit)} {
+        before_backoff_commit_{std::move(test_options.before_backoff_commit)},
+        before_planned_reset_{std::move(test_options.before_planned_reset)} {
     if (!clock_) {
       throw std::invalid_argument{"G5 recovery clock must be injected"};
+    }
+    if (planned_rotation_.has_value() &&
+        planned_rotation_->age <= std::chrono::nanoseconds::zero()) {
+      throw std::invalid_argument{"G6 planned rotation age must be positive"};
     }
     if (!attempt_factory_) {
       attempt_factory_ = [](g3::MarketRuntime &attempt_runtime,
@@ -397,12 +408,30 @@ private:
           break;
         }
 
+        std::optional<std::uint64_t> generation_started;
+        std::optional<std::uint64_t> rotation_deadline;
+        if (planned_rotation_.has_value()) {
+          try {
+            generation_started = clock_().monotonic_ns;
+            rotation_deadline = planned_rotation_deadline(*generation_started);
+          } catch (...) {
+            static_cast<void>(quiesce_attempt(attempt));
+            throw;
+          }
+        }
+        {
+          std::lock_guard lock{mutex_};
+          observation_.generation_started_monotonic_ns = generation_started;
+        }
+        condition_.notify_all();
+
         const auto start_result = attempt->start();
         if (stop_token.stop_requested() || shutdown_requested()) {
           static_cast<void>(quiesce_attempt(attempt));
           break;
         }
 
+        bool planned_rotation_due = false;
         std::optional<g3::RuntimeObservation> runtime_observation;
         if (start_result == g4::TransportStartResult::Started) {
           runtime_observation =
@@ -421,11 +450,44 @@ private:
             const auto transport = attempt->observe();
             if (try_mark_live(qualified_runtime, transport, generation,
                               stop_token)) {
-              runtime_observation =
-                  runtime_.wait_until_recovery_required(stop_token);
-              if (!runtime_observation.has_value()) {
-                static_cast<void>(quiesce_attempt(attempt));
-                break;
+              if (rotation_deadline.has_value()) {
+                g3::TimedRecoveryWaitResult wait_result;
+                try {
+                  wait_result = wait_for_rotation_or_recovery(
+                      *generation_started, *rotation_deadline, stop_token);
+                } catch (...) {
+                  static_cast<void>(quiesce_attempt(attempt));
+                  throw;
+                }
+                if (wait_result == g3::TimedRecoveryWaitResult::Stopped) {
+                  static_cast<void>(quiesce_attempt(attempt));
+                  break;
+                }
+                planned_rotation_due =
+                    wait_result == g3::TimedRecoveryWaitResult::DeadlineReached;
+                if (planned_rotation_due) {
+                  bool shutdown_won = false;
+                  {
+                    std::lock_guard lock{mutex_};
+                    shutdown_won =
+                        shutdown_requested_ || stop_token.stop_requested();
+                    if (!shutdown_won) {
+                      observation_.state = RecoveryState::Rotating;
+                    }
+                  }
+                  condition_.notify_all();
+                  if (shutdown_won) {
+                    static_cast<void>(quiesce_attempt(attempt));
+                    break;
+                  }
+                }
+              } else {
+                runtime_observation =
+                    runtime_.wait_until_recovery_required(stop_token);
+                if (!runtime_observation.has_value()) {
+                  static_cast<void>(quiesce_attempt(attempt));
+                  break;
+                }
               }
             }
           }
@@ -437,7 +499,57 @@ private:
         }
         // This owner barrier is deliberately after the transport network thread
         // has joined. No old-generation producer can submit beyond this cut.
-        const auto final_runtime = runtime_.observe();
+        auto final_runtime = runtime_.observe();
+        // SpotTransport normally admits its matching runtime fault before its
+        // terminal error becomes observable. Preserve a genuine terminal-only
+        // race at the planned cut by reflecting that real source failure
+        // through the ordinary runtime fault boundary before classification.
+        if (transport_observation.terminal_error.has_value() &&
+            final_runtime.state == g3::RuntimeState::Live &&
+            !final_runtime.fault_reason.has_value()) {
+          if (runtime_.submit_transport_failure() !=
+              g3::AdmissionResult::Accepted) {
+            set_terminal(
+                RecoveryCause::InternalFailure,
+                internal_error("terminal transport fault admission failed"),
+                false);
+            return;
+          }
+          final_runtime = runtime_.observe();
+        }
+        if (planned_rotation_due &&
+            is_clean_planned_cut(final_runtime, transport_observation)) {
+          if (before_planned_reset_) {
+            before_planned_reset_();
+          }
+          g3::PlannedRebootstrapResetResult reset_result;
+          {
+            // The lifecycle gate makes shutdown and the healthy owner reset a
+            // single ordering decision after source quiescence.
+            std::lock_guard lock{mutex_};
+            if (shutdown_requested_ || stop_token.stop_requested()) {
+              break;
+            }
+            reset_result = runtime_.reset_live_for_planned_rebootstrap();
+            if (reset_result == g3::PlannedRebootstrapResetResult::Reset) {
+              observation_.last_rotation_generation = generation;
+              observation_.last_planned_rotation_cut = PlannedRotationCut{
+                  generation, transport_observation, final_runtime};
+              ++observation_.planned_rotation_count;
+              ++generation;
+              observation_.state = RecoveryState::Starting;
+            }
+          }
+          condition_.notify_all();
+          if (reset_result != g3::PlannedRebootstrapResetResult::Reset) {
+            set_terminal(
+                RecoveryCause::InternalFailure,
+                internal_error("owner-domain planned rebootstrap reset failed"),
+                false);
+            return;
+          }
+          continue;
+        }
         const auto decision =
             classify_failure(final_runtime, transport_observation);
         if (!decision.recoverable) {
@@ -549,6 +661,50 @@ private:
     return attempt;
   }
 
+  [[nodiscard]] std::optional<std::uint64_t>
+  planned_rotation_deadline(std::uint64_t generation_started) const {
+    if (!planned_rotation_.has_value()) {
+      return std::nullopt;
+    }
+    const auto age = planned_rotation_->age.count();
+    const auto unsigned_age = static_cast<std::uint64_t>(age);
+    if (generation_started >
+        std::numeric_limits<std::uint64_t>::max() - unsigned_age) {
+      throw std::overflow_error{"G6 planned rotation deadline overflow"};
+    }
+    return generation_started + unsigned_age;
+  }
+
+  [[nodiscard]] g3::TimedRecoveryWaitResult
+  wait_for_rotation_or_recovery(std::uint64_t generation_started,
+                                std::uint64_t deadline,
+                                std::stop_token stop_token) {
+    const auto now = clock_().monotonic_ns;
+    if (now < generation_started) {
+      throw std::runtime_error{"G6 monotonic clock moved backwards"};
+    }
+    if (now >= deadline) {
+      return g3::TimedRecoveryWaitResult::DeadlineReached;
+    }
+    const auto remaining = deadline - now;
+    const auto duration = std::chrono::nanoseconds{
+        static_cast<std::chrono::nanoseconds::rep>(remaining)};
+    if (rotation_waiter_) {
+      return rotation_waiter_(runtime_, duration, stop_token);
+    }
+    return runtime_.wait_until_recovery_required_for(stop_token, duration);
+  }
+
+  [[nodiscard]] static bool
+  is_clean_planned_cut(const g3::RuntimeObservation &runtime,
+                       const g4::TransportObservation &transport) noexcept {
+    return transport.stopped && !transport.running &&
+           !transport.terminal_error.has_value() &&
+           runtime.state == g3::RuntimeState::Live &&
+           runtime.projection_status == core::ProjectionStatus::Synchronized &&
+           !runtime.fault_reason.has_value();
+  }
+
   [[nodiscard]] g4::TransportObservation quiesce_attempt(
       const std::shared_ptr<detail::RecoveryAttempt> &attempt) noexcept {
     attempt->stop();
@@ -631,10 +787,13 @@ private:
 
   g3::MarketRuntime &runtime_;
   g3::RuntimeClock clock_;
+  std::optional<PlannedRotationPolicy> planned_rotation_;
   detail::AttemptFactory attempt_factory_;
   detail::BackoffWaiter backoff_waiter_;
+  detail::RotationWaiter rotation_waiter_;
   std::function<void()> lifecycle_shutdown_established_;
   std::function<void()> before_backoff_commit_;
+  std::function<void()> before_planned_reset_;
 
   mutable std::mutex mutex_;
   std::condition_variable condition_;
@@ -652,7 +811,13 @@ private:
 
 SpotRecovery::SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                            detail::RecoveryTestOptions test_options)
-    : impl_{std::make_unique<Impl>(runtime, std::move(clock),
+    : impl_{std::make_unique<Impl>(runtime, std::move(clock), std::nullopt,
+                                   std::move(test_options))} {}
+
+SpotRecovery::SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                           PlannedRotationPolicy planned_rotation,
+                           detail::RecoveryTestOptions test_options)
+    : impl_{std::make_unique<Impl>(runtime, std::move(clock), planned_rotation,
                                    std::move(test_options))} {}
 
 SpotRecovery::~SpotRecovery() = default;

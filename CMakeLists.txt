@@ -17,6 +17,8 @@ option(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT
        "Build the real G4 Binance Spot BTCUSDT transport and offline tests" OFF)
 option(BMD_GATEWAY_BUILD_G5_RECOVERY
        "Build bounded G5 Spot reconnect/resync recovery and focused tests" OFF)
+option(BMD_GATEWAY_BUILD_G6_ROTATION
+       "Build planned G6 Spot connection rotation and focused tests" OFF)
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
        "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
 option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
@@ -27,6 +29,10 @@ option(BMD_GATEWAY_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 
 if(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT)
     set(BMD_GATEWAY_BUILD_G3_RUNTIME ON)
+endif()
+
+if(BMD_GATEWAY_BUILD_G6_ROTATION)
+    set(BMD_GATEWAY_BUILD_G5_RECOVERY ON)
 endif()
 
 if(BMD_GATEWAY_BUILD_G5_RECOVERY)
@@ -419,6 +425,60 @@ if(BMD_GATEWAY_BUILD_G5_RECOVERY)
         bmd_gateway_apply_sanitizers(bmd_gateway_g5_recovery_tests)
         add_test(NAME gateway_g5_recovery_tests
                  COMMAND bmd_gateway_g5_recovery_tests)
+    endif()
+endif()
+
+if(BMD_GATEWAY_BUILD_G6_ROTATION)
+    add_library(bmd_gateway_g6_rotation INTERFACE)
+    target_include_directories(
+        bmd_gateway_g6_rotation
+        INTERFACE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g6
+    )
+    target_link_libraries(
+        bmd_gateway_g6_rotation
+        INTERFACE
+            bmd_gateway_g5_recovery
+    )
+
+    add_executable(bmd-gateway-g6-spot-rotation-live
+        app/g6_spot_rotation_live/main.cpp
+    )
+    set_target_properties(
+        bmd-gateway-g6-spot-rotation-live
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_link_libraries(
+        bmd-gateway-g6-spot-rotation-live
+        PRIVATE
+            bmd_gateway_g6_rotation
+    )
+    bmd_gateway_apply_warnings(bmd-gateway-g6-spot-rotation-live)
+    bmd_gateway_apply_sanitizers(bmd-gateway-g6-spot-rotation-live)
+
+    if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_g6_rotation_tests
+            tests/g6_spot_rotation_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_g6_rotation_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g6_rotation_tests
+            PRIVATE
+                bmd_gateway_g6_rotation
+        )
+        bmd_gateway_apply_warnings(bmd_gateway_g6_rotation_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_g6_rotation_tests)
+        add_test(NAME gateway_g6_rotation_tests
+                 COMMAND bmd_gateway_g6_rotation_tests)
     endif()
 endif()
 
