@@ -62,6 +62,11 @@ struct RecoveryObservation final {
   std::optional<g4::NetworkError> terminal_error;
 };
 
+struct QuiescentAcceptanceCut final {
+  g4::TransportObservation transport;
+  g3::RuntimeObservation runtime;
+};
+
 namespace detail {
 
 inline constexpr std::size_t kMaximumRecoveryAttempts = 6U;
@@ -119,6 +124,10 @@ public:
   // Narrow G5 acceptance seam. It uses the normal recoverable runtime fault
   // path; generation replacement and the new market data remain real.
   [[nodiscard]] bool request_controlled_recovery_for_acceptance();
+
+  // Stops and joins the active source and coordinator while leaving the
+  // MarketRuntime owner alive for a final FIFO barrier and snapshot capture.
+  [[nodiscard]] std::optional<QuiescentAcceptanceCut> quiesce_for_acceptance();
 
 private:
   class Impl;

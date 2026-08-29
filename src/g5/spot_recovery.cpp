@@ -13,6 +13,8 @@ namespace binance_market_data::gateway::g5 {
 
 namespace {
 
+namespace core = binance_market_data::projection::v1;
+
 class LiveSpotAttempt final : public detail::RecoveryAttempt {
 public:
   LiveSpotAttempt(g3::MarketRuntime &runtime, const g3::RuntimeClock &clock,
@@ -282,6 +284,55 @@ public:
     return runtime_.submit_transport_failure() == g3::AdmissionResult::Accepted;
   }
 
+  [[nodiscard]] std::optional<QuiescentAcceptanceCut> quiesce_for_acceptance() {
+    std::shared_ptr<detail::RecoveryAttempt> attempt;
+    {
+      std::lock_guard lock{attempt_mutex_};
+      attempt = active_attempt_;
+    }
+    {
+      std::lock_guard lock{mutex_};
+      if (!attempt || !started_ || stopped_ || observation_.terminal ||
+          observation_.state != RecoveryState::Live) {
+        return std::nullopt;
+      }
+      observation_.state = RecoveryState::Stopping;
+      observation_.in_backoff = false;
+    }
+    condition_.notify_all();
+    coordinator_.request_stop();
+    backoff_condition_.notify_all();
+
+    // A requested coordinator stop transfers active-attempt quiescence to the
+    // lifecycle caller, so this is the only stop owner for the retained source.
+    attempt->stop();
+    if (coordinator_.joinable()) {
+      coordinator_.join();
+    }
+
+    // The coordinator is joined, so no later generation can be created. The
+    // retained owning reference keeps the final transport observation alive.
+    const auto transport = attempt->observe();
+    {
+      std::lock_guard lock{attempt_mutex_};
+      if (active_attempt_ == attempt) {
+        active_attempt_.reset();
+      }
+    }
+    {
+      std::lock_guard lock{mutex_};
+      observation_.active_transport_count = 0U;
+      observation_.connection_generation = transport.connection_generation;
+      observation_.connection_id = transport.connection_id;
+    }
+    condition_.notify_all();
+
+    // This owner FIFO barrier follows both source and coordinator quiescence.
+    // MarketRuntime intentionally remains alive for acceptance snapshot
+    // capture.
+    return QuiescentAcceptanceCut{transport, runtime_.observe()};
+  }
+
 private:
   void coordinator_loop(std::stop_token stop_token) noexcept {
     std::uint64_t generation = 1U;
@@ -299,7 +350,6 @@ private:
 
         const auto start_result = attempt->start();
         if (stop_token.stop_requested()) {
-          static_cast<void>(quiesce_attempt(attempt));
           break;
         }
 
@@ -308,16 +358,23 @@ private:
           runtime_observation =
               runtime_.wait_until_live_or_recovery_required(stop_token);
           if (!runtime_observation.has_value()) {
-            static_cast<void>(quiesce_attempt(attempt));
             break;
           }
           if (runtime_observation->state == g3::RuntimeState::Live) {
-            mark_live(attempt->observe());
-            runtime_observation =
-                runtime_.wait_until_recovery_required(stop_token);
-            if (!runtime_observation.has_value()) {
-              static_cast<void>(quiesce_attempt(attempt));
-              break;
+            // terminal_failure() publishes the transport error before admitting
+            // the runtime fault. The FIFO barrier covers every earlier runtime
+            // admission; the following transport observation covers a terminal
+            // condition visible after that barrier. Anything later is a new
+            // post-cut failure.
+            const auto qualified_runtime = runtime_.observe();
+            const auto transport = attempt->observe();
+            if (try_mark_live(qualified_runtime, transport, generation,
+                              stop_token)) {
+              runtime_observation =
+                  runtime_.wait_until_recovery_required(stop_token);
+              if (!runtime_observation.has_value()) {
+                break;
+              }
             }
           }
         }
@@ -440,8 +497,25 @@ private:
     return transport;
   }
 
-  void mark_live(const g4::TransportObservation &transport) {
+  [[nodiscard]] bool try_mark_live(const g3::RuntimeObservation &runtime,
+                                   const g4::TransportObservation &transport,
+                                   std::uint64_t expected_generation,
+                                   std::stop_token stop_token) {
+    if (runtime.state != g3::RuntimeState::Live ||
+        runtime.projection_status != core::ProjectionStatus::Synchronized ||
+        runtime.fault_reason.has_value() || !transport.running ||
+        transport.stopped || transport.terminal_error.has_value() ||
+        !transport.websocket_handshake || !transport.rest_depth_fetched ||
+        transport.connection_generation != expected_generation ||
+        stop_token.stop_requested()) {
+      return false;
+    }
     std::lock_guard lock{mutex_};
+    if (stopped_ || observation_.terminal ||
+        observation_.state == RecoveryState::Stopping ||
+        stop_token.stop_requested()) {
+      return false;
+    }
     observation_.state = RecoveryState::Live;
     observation_.connection_generation = transport.connection_generation;
     observation_.connection_id = transport.connection_id;
@@ -449,6 +523,7 @@ private:
     observation_.in_backoff = false;
     observation_.terminal_error.reset();
     condition_.notify_all();
+    return true;
   }
 
   [[nodiscard]] bool wait_backoff(std::chrono::seconds delay,
@@ -516,6 +591,10 @@ RecoveryObservation SpotRecovery::wait_until_terminal() {
 
 bool SpotRecovery::request_controlled_recovery_for_acceptance() {
   return impl_->request_controlled_recovery_for_acceptance();
+}
+
+std::optional<QuiescentAcceptanceCut> SpotRecovery::quiesce_for_acceptance() {
+  return impl_->quiesce_for_acceptance();
 }
 
 } // namespace binance_market_data::gateway::g5

@@ -124,6 +124,8 @@ make_snapshot(std::uint64_t last_update_id, std::uint64_t generation) {
 
 enum class Action {
   Live,
+  LiveThenFailureAtCut,
+  LiveWithFailureOnStop,
   TransportFailure,
   SnapshotFailure,
   ProtocolFailure,
@@ -179,7 +181,15 @@ public:
     const auto base = generation_ * 100U;
     switch (action_) {
     case Action::Live:
+    case Action::LiveWithFailureOnStop:
       bootstrap(base);
+      return g4::TransportStartResult::Started;
+    case Action::LiveThenFailureAtCut:
+      bootstrap(base);
+      static_cast<void>(runtime_.observe());
+      set_error(g4::NetworkErrorCode::WebSocketRead, std::nullopt,
+                std::nullopt);
+      static_cast<void>(runtime_.submit_transport_failure());
       return g4::TransportStartResult::Started;
     case Action::NeedsResync:
       bootstrap(base);
@@ -251,8 +261,15 @@ public:
     }
     {
       std::lock_guard observation_lock{observation_mutex_};
+      if (action_ == Action::LiveWithFailureOnStop) {
+        set_error(g4::NetworkErrorCode::WebSocketRead, std::nullopt,
+                  std::nullopt);
+      }
       observation_.stopped = true;
       observation_.running = false;
+    }
+    if (action_ == Action::LiveWithFailureOnStop) {
+      static_cast<void>(runtime_.submit_transport_failure());
     }
     std::lock_guard lock{state_->mutex};
     state_->stopped_generations.push_back(generation_);
@@ -459,6 +476,74 @@ void success_resets_incident_counter() {
   recovery.stop();
 }
 
+void stale_live_does_not_reset_incident_counter() {
+  auto script = make_script(
+      {Action::TransportFailure, Action::LiveThenFailureAtCut, Action::Live});
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  g5::SpotRecovery recovery{runtime, fixed_clock(), script_options(script)};
+  REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+  const auto live = recovery.wait_for_generation_live(2U);
+  REQUIRE_EQ(live.state, g5::RecoveryState::Live);
+  REQUIRE_EQ(live.connection_generation, 3U);
+  REQUIRE_EQ(live.consecutive_recovery_attempts, 0U);
+  {
+    std::lock_guard lock{script->mutex};
+    REQUIRE_EQ(script->delays,
+               (std::vector<std::chrono::seconds>{std::chrono::seconds{1},
+                                                  std::chrono::seconds{2}}));
+    REQUIRE_EQ(script->created_generations,
+               (std::vector<std::uint64_t>{1U, 2U, 3U}));
+  }
+  recovery.stop();
+}
+
+void final_acceptance_failure_race_is_rejected() {
+  auto script = make_script({Action::LiveWithFailureOnStop});
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  g5::SpotRecovery recovery{runtime, fixed_clock(), script_options(script)};
+  REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+  REQUIRE_EQ(recovery.wait_for_generation_live(1U).state,
+             g5::RecoveryState::Live);
+
+  const auto cut = recovery.quiesce_for_acceptance();
+  REQUIRE(cut.has_value());
+  REQUIRE(cut->transport.stopped);
+  REQUIRE(!cut->transport.running);
+  REQUIRE(cut->transport.terminal_error.has_value());
+  REQUIRE_EQ(cut->runtime.state, g3::RuntimeState::Faulted);
+  REQUIRE_EQ(cut->runtime.fault_reason, g3::FaultReason::TransportFailure);
+  recovery.stop();
+}
+
+void final_acceptance_clean_cut_and_full_stop() {
+  auto script = make_script({Action::Live});
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  g5::SpotRecovery recovery{runtime, fixed_clock(), script_options(script)};
+  REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+  REQUIRE_EQ(recovery.wait_for_generation_live(1U).state,
+             g5::RecoveryState::Live);
+
+  const auto cut = recovery.quiesce_for_acceptance();
+  REQUIRE(cut.has_value());
+  REQUIRE(cut->transport.stopped);
+  REQUIRE(!cut->transport.running);
+  REQUIRE(!cut->transport.terminal_error.has_value());
+  REQUIRE(cut->transport.websocket_handshake);
+  REQUIRE(cut->transport.rest_depth_fetched);
+  REQUIRE_EQ(cut->transport.connection_generation, 1U);
+  REQUIRE_EQ(cut->runtime.state, g3::RuntimeState::Live);
+  REQUIRE_EQ(cut->runtime.projection_status,
+             core::ProjectionStatus::Synchronized);
+  REQUIRE(!cut->runtime.fault_reason.has_value());
+  REQUIRE(cut->runtime.last_update_id.has_value());
+  REQUIRE(
+      std::holds_alternative<g3::CapturedSnapshot>(runtime.capture_snapshot()));
+
+  recovery.stop();
+  REQUIRE_EQ(recovery.observe().state, g5::RecoveryState::Stopped);
+  REQUIRE_EQ(runtime.observe().state, g3::RuntimeState::Stopped);
+}
+
 void rate_limit_policy() {
   for (const auto &[action, expected_delay, expected_cause] :
        std::vector<std::tuple<Action, std::chrono::seconds, g5::RecoveryCause>>{
@@ -565,6 +650,12 @@ int main() {
       {"INGRESS_OVERFLOW_RECOVERY", ingress_overflow_recovery},
       {"NORMAL_BACKOFF_AND_MAX_ATTEMPT_EXHAUSTION", backoff_and_exhaustion},
       {"SUCCESS_RESETS_INCIDENT_COUNTER", success_resets_incident_counter},
+      {"STALE_LIVE_DOES_NOT_RESET_INCIDENT_COUNTER",
+       stale_live_does_not_reset_incident_counter},
+      {"FINAL_ACCEPTANCE_FAILURE_RACE_REJECTED",
+       final_acceptance_failure_race_is_rejected},
+      {"FINAL_ACCEPTANCE_CLEAN_CUT_AND_FULL_STOP",
+       final_acceptance_clean_cut_and_full_stop},
       {"HTTP_429_418_RETRY_AFTER", rate_limit_policy},
       {"BAD_RETRY_AFTER_HTTP_4XX_INTERNAL_FAIL_CLOSED",
        terminal_http_and_bad_retry_after},

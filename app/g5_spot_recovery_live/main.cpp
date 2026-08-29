@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <string_view>
 #include <thread>
 #include <variant>
@@ -162,16 +163,44 @@ int main() {
   const auto recovered_at = *runtime_observation.last_update_id;
   const bool recovered_post_live =
       wait_for_later_real_update(runtime, recovered_at);
-  const auto final_runtime = runtime.observe();
+  const auto final_cut =
+      recovered_post_live ? recovery.quiesce_for_acceptance() : std::nullopt;
+  if (!final_cut.has_value()) {
+    std::cerr << "CONTROLLED_REAL_RECOVERY=FAIL\n";
+    recovery.stop();
+    return EXIT_FAILURE;
+  }
+
+  const auto &final_transport = final_cut->transport;
+  const auto &final_runtime = final_cut->runtime;
+  const bool final_transport_clean =
+      final_transport.stopped && !final_transport.running &&
+      !final_transport.terminal_error.has_value() &&
+      final_transport.connection_generation == 2U &&
+      final_transport.connection_id == recovered.connection_id &&
+      final_transport.tls_verified && final_transport.websocket_handshake &&
+      final_transport.rest_depth_fetched &&
+      final_transport.depth_frame_count > 0U;
+  const bool final_runtime_live =
+      final_runtime.state == g3::RuntimeState::Live &&
+      final_runtime.projection_status == core::ProjectionStatus::Synchronized &&
+      !final_runtime.fault_reason.has_value() &&
+      final_runtime.last_update_id.has_value();
+  if (!final_transport_clean || !final_runtime_live) {
+    std::cerr << "CONTROLLED_REAL_RECOVERY=FAIL\n";
+    if (final_transport.terminal_error.has_value()) {
+      print_network_error(*final_transport.terminal_error);
+    }
+    recovery.stop();
+    return EXIT_FAILURE;
+  }
+
   const auto recovered_snapshot = runtime.capture_snapshot();
   const bool recovered_snapshot_valid =
       valid_owner_snapshot(recovered_snapshot);
-  const bool final_live =
-      final_runtime.state == g3::RuntimeState::Live &&
-      final_runtime.projection_status == core::ProjectionStatus::Synchronized;
   recovery.stop();
 
-  if (!recovered_post_live || !recovered_snapshot_valid || !final_live) {
+  if (!recovered_snapshot_valid) {
     std::cerr << "CONTROLLED_REAL_RECOVERY=FAIL\n";
     return EXIT_FAILURE;
   }
@@ -195,6 +224,13 @@ int main() {
             << "REAL_RECOVERY_FINAL_RUNTIME_STATE="
             << runtime_state(final_runtime.state) << '\n'
             << "REAL_POST_RECOVERY_UPDATE=PASS\n"
+            << "FINAL_RECOVERED_TRANSPORT_STOPPED=YES\n"
+            << "FINAL_RECOVERED_TRANSPORT_TERMINAL_ERROR=NO\n"
+            << "FINAL_RUNTIME_BARRIER_STATE="
+            << runtime_state(final_runtime.state) << '\n'
+            << "FINAL_RUNTIME_BARRIER_PROJECTION_STATUS="
+            << projection_status(final_runtime.projection_status) << '\n'
+            << "FINAL_RUNTIME_BARRIER_FAULT=NONE\n"
             << "REAL_POST_RECOVERY_OWNER_SNAPSHOT=PASS\n"
             << "MAX_ACTIVE_TRANSPORTS=" << recovered.max_active_transport_count
             << '\n'

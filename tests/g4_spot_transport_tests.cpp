@@ -2,12 +2,16 @@
 
 #include <boost/asio.hpp>
 
+#include <atomic>
+#include <barrier>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <future>
 #include <iostream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <variant>
 
 namespace {
@@ -111,10 +115,10 @@ clean_started_stop_has_no_false_failure(const g3::RuntimeClock &clock) {
   if (runtime.start() != g3::StartResult::Started) {
     return false;
   }
-  g4::SpotTransport transport{
-      runtime,
-      clock,
-      {g4::detail::TransportStopCutTestMode::CleanCancellation}};
+  g4::detail::TransportTestOptions options;
+  options.stop_cut_mode =
+      g4::detail::TransportStopCutTestMode::CleanCancellation;
+  g4::SpotTransport transport{runtime, clock, std::move(options)};
   if (transport.start() != g4::TransportStartResult::Started) {
     transport.stop();
     runtime.stop();
@@ -136,10 +140,10 @@ preexisting_failure_survives_stop_cut(const g3::RuntimeClock &clock) {
   if (runtime.start() != g3::StartResult::Started) {
     return false;
   }
-  g4::SpotTransport transport{
-      runtime,
-      clock,
-      {g4::detail::TransportStopCutTestMode::PreexistingFailure}};
+  g4::detail::TransportTestOptions options;
+  options.stop_cut_mode =
+      g4::detail::TransportStopCutTestMode::PreexistingFailure;
+  g4::SpotTransport transport{runtime, clock, std::move(options)};
   if (transport.start() != g4::TransportStartResult::Started) {
     transport.stop();
     runtime.stop();
@@ -164,6 +168,98 @@ preexisting_failure_survives_stop_cut(const g3::RuntimeClock &clock) {
          rejected;
 }
 
+[[nodiscard]] bool
+concurrent_stop_has_one_winner_and_waiter(const g3::RuntimeClock &clock) {
+  g3::MarketRuntime runtime{{4U, 4U}, clock, numeric_spec()};
+  if (runtime.start() != g3::StartResult::Started) {
+    return false;
+  }
+
+  std::promise<void> winner_entered;
+  auto winner_future = winner_entered.get_future();
+  std::promise<void> waiter_entered;
+  auto waiter_future = waiter_entered.get_future();
+  std::promise<void> release_winner;
+  auto release_future = release_winner.get_future().share();
+  g4::detail::TransportTestOptions options;
+  options.stop_cut_mode =
+      g4::detail::TransportStopCutTestMode::CleanCancellation;
+  options.stop_winner_gate = [&winner_entered, release_future] {
+    winner_entered.set_value();
+    release_future.wait();
+  };
+  options.stop_waiter_entered = [&waiter_entered] {
+    waiter_entered.set_value();
+  };
+
+  g4::SpotTransport transport{runtime, clock, std::move(options)};
+  if (transport.start() != g4::TransportStartResult::Started) {
+    transport.stop();
+    runtime.stop();
+    return false;
+  }
+
+  std::barrier callers_ready{3};
+  std::atomic<unsigned> returned{0U};
+  std::thread first{[&] {
+    callers_ready.arrive_and_wait();
+    transport.stop();
+    ++returned;
+  }};
+  std::thread second{[&] {
+    callers_ready.arrive_and_wait();
+    transport.stop();
+    ++returned;
+  }};
+  callers_ready.arrive_and_wait();
+  winner_future.wait();
+  waiter_future.wait();
+  release_winner.set_value();
+  first.join();
+  second.join();
+
+  const auto observation = transport.observe();
+  const auto runtime_observation = runtime.observe();
+  runtime.stop();
+  return returned.load() == 2U && observation.stopped && !observation.running &&
+         !observation.terminal_error.has_value() &&
+         !runtime_observation.fault_reason.has_value();
+}
+
+[[nodiscard]] bool
+start_pending_is_woken_by_stop(const g3::RuntimeClock &clock) {
+  g3::MarketRuntime runtime{{4U, 4U}, clock, numeric_spec()};
+  if (runtime.start() != g3::StartResult::Started) {
+    return false;
+  }
+
+  std::promise<void> start_pending;
+  auto pending_future = start_pending.get_future();
+  g4::detail::TransportTestOptions options;
+  options.stop_cut_mode =
+      g4::detail::TransportStopCutTestMode::StartPendingUntilStop;
+  options.start_pending = [&start_pending] { start_pending.set_value(); };
+  g4::SpotTransport transport{runtime, clock, std::move(options)};
+
+  std::promise<g4::TransportStartResult> start_result;
+  auto result_future = start_result.get_future();
+  std::thread starter{[&] { start_result.set_value(transport.start()); }};
+  pending_future.wait();
+  std::thread stopper{[&] { transport.stop(); }};
+  starter.join();
+  stopper.join();
+
+  const auto result = result_future.get();
+  const auto observation = transport.observe();
+  const auto runtime_observation = runtime.observe();
+  runtime.stop();
+  return result == g4::TransportStartResult::Stopped && observation.started &&
+         observation.stopped && !observation.running &&
+         !observation.websocket_handshake &&
+         !observation.terminal_error.has_value() &&
+         !runtime_observation.fault_reason.has_value();
+}
+
 } // namespace
 
 int main() {
@@ -184,6 +280,12 @@ int main() {
     return EXIT_FAILURE;
   }
   if (!preexisting_failure_survives_stop_cut(clock)) {
+    return EXIT_FAILURE;
+  }
+  if (!concurrent_stop_has_one_winner_and_waiter(clock)) {
+    return EXIT_FAILURE;
+  }
+  if (!start_pending_is_woken_by_stop(clock)) {
     return EXIT_FAILURE;
   }
 
@@ -218,6 +320,8 @@ int main() {
                "FINAL_ACCEPTANCE_REJECTION=PASS\n"
                "CLEAN_STARTED_STOP_NO_FALSE_FAILURE=PASS\n"
                "PREEXISTING_FAILURE_SURVIVES_STOP_CUT=PASS\n"
+               "CONCURRENT_STOP_WINNER_WAITER=PASS\n"
+               "START_PENDING_UNTIL_STOP=PASS\n"
                "EXPLICIT_GENERATION_IDENTITY=PASS\n"
                "CLEAN_TRANSPORT_STOP_CORE=PASS\n";
   return EXIT_SUCCESS;

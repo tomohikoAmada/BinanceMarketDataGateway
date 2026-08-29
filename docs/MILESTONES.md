@@ -88,8 +88,8 @@ observation and snapshot capture, and deterministic joined shutdown. G4 adds
 verified TLS Binance exchangeInfo/depth REST, raw Spot diff-depth WebSocket,
 strict transport JSON decoding, real receive timestamps, connection generation
 1 identity, authoritative NumericSpec derivation, and bounded real bootstrap
-through that runtime. Reconnect/recovery, planned rotation, gRPC, publication,
-and subscriptions are not implemented.
+through that runtime. Reconnect/recovery is implemented in G5; planned rotation,
+gRPC, publication, and subscriptions are not implemented.
 
 ## G0 — Repository Foundation
 

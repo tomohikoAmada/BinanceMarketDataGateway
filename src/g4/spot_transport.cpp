@@ -3,6 +3,8 @@
 #include "spot_protocol.hpp"
 
 #include <boost/asio.hpp>
+#include <boost/asio/bind_cancellation_slot.hpp>
+#include <boost/asio/cancellation_signal.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
@@ -645,6 +647,16 @@ public:
     if (timer_pending_) {
       timer_.cancel();
     }
+    try {
+      websocket::stream_base::timeout disabled_timeouts;
+      disabled_timeouts.handshake_timeout = websocket::stream_base::none();
+      disabled_timeouts.idle_timeout = websocket::stream_base::none();
+      disabled_timeouts.keep_alive_pings = false;
+      stream_.set_option(disabled_timeouts);
+    } catch (...) {
+      // Socket cancellation below remains the fail-closed teardown path.
+    }
+    read_cancellation_.emit(asio::cancellation_type::terminal);
     ErrorCode ignored;
     beast::get_lowest_layer(stream_).socket().cancel(ignored);
     beast::get_lowest_layer(stream_).socket().close(ignored);
@@ -752,55 +764,62 @@ private:
       return;
     }
     io_pending_ = true;
-    stream_.async_read(buffer_, [self = shared_from_this()](
-                                    const ErrorCode &error_code, std::size_t) {
-      self->io_pending_ = false;
-      if (self->done_) {
-        return;
-      }
-      if (error_code) {
-        if (is_clean_cancellation(error_code, self->cancel_requested_)) {
-          self->complete_cancelled_piece();
-        } else if (error_code == beast::error::timeout) {
-          self->fail(error_from_code(NetworkErrorCode::Timeout,
-                                     "websocket-idle", error_code));
-        } else {
-          self->fail(error_from_code(NetworkErrorCode::WebSocketRead,
-                                     "websocket-read", error_code));
-        }
-        return;
-      }
-      const bool retire_after_message = self->cancel_requested_;
-      g3::ClockSample received_at{};
-      try {
-        received_at = self->clock_();
-      } catch (const std::exception &failure) {
-        self->fail(network_error(NetworkErrorCode::Internal,
-                                 "websocket-receive-clock", failure.what()));
-        return;
-      } catch (...) {
-        self->fail(network_error(NetworkErrorCode::Internal,
-                                 "websocket-receive-clock",
-                                 "receive clock failed"));
-        return;
-      }
-      if (!self->stream_.got_text()) {
-        self->fail(network_error(NetworkErrorCode::Protocol, "websocket-frame",
-                                 "Binance raw stream returned binary data"));
-        return;
-      }
-      auto payload = beast::buffers_to_string(self->buffer_.data());
-      self->buffer_.consume(self->buffer_.size());
-      if (!self->callbacks_.message(std::move(payload), received_at)) {
-        self->retire_cleanly();
-        return;
-      }
-      if (retire_after_message) {
-        self->complete_cancelled_piece();
-        return;
-      }
-      self->read();
-    });
+    stream_.async_read(
+        buffer_,
+        asio::bind_cancellation_slot(
+            read_cancellation_.slot(),
+            [self = shared_from_this()](const ErrorCode &error_code,
+                                        std::size_t) {
+              self->io_pending_ = false;
+              if (self->done_) {
+                return;
+              }
+              if (error_code) {
+                if (is_clean_cancellation(error_code,
+                                          self->cancel_requested_)) {
+                  self->complete_cancelled_piece();
+                } else if (error_code == beast::error::timeout) {
+                  self->fail(error_from_code(NetworkErrorCode::Timeout,
+                                             "websocket-idle", error_code));
+                } else {
+                  self->fail(error_from_code(NetworkErrorCode::WebSocketRead,
+                                             "websocket-read", error_code));
+                }
+                return;
+              }
+              const bool retire_after_message = self->cancel_requested_;
+              g3::ClockSample received_at{};
+              try {
+                received_at = self->clock_();
+              } catch (const std::exception &failure) {
+                self->fail(network_error(NetworkErrorCode::Internal,
+                                         "websocket-receive-clock",
+                                         failure.what()));
+                return;
+              } catch (...) {
+                self->fail(network_error(NetworkErrorCode::Internal,
+                                         "websocket-receive-clock",
+                                         "receive clock failed"));
+                return;
+              }
+              if (!self->stream_.got_text()) {
+                self->fail(
+                    network_error(NetworkErrorCode::Protocol, "websocket-frame",
+                                  "Binance raw stream returned binary data"));
+                return;
+              }
+              auto payload = beast::buffers_to_string(self->buffer_.data());
+              self->buffer_.consume(self->buffer_.size());
+              if (!self->callbacks_.message(std::move(payload), received_at)) {
+                self->retire_cleanly();
+                return;
+              }
+              if (retire_after_message) {
+                self->complete_cancelled_piece();
+                return;
+              }
+              self->read();
+            }));
   }
 
   [[nodiscard]] bool handle_cancelled_io(const ErrorCode &error_code,
@@ -896,6 +915,7 @@ private:
   beast::flat_buffer buffer_;
   g3::RuntimeClock clock_;
   WebSocketCallbacks callbacks_;
+  asio::cancellation_signal read_cancellation_;
   std::uint64_t timeout_generation_{0U};
   std::size_t cancellation_completions_pending_{0U};
   bool io_pending_{false};
@@ -1047,6 +1067,9 @@ public:
         return;
       }
       if (stop_in_progress_) {
+        if (test_options_.stop_waiter_entered) {
+          test_options_.stop_waiter_entered();
+        }
         condition_.wait(lock, [this] { return observation_.stopped; });
         return;
       }
@@ -1056,6 +1079,9 @@ public:
       started = observation_.started;
     }
     condition_.notify_all();
+    if (test_options_.stop_winner_gate) {
+      test_options_.stop_winner_gate();
+    }
     if (started) {
       asio::post(context_, [this] { begin_clean_shutdown(); });
       if (network_thread_.joinable()) {
@@ -1092,6 +1118,13 @@ private:
                                        "test-clean-cancellation", error_code),
                        false);
     });
+    if (test_options_.stop_cut_mode ==
+        detail::TransportStopCutTestMode::StartPendingUntilStop) {
+      if (test_options_.start_pending) {
+        test_options_.start_pending();
+      }
+      return;
+    }
     {
       std::lock_guard lock{mutex_};
       observation_.tls_verified = true;
