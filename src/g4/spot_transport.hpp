@@ -107,6 +107,9 @@ class SpotTransport final {
 public:
   SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                 detail::TransportTestOptions test_options = {});
+  SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                std::uint64_t connection_generation,
+                detail::TransportTestOptions test_options = {});
   ~SpotTransport();
 
   SpotTransport(const SpotTransport &) = delete;

@@ -15,6 +15,8 @@ option(BMD_GATEWAY_BUILD_G3_RUNTIME
        "Build the serialized G3 MarketRuntime and focused tests" OFF)
 option(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT
        "Build the real G4 Binance Spot BTCUSDT transport and offline tests" OFF)
+option(BMD_GATEWAY_BUILD_G5_RECOVERY
+       "Build bounded G5 Spot reconnect/resync recovery and focused tests" OFF)
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
        "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
 option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
@@ -24,6 +26,11 @@ option(BMD_GATEWAY_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(BMD_GATEWAY_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 
 if(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT)
+    set(BMD_GATEWAY_BUILD_G3_RUNTIME ON)
+endif()
+
+if(BMD_GATEWAY_BUILD_G5_RECOVERY)
+    set(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT ON)
     set(BMD_GATEWAY_BUILD_G3_RUNTIME ON)
 endif()
 
@@ -347,6 +354,71 @@ if(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT)
         bmd_gateway_apply_sanitizers(bmd_gateway_g4_spot_transport_tests)
         add_test(NAME gateway_g4_spot_transport_tests
                  COMMAND bmd_gateway_g4_spot_transport_tests)
+    endif()
+endif()
+
+if(BMD_GATEWAY_BUILD_G5_RECOVERY)
+    add_library(bmd_gateway_g5_recovery
+        src/g5/spot_recovery.cpp
+    )
+    set_target_properties(
+        bmd_gateway_g5_recovery
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_g5_recovery
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g5
+    )
+    target_link_libraries(
+        bmd_gateway_g5_recovery
+        PUBLIC
+            bmd_gateway_g4_spot_transport
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g5_recovery)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g5_recovery)
+
+    add_executable(bmd-gateway-g5-spot-recovery-live
+        app/g5_spot_recovery_live/main.cpp
+    )
+    set_target_properties(
+        bmd-gateway-g5-spot-recovery-live
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_link_libraries(
+        bmd-gateway-g5-spot-recovery-live
+        PRIVATE
+            bmd_gateway_g5_recovery
+    )
+    bmd_gateway_apply_warnings(bmd-gateway-g5-spot-recovery-live)
+    bmd_gateway_apply_sanitizers(bmd-gateway-g5-spot-recovery-live)
+
+    if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_g5_recovery_tests
+            tests/g5_spot_recovery_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_g5_recovery_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g5_recovery_tests
+            PRIVATE
+                bmd_gateway_g5_recovery
+        )
+        bmd_gateway_apply_warnings(bmd_gateway_g5_recovery_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_g5_recovery_tests)
+        add_test(NAME gateway_g5_recovery_tests
+                 COMMAND bmd_gateway_g5_recovery_tests)
     endif()
 endif()
 

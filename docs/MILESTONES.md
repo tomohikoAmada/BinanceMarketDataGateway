@@ -7,9 +7,10 @@ checked for this checkpoint is Contracts
 `518880bdfa60948c3b65b6b3525d024526995166` and Projection
 `01a66aa80c764d2600da2cc309c0fd69655b55c`.
 
-The current implementation is G0, G1, GW-PREQ-002, G2, G3, and G4 complete. The
-deterministic synthetic host, serialized `MarketRuntime`, and first real Binance
-Spot BTCUSDT network/bootstrap runtime are implemented.
+The current implementation is G0, G1, GW-PREQ-002, G2, G3, G4, and G5 complete.
+The deterministic synthetic host, serialized `MarketRuntime`, first real Binance
+Spot BTCUSDT network/bootstrap runtime, and bounded reconnect/resync recovery are
+implemented.
 Historical G2/G3 attempts, including the deleted `feat/g2-deterministic-synthetic-host`
 branch and its recovery bundle, are not implementation authority. Historical PR #5 is
 retained only as a closed, not-merged, abandoned implementation attempt.
@@ -67,12 +68,15 @@ runtime framework.
 - `G2=COMPLETE`.
 - `G3=COMPLETE`.
 - `G4=COMPLETE`.
+- `G5=COMPLETE`.
 - `G2_SYNTHETIC_HOST_IMPLEMENTED=YES`.
 - `G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES`.
 - `CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES`.
 - `REAL_GATEWAY_NETWORK_RUNTIME_IMPLEMENTED=YES`.
 - `GATEWAY_NETWORK=SPOT_BTCUSDT_IMPLEMENTED`.
-- `NEXT=G5`.
+- `RECONNECT=IMPLEMENTED`.
+- `AUTOMATIC_RECOVERY=IMPLEMENTED`.
+- `NEXT=G6`.
 
 Gateway `main` currently has typed configuration, synchronous Foundation
 lifecycle, a daemon CLI that immediately starts and stops Foundation, Foundation
@@ -136,7 +140,7 @@ The normal graph is verified by
 `scripts/gw-preq-002-verify-graph.py`; its invariant is one Contracts message
 lineage plus Projection, with no Contracts gRPC package and no `grpc` package.
 
-`NEXT=G5`.
+`NEXT=G6`.
 
 ## G2 — Deterministic Synthetic Host
 
@@ -194,7 +198,11 @@ Projection has no escape hatch. Graceful stop drains finite admitted work in
 FIFO order unless a terminal fault forbids further mutation, signals shutdown
 outside the bounded data queue, and joins the owner.
 
-`NEXT=G5`.
+G3's ordinary standalone behavior remains fail-closed. G5 adds one blocking
+owner-domain rebootstrap control and stop-token-aware state waits; Projection
+reset still executes only on the original owner thread after the caller has
+quiesced the previous source generation. Lifetime ticket counters remain
+monotonic.
 
 ## G4 — Real Spot Transport and Bootstrap
 
@@ -237,16 +245,36 @@ stopped cleanly in the required local run.
 
 ## G5 — Reconnect / Resync / Recovery
 
-**STATUS=NOT_STARTED**
+**STATUS=COMPLETE**
 
-Handle WebSocket disconnect, Projection `NeedsResync`, REST snapshot failure,
-malformed transport input, bootstrap buffer overflow, and connection failure.
-Gateway owns recovery orchestration; Projection owns sequence/gap meaning.
-Recovery converges through the same conservative rebootstrap path.
+G5 implements one concrete Spot BTCUSDT lifecycle coordinator around one
+persistent `MarketRuntime`, private `BookProjection`, and owner thread. At most
+one `SpotTransport` is active. Every recoverable incident stops and joins the old
+transport, establishes the runtime owner barrier, waits interruptibly, resets
+through the owner domain, increments the nonzero connection generation, and
+re-enters the G4 WebSocket-buffer/REST-snapshot/Projection bootstrap path.
 
-Reconnect and snapshot reacquisition must be bounded and rate-limit-aware.
-Failure must not create an unbounded tight reconnect or REST retry loop. Observe
-applicable Binance 429/rate-limit behavior.
+Recoverable causes include disconnect/read and connection failures, idle
+timeouts, `serverShutdown`, REST snapshot failures and timeouts, transient 5xx,
+malformed transport payloads, ingress/bootstrap overflow, and Projection
+`NeedsResync`. Adapter, Projection-rejection, clock, internal invariant, HTTP
+403, and other HTTP 4xx failures are terminal. Gateway reacts to Projection
+status and runtime faults and has no second sequence classifier.
+
+Each incident permits six recovery attempts with deterministic delays of 1, 2,
+4, 8, 16, and 30 seconds and no jitter. A successful return to Live resets the
+incident counter. HTTP 429 and 418 require a strictly parsed nonnegative whole
+second `Retry-After`; the wait is the maximum of ordinary backoff and that value,
+and malformed or absent rate-limit guidance fails closed. Stop interrupts all
+backoff, including long IP-ban waits. The official Binance Spot authority was
+refreshed on 2026-08-29.
+
+The opt-in real G5 acceptance proved generation 1 Live, a controlled normal
+recovery cut, distinct generation 2 transport identity, fresh verified TLS
+WebSocket and REST bootstrap, Synchronized/Live Projection, a later real update,
+and owner-domain snapshot capture. Planned pre-24-hour rotation remains G6.
+
+`NEXT=G6`.
 
 ## G6 — Planned Connection Rotation
 

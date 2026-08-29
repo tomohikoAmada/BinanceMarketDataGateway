@@ -1,0 +1,203 @@
+#include "spot_protocol.hpp"
+#include "spot_recovery.hpp"
+
+#include <binance_market_data/projection/v1/projection_state/book_projection.hpp>
+
+#include <chrono>
+#include <cstdlib>
+#include <iostream>
+#include <string_view>
+#include <thread>
+#include <variant>
+
+namespace {
+
+namespace core = binance_market_data::projection::v1;
+namespace g3 = binance_market_data::gateway::g3;
+namespace g4 = binance_market_data::gateway::g4;
+namespace g5 = binance_market_data::gateway::g5;
+
+[[nodiscard]] std::string_view
+projection_status(core::ProjectionStatus status) {
+  switch (status) {
+  case core::ProjectionStatus::AwaitingBaseline:
+    return "AwaitingBaseline";
+  case core::ProjectionStatus::AwaitingBridge:
+    return "AwaitingBridge";
+  case core::ProjectionStatus::Synchronized:
+    return "Synchronized";
+  case core::ProjectionStatus::NeedsResync:
+    return "NeedsResync";
+  }
+  return "Unknown";
+}
+
+[[nodiscard]] std::string_view runtime_state(g3::RuntimeState state) {
+  switch (state) {
+  case g3::RuntimeState::Constructed:
+    return "Constructed";
+  case g3::RuntimeState::Buffering:
+    return "Buffering";
+  case g3::RuntimeState::AwaitingBridge:
+    return "AwaitingBridge";
+  case g3::RuntimeState::Live:
+    return "Live";
+  case g3::RuntimeState::NeedsResync:
+    return "NeedsResync";
+  case g3::RuntimeState::Faulted:
+    return "Faulted";
+  case g3::RuntimeState::Stopping:
+    return "Stopping";
+  case g3::RuntimeState::Stopped:
+    return "Stopped";
+  }
+  return "Unknown";
+}
+
+void print_network_error(const g4::NetworkError &error) {
+  std::cerr << "NETWORK_ERROR stage=" << error.stage
+            << " message=" << error.message;
+  if (error.http_status.has_value()) {
+    std::cerr << " http_status=" << *error.http_status;
+  }
+  if (error.retry_after.has_value()) {
+    std::cerr << " retry_after=" << *error.retry_after;
+  }
+  std::cerr << '\n';
+}
+
+[[nodiscard]] bool wait_for_later_real_update(g3::MarketRuntime &runtime,
+                                              std::uint64_t initial) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds{10};
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto observation = runtime.observe();
+    if (observation.state != g3::RuntimeState::Live) {
+      return false;
+    }
+    if (observation.last_update_id.has_value() &&
+        *observation.last_update_id > initial) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{25});
+  }
+  return false;
+}
+
+[[nodiscard]] bool valid_owner_snapshot(const g3::SnapshotResult &result) {
+  const auto *captured = std::get_if<g3::CapturedSnapshot>(&result);
+  return captured != nullptr && captured->snapshot.synchronized() &&
+         captured->snapshot.last_update_id() != 0U &&
+         captured->snapshot.symbol() == "BTCUSDT" &&
+         !captured->snapshot.bids().empty() &&
+         !captured->snapshot.asks().empty() &&
+         captured->captured_on_thread != std::this_thread::get_id();
+}
+
+} // namespace
+
+int main() {
+  const auto exchange_info = g4::fetch_exchange_info_https();
+  if (const auto *failure = std::get_if<g4::NetworkError>(&exchange_info)) {
+    print_network_error(*failure);
+    return EXIT_FAILURE;
+  }
+  const auto &exchange_response =
+      std::get<g4::ExchangeInfoResponse>(exchange_info);
+  const auto metadata = g4::parse_exchange_info(exchange_response.body);
+  if (const auto *failure = std::get_if<g4::ProtocolError>(&metadata)) {
+    std::cerr << "EXCHANGE_INFO_PARSE=FAIL field=" << failure->field
+              << " message=" << failure->message << '\n';
+    return EXIT_FAILURE;
+  }
+  const auto &spot = std::get<g4::SpotMetadata>(metadata);
+
+  g3::RuntimeClock clock = g4::sample_real_clock;
+  g3::MarketRuntime runtime{{256U, 256U}, clock, spot.numeric_spec};
+  g5::SpotRecovery recovery{runtime, clock};
+  if (recovery.start() != g5::RecoveryStartResult::Started) {
+    std::cerr << "G5_RECOVERY_START=FAIL\n";
+    return EXIT_FAILURE;
+  }
+
+  const auto initial = recovery.wait_for_generation_live(1U);
+  if (initial.state != g5::RecoveryState::Live || initial.terminal ||
+      initial.connection_generation != 1U) {
+    if (initial.terminal_error.has_value()) {
+      print_network_error(*initial.terminal_error);
+    }
+    recovery.stop();
+    return EXIT_FAILURE;
+  }
+  auto runtime_observation = runtime.observe();
+  if (!runtime_observation.last_update_id.has_value()) {
+    recovery.stop();
+    return EXIT_FAILURE;
+  }
+  const auto initial_snapshot = runtime.capture_snapshot();
+  const bool initial_post_live =
+      wait_for_later_real_update(runtime, *runtime_observation.last_update_id);
+  if (!valid_owner_snapshot(initial_snapshot) || !initial_post_live ||
+      !recovery.request_controlled_recovery_for_acceptance()) {
+    std::cerr << "REAL_INITIAL_GENERATION=FAIL\n";
+    recovery.stop();
+    return EXIT_FAILURE;
+  }
+
+  const auto recovered = recovery.wait_for_generation_live(2U);
+  if (recovered.state != g5::RecoveryState::Live || recovered.terminal ||
+      recovered.connection_generation != 2U ||
+      recovered.connection_id == initial.connection_id) {
+    if (recovered.terminal_error.has_value()) {
+      print_network_error(*recovered.terminal_error);
+    }
+    recovery.stop();
+    return EXIT_FAILURE;
+  }
+  runtime_observation = runtime.observe();
+  if (!runtime_observation.last_update_id.has_value()) {
+    recovery.stop();
+    return EXIT_FAILURE;
+  }
+  const auto recovered_at = *runtime_observation.last_update_id;
+  const bool recovered_post_live =
+      wait_for_later_real_update(runtime, recovered_at);
+  const auto final_runtime = runtime.observe();
+  const auto recovered_snapshot = runtime.capture_snapshot();
+  const bool recovered_snapshot_valid =
+      valid_owner_snapshot(recovered_snapshot);
+  const bool final_live =
+      final_runtime.state == g3::RuntimeState::Live &&
+      final_runtime.projection_status == core::ProjectionStatus::Synchronized;
+  recovery.stop();
+
+  if (!recovered_post_live || !recovered_snapshot_valid || !final_live) {
+    std::cerr << "CONTROLLED_REAL_RECOVERY=FAIL\n";
+    return EXIT_FAILURE;
+  }
+
+  std::cout << "EXCHANGE_INFO_FETCH=PASS\n"
+            << "TLS_VERIFY="
+            << (exchange_response.tls_verified ? "PASS" : "FAIL") << '\n'
+            << "REAL_INITIAL_GENERATION=PASS\n"
+            << "REAL_INITIAL_GENERATION_ID=1\n"
+            << "REAL_INITIAL_CONNECTION_ID=" << initial.connection_id << '\n'
+            << "REAL_INITIAL_POST_LIVE_UPDATE=PASS\n"
+            << "REAL_INITIAL_OWNER_SNAPSHOT=PASS\n"
+            << "CONTROLLED_REAL_RECOVERY=PASS\n"
+            << "REAL_RECOVERED_GENERATION=2\n"
+            << "REAL_RECOVERED_CONNECTION_ID=" << recovered.connection_id
+            << '\n'
+            << "REAL_CONNECTION_ID_CHANGED=YES\n"
+            << "REAL_RECOVERY_BOOTSTRAP=PASS\n"
+            << "REAL_RECOVERY_FINAL_PROJECTION_STATUS="
+            << projection_status(final_runtime.projection_status) << '\n'
+            << "REAL_RECOVERY_FINAL_RUNTIME_STATE="
+            << runtime_state(final_runtime.state) << '\n'
+            << "REAL_POST_RECOVERY_UPDATE=PASS\n"
+            << "REAL_POST_RECOVERY_OWNER_SNAPSHOT=PASS\n"
+            << "MAX_ACTIVE_TRANSPORTS=" << recovered.max_active_transport_count
+            << '\n'
+            << "REAL_RATE_LIMIT_ABUSE_ATTEMPTED=NO\n";
+  return EXIT_SUCCESS;
+}

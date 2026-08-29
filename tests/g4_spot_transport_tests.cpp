@@ -189,13 +189,21 @@ int main() {
 
   g3::MarketRuntime runtime{{4U, 4U}, clock, numeric_spec()};
   g4::SpotTransport transport{runtime, clock};
+  g4::SpotTransport next_transport{runtime, clock, 2U};
 
   const auto before = transport.observe();
   if (before.started || before.running || before.stopped ||
       before.connection_generation != 1U || before.connection_id.empty()) {
     return EXIT_FAILURE;
   }
+  const auto next_before = next_transport.observe();
+  if (next_before.connection_generation != 2U ||
+      next_before.connection_id.empty() ||
+      next_before.connection_id == before.connection_id) {
+    return EXIT_FAILURE;
+  }
   transport.stop();
+  next_transport.stop();
   transport.stop();
   const auto after = transport.observe();
   if (!after.stopped || after.running || after.started ||
@@ -210,6 +218,7 @@ int main() {
                "FINAL_ACCEPTANCE_REJECTION=PASS\n"
                "CLEAN_STARTED_STOP_NO_FALSE_FAILURE=PASS\n"
                "PREEXISTING_FAILURE_SURVIVES_STOP_CUT=PASS\n"
+               "EXPLICIT_GENERATION_IDENTITY=PASS\n"
                "CLEAN_TRANSPORT_STOP_CORE=PASS\n";
   return EXIT_SUCCESS;
 }

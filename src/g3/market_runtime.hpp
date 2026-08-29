@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stop_token>
 #include <thread>
 #include <variant>
 
@@ -90,7 +91,21 @@ struct RuntimeObservation final {
   std::size_t bootstrap_occupancy{0U};
   std::size_t bootstrap_capacity{0U};
   std::thread::id owner_thread_id;
+  std::thread::id last_reset_thread_id;
+  std::uint64_t reset_count{0U};
+  std::uint64_t last_admitted_ticket{0U};
+  std::uint64_t processed_ticket{0U};
   bool owner_joined{false};
+};
+
+enum class RebootstrapResetResult : std::uint8_t {
+  Reset,
+  NotStarted,
+  InvalidState,
+  Busy,
+  Stopping,
+  Stopped,
+  InternalError,
 };
 
 enum class SnapshotRequestError : std::uint8_t {
@@ -148,6 +163,20 @@ public:
   // source events. Returned Projection-derived state is an owning copy.
   [[nodiscard]] RuntimeObservation observe();
   [[nodiscard]] SnapshotResult capture_snapshot();
+
+  // The caller must first establish a no-future-submission cut for the old
+  // source generation. In G5 that means stopping and joining SpotTransport,
+  // then establishing an observe() barrier. Projection reset executes only on
+  // the existing serialized owner thread. Lifetime ticket counters remain
+  // monotonic.
+  [[nodiscard]] RebootstrapResetResult reset_for_rebootstrap();
+
+  // Blocking state waits used by the G5 lifecycle coordinator. A requested
+  // stop returns std::nullopt without manufacturing a runtime fault.
+  [[nodiscard]] std::optional<RuntimeObservation>
+  wait_until_live_or_recovery_required(std::stop_token stop_token);
+  [[nodiscard]] std::optional<RuntimeObservation>
+  wait_until_recovery_required(std::stop_token stop_token);
 
   [[nodiscard]] IngressObservation ingress_observation() const noexcept;
 

@@ -7,15 +7,15 @@ Read in this order before making Gateway changes:
 3. [ARCHITECTURE.md](ARCHITECTURE.md)
 4. milestone-specific evidence as needed
 
-G0, G1, GW-PREQ-002, G2, G3, and G4 are complete. The deterministic G2
-synthetic host, serialized G3 `MarketRuntime`, and real G4 Binance Spot BTCUSDT
-transport/bootstrap are implemented. Keep Phase A small and independently
-buildable.
+G0, G1, GW-PREQ-002, G2, G3, G4, and G5 are complete. The deterministic G2
+synthetic host, serialized G3 `MarketRuntime`, real G4 Binance Spot BTCUSDT
+transport/bootstrap, and bounded G5 reconnect/resync recovery are implemented.
+Keep Phase A small and independently buildable.
 
 This repository contains the G0 foundation, frozen G1 proof, deterministic G2
-synthetic host, serialized G3 runtime, and real G4 Spot transport; future runtime
-work follows the milestone authority. Keep Phase A small and independently
-buildable.
+synthetic host, serialized G3 runtime, real G4 Spot transport, and G5 recovery;
+future runtime work follows the milestone authority. Keep Phase A small and
+independently buildable.
 
 ## Boundaries
 
@@ -31,8 +31,11 @@ buildable.
   classifier, storage, event bus, DI, plugins, or generic runtime framework.
 - G4 is exactly Binance Spot BTCUSDT, has one networking I/O thread and one
   connection generation, and drives Projection only through G3's bounded owner
-  boundary. It has no reconnect, automatic recovery, planned rotation, gRPC,
-  publication, or subscriptions.
+  boundary. As an independently usable milestone it remains one-shot.
+- G5 retains one MarketRuntime/Projection owner, allows at most one active Spot
+  transport, quiesces the old network thread before owner-domain reset, and uses
+  bounded interruptible rate-limit-aware recovery. It has no second sequence
+  classifier, planned rotation, gRPC, publication, or subscriptions.
 - Do not copy Contracts `.proto` files or introduce floating FetchContent dependencies.
 
 ## Phase A implementation rules

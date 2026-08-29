@@ -7,6 +7,7 @@
 #include <functional>
 #include <iostream>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -461,6 +462,61 @@ void snapshot_exception_classification() {
           g3::SnapshotRequestError::ClockError);
 }
 
+void owner_domain_rebootstrap_reset() {
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  bootstrap_live(runtime);
+  REQUIRE_EQ(runtime.submit_depth_update(make_update(103U, 103U, "6.000")),
+             g3::AdmissionResult::Accepted);
+  const auto faulted = runtime.observe();
+  REQUIRE_EQ(faulted.state, g3::RuntimeState::NeedsResync);
+  REQUIRE(faulted.last_gap.has_value());
+
+  REQUIRE_EQ(runtime.reset_for_rebootstrap(),
+             g3::RebootstrapResetResult::Reset);
+  const auto reset = runtime.observe();
+  REQUIRE_EQ(reset.state, g3::RuntimeState::Buffering);
+  REQUIRE_EQ(reset.projection_status, core::ProjectionStatus::AwaitingBaseline);
+  REQUIRE_EQ(reset.owner_thread_id, faulted.owner_thread_id);
+  REQUIRE_EQ(reset.last_reset_thread_id, reset.owner_thread_id);
+  REQUIRE(reset.last_reset_thread_id != std::this_thread::get_id());
+  REQUIRE_EQ(reset.reset_count, 1U);
+  REQUIRE(!reset.last_gap.has_value());
+  REQUIRE(!reset.last_install.has_value());
+  REQUIRE(!reset.last_apply.has_value());
+  REQUIRE(!reset.adapter_error.has_value());
+  REQUIRE(!reset.fault_reason.has_value());
+  REQUIRE(!reset.last_update_id.has_value());
+  REQUIRE(reset.last_admitted_ticket >= faulted.last_admitted_ticket);
+  REQUIRE(reset.processed_ticket >= faulted.processed_ticket);
+
+  REQUIRE_EQ(runtime.submit_depth_update(make_update(201U, 201U, "7.000")),
+             g3::AdmissionResult::Accepted);
+  REQUIRE_EQ(runtime.submit_snapshot(make_snapshot(200U)),
+             g3::AdmissionResult::Accepted);
+  require_live_at(runtime, 201U);
+  const auto live_again = runtime.observe();
+  REQUIRE(live_again.last_admitted_ticket > faulted.last_admitted_ticket);
+  REQUIRE(live_again.processed_ticket > faulted.processed_ticket);
+  REQUIRE_EQ(runtime.reset_for_rebootstrap(),
+             g3::RebootstrapResetResult::InvalidState);
+}
+
+void direct_needs_resync_wait() {
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  bootstrap_live(runtime);
+  std::stop_source stop_source;
+  std::optional<g3::RuntimeObservation> waited;
+  std::thread waiter{[&] {
+    waited = runtime.wait_until_recovery_required(stop_source.get_token());
+  }};
+  REQUIRE_EQ(runtime.submit_depth_update(make_update(103U, 103U, "6.000")),
+             g3::AdmissionResult::Accepted);
+  waiter.join();
+  REQUIRE(waited.has_value());
+  REQUIRE_EQ(waited->state, g3::RuntimeState::NeedsResync);
+  REQUIRE_EQ(waited->projection_status, core::ProjectionStatus::NeedsResync);
+}
+
 } // namespace
 
 int main() {
@@ -483,6 +539,8 @@ int main() {
       {"DESTRUCTOR_SAFETY", destructor_safety},
       {"INJECTED_REAL_NUMERIC_SPEC", injected_real_numeric_spec},
       {"SNAPSHOT_EXCEPTION_CLASSIFICATION", snapshot_exception_classification},
+      {"OWNER_DOMAIN_REBOOTSTRAP_RESET", owner_domain_rebootstrap_reset},
+      {"DIRECT_NEEDS_RESYNC_WAIT", direct_needs_resync_wait},
   };
 
   for (const auto &[name, test] : tests) {

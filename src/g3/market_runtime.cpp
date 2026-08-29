@@ -166,6 +166,68 @@ public:
       });
     }
     observation_.ingress_occupancy = ingress_.size();
+    publish_tickets_locked();
+    return observation_;
+  }
+
+  [[nodiscard]] RebootstrapResetResult reset_for_rebootstrap() {
+    std::unique_lock lock{mutex_};
+    if (stopped_) {
+      return RebootstrapResetResult::Stopped;
+    }
+    if (!started_) {
+      return RebootstrapResetResult::NotStarted;
+    }
+    if (stop_requested_) {
+      return RebootstrapResetResult::Stopping;
+    }
+    if (observation_.state != RuntimeState::Faulted &&
+        observation_.state != RuntimeState::NeedsResync) {
+      return RebootstrapResetResult::InvalidState;
+    }
+    if (reset_request_.has_value()) {
+      return RebootstrapResetResult::Busy;
+    }
+
+    reset_request_.emplace(last_admitted_ticket_);
+    condition_.notify_all();
+    condition_.wait(lock, [this] {
+      return reset_request_->result.has_value() || stopped_;
+    });
+    if (!reset_request_->result.has_value()) {
+      reset_request_.reset();
+      return RebootstrapResetResult::Stopped;
+    }
+    const auto result = *reset_request_->result;
+    reset_request_.reset();
+    condition_.notify_all();
+    return result;
+  }
+
+  [[nodiscard]] std::optional<RuntimeObservation>
+  wait_until_live_or_recovery_required(std::stop_token stop_token) {
+    std::unique_lock lock{mutex_};
+    const auto ready = condition_.wait(lock, stop_token, [this] {
+      return observation_.state == RuntimeState::Live ||
+             recovery_required_locked() || stop_requested_ || stopped_;
+    });
+    if (!ready || stop_token.stop_requested()) {
+      return std::nullopt;
+    }
+    publish_tickets_locked();
+    return observation_;
+  }
+
+  [[nodiscard]] std::optional<RuntimeObservation>
+  wait_until_recovery_required(std::stop_token stop_token) {
+    std::unique_lock lock{mutex_};
+    const auto ready = condition_.wait(lock, stop_token, [this] {
+      return recovery_required_locked() || stop_requested_ || stopped_;
+    });
+    if (!ready || stop_token.stop_requested()) {
+      return std::nullopt;
+    }
+    publish_tickets_locked();
     return observation_;
   }
 
@@ -225,6 +287,13 @@ private:
     std::optional<SnapshotResult> result;
   };
 
+  struct ResetRequest final {
+    explicit ResetRequest(std::uint64_t target_value) : target{target_value} {}
+
+    std::uint64_t target;
+    std::optional<RebootstrapResetResult> result;
+  };
+
   void owner_loop() noexcept {
     {
       std::lock_guard lock{mutex_};
@@ -238,6 +307,7 @@ private:
     for (;;) {
       std::optional<IngressItem> item;
       bool perform_snapshot = false;
+      bool perform_reset = false;
       std::optional<FaultReason> pending_fault;
       {
         std::unique_lock lock{mutex_};
@@ -248,8 +318,8 @@ private:
           if (owner_paused_) {
             return false;
           }
-          return pending_fault_.has_value() || snapshot_ready_locked() ||
-                 !ingress_.empty();
+          return pending_fault_.has_value() || reset_ready_locked() ||
+                 snapshot_ready_locked() || !ingress_.empty();
         });
 
         if (!stop_requested_ && owner_paused_) {
@@ -258,6 +328,8 @@ private:
         if (pending_fault_.has_value()) {
           pending_fault = pending_fault_;
           pending_fault_.reset();
+        } else if (reset_ready_locked()) {
+          perform_reset = true;
         } else if (snapshot_ready_locked()) {
           perform_snapshot = true;
         } else if (!ingress_.empty()) {
@@ -271,6 +343,10 @@ private:
 
       if (pending_fault.has_value()) {
         transition_to_fault(*pending_fault, std::nullopt);
+        continue;
+      }
+      if (perform_reset) {
+        perform_reset_request();
         continue;
       }
       if (perform_snapshot) {
@@ -297,6 +373,9 @@ private:
           !snapshot_request_->result.has_value()) {
         snapshot_request_->result = SnapshotRequestError::Stopped;
       }
+      if (reset_request_.has_value() && !reset_request_->result.has_value()) {
+        reset_request_->result = RebootstrapResetResult::Stopped;
+      }
     }
     condition_.notify_all();
   }
@@ -305,6 +384,58 @@ private:
     return snapshot_request_.has_value() &&
            !snapshot_request_->result.has_value() &&
            processed_ticket_ >= snapshot_request_->target;
+  }
+
+  [[nodiscard]] bool reset_ready_locked() const noexcept {
+    return reset_request_.has_value() && !reset_request_->result.has_value() &&
+           processed_ticket_ >= reset_request_->target;
+  }
+
+  [[nodiscard]] bool recovery_required_locked() const noexcept {
+    return observation_.state == RuntimeState::Faulted ||
+           observation_.state == RuntimeState::NeedsResync ||
+           observation_.state == RuntimeState::Stopping ||
+           observation_.state == RuntimeState::Stopped;
+  }
+
+  void publish_tickets_locked() noexcept {
+    observation_.last_admitted_ticket = last_admitted_ticket_;
+    observation_.processed_ticket = processed_ticket_;
+  }
+
+  void perform_reset_request() noexcept {
+    auto result = RebootstrapResetResult::Reset;
+    try {
+      projection_.reset();
+      bootstrap_.clear();
+      std::lock_guard lock{mutex_};
+      observation_.last_gap.reset();
+      observation_.last_install.reset();
+      observation_.last_apply.reset();
+      observation_.adapter_error.reset();
+      observation_.fault_reason.reset();
+      observation_.last_update_id.reset();
+      observation_.bootstrap_occupancy = 0U;
+      observation_.last_reset_thread_id = std::this_thread::get_id();
+      ++observation_.reset_count;
+      refresh_projection_observation_locked();
+      observation_.state = RuntimeState::Buffering;
+      accepting_ = true;
+      publish_tickets_locked();
+    } catch (...) {
+      result = RebootstrapResetResult::InternalError;
+      std::lock_guard lock{mutex_};
+      accepting_ = false;
+      observation_.fault_reason = FaultReason::InternalError;
+      observation_.state = RuntimeState::Faulted;
+    }
+    {
+      std::lock_guard lock{mutex_};
+      if (reset_request_.has_value()) {
+        reset_request_->result = result;
+      }
+    }
+    condition_.notify_all();
   }
 
   void process_input(RuntimeInput &input) {
@@ -532,10 +663,11 @@ private:
   std::deque<market::DepthUpdate> bootstrap_;
 
   mutable std::mutex mutex_;
-  std::condition_variable condition_;
+  std::condition_variable_any condition_;
   std::deque<IngressItem> ingress_;
   std::optional<FaultReason> pending_fault_;
   std::optional<SnapshotRequest> snapshot_request_;
+  std::optional<ResetRequest> reset_request_;
   RuntimeObservation observation_;
   std::thread owner_;
   std::uint64_t last_admitted_ticket_{0U};
@@ -581,6 +713,21 @@ RuntimeObservation MarketRuntime::observe() { return impl_->observe(); }
 
 SnapshotResult MarketRuntime::capture_snapshot() {
   return impl_->capture_snapshot();
+}
+
+RebootstrapResetResult MarketRuntime::reset_for_rebootstrap() {
+  return impl_->reset_for_rebootstrap();
+}
+
+std::optional<RuntimeObservation>
+MarketRuntime::wait_until_live_or_recovery_required(
+    std::stop_token stop_token) {
+  return impl_->wait_until_live_or_recovery_required(stop_token);
+}
+
+std::optional<RuntimeObservation>
+MarketRuntime::wait_until_recovery_required(std::stop_token stop_token) {
+  return impl_->wait_until_recovery_required(stop_token);
 }
 
 IngressObservation MarketRuntime::ingress_observation() const noexcept {

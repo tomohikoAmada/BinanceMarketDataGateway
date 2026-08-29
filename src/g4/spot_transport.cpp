@@ -988,16 +988,22 @@ bool detail::live_acceptance_ready(
 class SpotTransport::Impl final {
 public:
   Impl(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+       std::uint64_t connection_generation,
        detail::TransportTestOptions test_options)
       : runtime_{runtime}, clock_{std::move(clock)},
         tls_context_{ssl::context::tls_client}, test_options_{test_options} {
     if (!clock_) {
       throw std::invalid_argument{"G4 transport clock must be injected"};
     }
+    if (connection_generation == 0U) {
+      throw std::invalid_argument{"G4 connection generation must be nonzero"};
+    }
     configure_ssl_context(tls_context_);
     const auto opened_at = clock_();
-    observation_.connection_id =
-        "binance-spot-btcusdt-g1-" + std::to_string(opened_at.utc_ns);
+    observation_.connection_generation = connection_generation;
+    observation_.connection_id = "binance-spot-btcusdt-g" +
+                                 std::to_string(connection_generation) + "-" +
+                                 std::to_string(opened_at.utc_ns);
   }
 
   ~Impl() { stop(); }
@@ -1023,8 +1029,12 @@ public:
     });
     condition_.wait(lock, [this] {
       return observation_.websocket_handshake ||
-             observation_.terminal_error.has_value();
+             observation_.terminal_error.has_value() || observation_.stopped ||
+             stop_requested_;
     });
+    if (observation_.stopped || stop_requested_) {
+      return TransportStartResult::Stopped;
+    }
     return observation_.websocket_handshake ? TransportStartResult::Started
                                             : TransportStartResult::Failed;
   }
@@ -1032,10 +1042,15 @@ public:
   void stop() noexcept {
     bool started = false;
     {
-      std::lock_guard lock{mutex_};
+      std::unique_lock lock{mutex_};
       if (observation_.stopped) {
         return;
       }
+      if (stop_in_progress_) {
+        condition_.wait(lock, [this] { return observation_.stopped; });
+        return;
+      }
+      stop_in_progress_ = true;
       stop_requested_ = true;
       observation_.running = false;
       started = observation_.started;
@@ -1055,6 +1070,7 @@ public:
       std::lock_guard lock{mutex_};
       observation_.stopped = true;
       observation_.running = false;
+      stop_in_progress_ = false;
     }
     condition_.notify_all();
   }
@@ -1282,12 +1298,19 @@ private:
   std::condition_variable condition_;
   TransportObservation observation_;
   bool stop_requested_{false};
+  bool stop_in_progress_{false};
   bool network_clean_cancel_requested_{false};
 };
 
 SpotTransport::SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                              detail::TransportTestOptions test_options)
-    : impl_{std::make_unique<Impl>(runtime, std::move(clock), test_options)} {}
+    : SpotTransport(runtime, std::move(clock), 1U, test_options) {}
+
+SpotTransport::SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                             std::uint64_t connection_generation,
+                             detail::TransportTestOptions test_options)
+    : impl_{std::make_unique<Impl>(runtime, std::move(clock),
+                                   connection_generation, test_options)} {}
 
 SpotTransport::~SpotTransport() = default;
 

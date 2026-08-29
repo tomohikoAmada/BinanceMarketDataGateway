@@ -9,18 +9,19 @@ G1=COMPLETE
 G2=COMPLETE
 G3=COMPLETE
 G4=COMPLETE
+G5=COMPLETE
 G2_SYNTHETIC_HOST_IMPLEMENTED=YES
 G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES
 CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES
 REAL_GATEWAY_NETWORK_RUNTIME_IMPLEMENTED=YES
 GATEWAY_NETWORK=SPOT_BTCUSDT_IMPLEMENTED
-RECONNECT=NOT_IMPLEMENTED
-AUTOMATIC_RECOVERY=NOT_IMPLEMENTED
+RECONNECT=IMPLEMENTED
+AUTOMATIC_RECOVERY=IMPLEMENTED
 PLANNED_ROTATION=NOT_IMPLEMENTED
 GATEWAY_GRPC_BUSINESS_FLOW=NOT_IMPLEMENTED
 RECORDER_DEPENDENCY=NO
 GW-PREQ-002=COMPLETE
-NEXT=G5
+NEXT=G6
 FIRST_RUNNABLE=G2
 FIRST_REAL_NETWORK=G4
 FIRST_GRPC=G7
@@ -49,18 +50,31 @@ Gateway `main` currently contains:
   derivation, verified TLS REST and raw diff-depth WebSocket transport, real
   receive timestamps, connection generation 1 identity, bounded bootstrap
   through `MarketRuntime`/Projection, server ping handling, and deterministic
-  clean stop.
+  clean stop; and
+- the opt-in G5 Spot BTCUSDT recovery coordinator, which preserves one
+  `MarketRuntime`/private Projection owner across break-before-make connection
+  generations, resets Projection only through the owner domain after the old
+  transport joins, detects `NeedsResync` without polling, and applies bounded,
+  interruptible, rate-limit-aware recovery.
 
-There is no reconnect/recovery runtime, planned connection rotation, gRPC
-server, publication queue, or subscription runtime. G4 makes one startup attempt
-and fails closed on transport, parser, snapshot, bounded-admission, or Projection
-failure. Historical G2/G3 implementation attempts are abandoned and are not
-authority for the current implementation.
+There is no planned connection rotation, gRPC server, publication queue, or
+subscription runtime. G4 remains independently usable as a one-shot transport.
+G5 recovers transport, snapshot, malformed-input, bounded-admission, bootstrap
+overflow, `serverShutdown`, and Projection `NeedsResync` failures through a new
+connection and the same conservative bootstrap path. Internal adapter,
+Projection-rejection, clock, and invariant failures remain terminal. Historical
+G2/G3 implementation attempts are abandoned and are not authority for the
+current implementation.
 
 The completed G2 host remains a separate direct-Projection milestone proof. G3
 remains independently testable without transport and accepts deterministic
 in-memory Contracts messages and synthetic fault events. G4 is the first real
 network milestone and drives G3 only through its bounded serialized boundary.
+G5 adds no sequence classifier: Projection remains the sole owner of continuity
+meaning. Recovery permits at most six consecutive attempts with deterministic
+delays of 1, 2, 4, 8, 16, and 30 seconds. HTTP 429/418 additionally require a
+strict valid `Retry-After`, which is never capped downward; stop interrupts the
+wait.
 
 G0 acceptance and the frozen G1 candidate dependency proof do not establish a
 formal upstream release. G1 must not be continuously repinned. GW-PREQ-002 is
@@ -71,7 +85,7 @@ without Contracts gRPC or `grpc`. The historical four-target proof uses
 
 Projection remains the owner of numeric semantics, order-book state, sequence and
 gap classification, lifecycle, reset/resync, ProtoAdapter, and snapshot
-construction. Gateway's future recovery, bounded publication, and gRPC
+construction. Gateway's future planned rotation, bounded publication, and gRPC
 responsibilities are defined in the milestone authority.
 
 The [2026-08-23 handoff](HANDOFF_2026-08-23.md) is historical provenance, not
