@@ -163,7 +163,10 @@ public:
        detail::RecoveryTestOptions test_options)
       : runtime_{runtime}, clock_{std::move(clock)},
         attempt_factory_{std::move(test_options.attempt_factory)},
-        backoff_waiter_{std::move(test_options.backoff_waiter)} {
+        backoff_waiter_{std::move(test_options.backoff_waiter)},
+        lifecycle_shutdown_established_{
+            std::move(test_options.lifecycle_shutdown_established)},
+        before_backoff_commit_{std::move(test_options.before_backoff_commit)} {
     if (!clock_) {
       throw std::invalid_argument{"G5 recovery clock must be injected"};
     }
@@ -208,11 +211,14 @@ public:
   }
 
   void stop() noexcept {
+    bool newly_requested = false;
     {
       std::lock_guard lock{mutex_};
       if (stopped_) {
         return;
       }
+      newly_requested = !shutdown_requested_;
+      shutdown_requested_ = true;
       if (!started_) {
         stopped_ = true;
         observation_.state = RecoveryState::Stopped;
@@ -231,6 +237,9 @@ public:
       std::lock_guard lock{attempt_mutex_};
       attempt = active_attempt_;
     }
+    if (newly_requested && lifecycle_shutdown_established_) {
+      lifecycle_shutdown_established_();
+    }
     if (attempt) {
       attempt->stop();
     }
@@ -240,6 +249,18 @@ public:
       } catch (...) {
         std::terminate();
       }
+    }
+
+    // The coordinator owns every attempt it creates, but this post-join take is
+    // the lifecycle safety net for an attempt published after the initial
+    // snapshot. No future attempt can be published after the join.
+    std::shared_ptr<detail::RecoveryAttempt> final_attempt;
+    {
+      std::lock_guard lock{attempt_mutex_};
+      final_attempt = std::move(active_attempt_);
+    }
+    if (final_attempt) {
+      final_attempt->stop();
     }
     runtime_.stop();
     {
@@ -277,7 +298,8 @@ public:
   [[nodiscard]] bool request_controlled_recovery_for_acceptance() {
     {
       std::lock_guard lock{mutex_};
-      if (observation_.state != RecoveryState::Live || stopped_) {
+      if (observation_.state != RecoveryState::Live || stopped_ ||
+          shutdown_requested_) {
         return false;
       }
     }
@@ -285,40 +307,63 @@ public:
   }
 
   [[nodiscard]] std::optional<QuiescentAcceptanceCut> quiesce_for_acceptance() {
-    std::shared_ptr<detail::RecoveryAttempt> attempt;
-    {
-      std::lock_guard lock{attempt_mutex_};
-      attempt = active_attempt_;
-    }
+    std::shared_ptr<detail::RecoveryAttempt> retained_attempt;
     {
       std::lock_guard lock{mutex_};
-      if (!attempt || !started_ || stopped_ || observation_.terminal ||
-          observation_.state != RecoveryState::Live) {
+      if (!started_ || stopped_ || observation_.terminal ||
+          observation_.state != RecoveryState::Live || shutdown_requested_) {
         return std::nullopt;
       }
+      shutdown_requested_ = true;
       observation_.state = RecoveryState::Stopping;
       observation_.in_backoff = false;
+      // Retain the Live source before the stop request can wake the
+      // coordinator and let its concurrent quiescence clear active_attempt_.
+      std::lock_guard attempt_lock{attempt_mutex_};
+      retained_attempt = active_attempt_;
     }
     condition_.notify_all();
     coordinator_.request_stop();
     backoff_condition_.notify_all();
 
-    // A requested coordinator stop transfers active-attempt quiescence to the
-    // lifecycle caller, so this is the only stop owner for the retained source.
-    attempt->stop();
-    if (coordinator_.joinable()) {
-      coordinator_.join();
+    if (lifecycle_shutdown_established_) {
+      lifecycle_shutdown_established_();
     }
-
-    // The coordinator is joined, so no later generation can be created. The
-    // retained owning reference keeps the final transport observation alive.
-    const auto transport = attempt->observe();
-    {
-      std::lock_guard lock{attempt_mutex_};
-      if (active_attempt_ == attempt) {
-        active_attempt_.reset();
+    if (retained_attempt) {
+      retained_attempt->stop();
+    }
+    if (coordinator_.joinable()) {
+      try {
+        coordinator_.join();
+      } catch (...) {
+        std::terminate();
       }
     }
+
+    // The coordinator is joined, so this protected take is the final source
+    // ownership cut. A different attempt means the retained generation cannot
+    // be accepted, even though that unexpected source is still stopped here.
+    std::shared_ptr<detail::RecoveryAttempt> final_attempt;
+    {
+      std::lock_guard lock{attempt_mutex_};
+      final_attempt = std::move(active_attempt_);
+    }
+    if (final_attempt && final_attempt != retained_attempt) {
+      final_attempt->stop();
+      {
+        std::lock_guard lock{mutex_};
+        observation_.active_transport_count = 0U;
+      }
+      condition_.notify_all();
+      return std::nullopt;
+    }
+    if (!retained_attempt) {
+      return std::nullopt;
+    }
+
+    // The owning reference survives active-attempt clearing, so the final
+    // stopped transport observation is retained for the acceptance proof.
+    const auto transport = retained_attempt->observe();
     {
       std::lock_guard lock{mutex_};
       observation_.active_transport_count = 0U;
@@ -338,7 +383,7 @@ private:
     std::uint64_t generation = 1U;
     try {
       for (;;) {
-        if (stop_token.stop_requested()) {
+        if (stop_token.stop_requested() || shutdown_requested()) {
           break;
         }
         auto attempt = create_attempt(generation);
@@ -347,9 +392,14 @@ private:
                        internal_error("attempt factory returned null"), false);
           return;
         }
+        if (stop_token.stop_requested() || shutdown_requested()) {
+          static_cast<void>(quiesce_attempt(attempt));
+          break;
+        }
 
         const auto start_result = attempt->start();
-        if (stop_token.stop_requested()) {
+        if (stop_token.stop_requested() || shutdown_requested()) {
+          static_cast<void>(quiesce_attempt(attempt));
           break;
         }
 
@@ -358,6 +408,7 @@ private:
           runtime_observation =
               runtime_.wait_until_live_or_recovery_required(stop_token);
           if (!runtime_observation.has_value()) {
+            static_cast<void>(quiesce_attempt(attempt));
             break;
           }
           if (runtime_observation->state == g3::RuntimeState::Live) {
@@ -373,6 +424,7 @@ private:
               runtime_observation =
                   runtime_.wait_until_recovery_required(stop_token);
               if (!runtime_observation.has_value()) {
+                static_cast<void>(quiesce_attempt(attempt));
                 break;
               }
             }
@@ -380,6 +432,9 @@ private:
         }
 
         const auto transport_observation = quiesce_attempt(attempt);
+        if (stop_token.stop_requested() || shutdown_requested()) {
+          break;
+        }
         // This owner barrier is deliberately after the transport network thread
         // has joined. No old-generation producer can submit beyond this cut.
         const auto final_runtime = runtime_.observe();
@@ -392,10 +447,16 @@ private:
                        false);
           return;
         }
+        if (before_backoff_commit_) {
+          before_backoff_commit_();
+        }
 
         std::size_t recovery_attempt = 0U;
         {
           std::lock_guard lock{mutex_};
+          if (shutdown_requested_ || stop_token.stop_requested()) {
+            break;
+          }
           if (observation_.consecutive_recovery_attempts >=
               detail::kMaximumRecoveryAttempts) {
             observation_.last_recovery_cause = decision.cause;
@@ -425,22 +486,33 @@ private:
         }
         {
           std::lock_guard lock{mutex_};
+          if (shutdown_requested_ || stop_token.stop_requested()) {
+            break;
+          }
           observation_.state = RecoveryState::Recovering;
           observation_.in_backoff = false;
         }
         condition_.notify_all();
 
-        if (runtime_.reset_for_rebootstrap() !=
-            g3::RebootstrapResetResult::Reset) {
+        g3::RebootstrapResetResult reset_result;
+        {
+          // Holding the lifecycle gate through reset makes reset-start and
+          // shutdown entry a single ordering decision.
+          std::lock_guard lock{mutex_};
+          if (shutdown_requested_ || stop_token.stop_requested()) {
+            break;
+          }
+          reset_result = runtime_.reset_for_rebootstrap();
+          if (reset_result == g3::RebootstrapResetResult::Reset) {
+            ++generation;
+            ++observation_.total_recovery_count;
+          }
+        }
+        if (reset_result != g3::RebootstrapResetResult::Reset) {
           set_terminal(RecoveryCause::InternalFailure,
                        internal_error("owner-domain rebootstrap reset failed"),
                        false);
           return;
-        }
-        ++generation;
-        {
-          std::lock_guard lock{mutex_};
-          ++observation_.total_recovery_count;
         }
       }
     } catch (const std::exception &error) {
@@ -511,7 +583,7 @@ private:
       return false;
     }
     std::lock_guard lock{mutex_};
-    if (stopped_ || observation_.terminal ||
+    if (stopped_ || shutdown_requested_ || observation_.terminal ||
         observation_.state == RecoveryState::Stopping ||
         stop_token.stop_requested()) {
       return false;
@@ -540,6 +612,9 @@ private:
   void set_terminal(RecoveryCause cause, g4::NetworkError error,
                     bool exhausted) noexcept {
     std::lock_guard lock{mutex_};
+    if (shutdown_requested_) {
+      return;
+    }
     observation_.last_recovery_cause = cause;
     observation_.state = RecoveryState::Exhausted;
     observation_.terminal = true;
@@ -549,10 +624,17 @@ private:
     condition_.notify_all();
   }
 
+  [[nodiscard]] bool shutdown_requested() const {
+    std::lock_guard lock{mutex_};
+    return shutdown_requested_;
+  }
+
   g3::MarketRuntime &runtime_;
   g3::RuntimeClock clock_;
   detail::AttemptFactory attempt_factory_;
   detail::BackoffWaiter backoff_waiter_;
+  std::function<void()> lifecycle_shutdown_established_;
+  std::function<void()> before_backoff_commit_;
 
   mutable std::mutex mutex_;
   std::condition_variable condition_;
@@ -560,6 +642,7 @@ private:
   std::jthread coordinator_;
   bool started_{false};
   bool stopped_{false};
+  bool shutdown_requested_{false};
 
   std::mutex attempt_mutex_;
   std::shared_ptr<detail::RecoveryAttempt> active_attempt_;

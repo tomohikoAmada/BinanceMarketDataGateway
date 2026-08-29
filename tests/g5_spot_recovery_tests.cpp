@@ -17,6 +17,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -124,7 +125,7 @@ make_snapshot(std::uint64_t last_update_id, std::uint64_t generation) {
 
 enum class Action {
   Live,
-  LiveThenFailureAtCut,
+  LiveWithTerminalBeforeRuntimeFault,
   LiveWithFailureOnStop,
   TransportFailure,
   SnapshotFailure,
@@ -147,6 +148,7 @@ struct ScriptState final {
   std::mutex mutex;
   std::vector<Action> actions;
   std::vector<std::uint64_t> created_generations;
+  std::vector<std::uint64_t> started_generations;
   std::vector<std::uint64_t> stopped_generations;
   std::vector<std::uint64_t> reset_count_at_creation;
   std::vector<std::chrono::seconds> delays;
@@ -174,6 +176,10 @@ public:
 
   [[nodiscard]] g4::TransportStartResult start() override {
     std::lock_guard observation_lock{observation_mutex_};
+    {
+      std::lock_guard state_lock{state_->mutex};
+      state_->started_generations.push_back(generation_);
+    }
     observation_.started = true;
     observation_.running = true;
     observation_.tls_verified = true;
@@ -184,12 +190,11 @@ public:
     case Action::LiveWithFailureOnStop:
       bootstrap(base);
       return g4::TransportStartResult::Started;
-    case Action::LiveThenFailureAtCut:
+    case Action::LiveWithTerminalBeforeRuntimeFault:
       bootstrap(base);
       static_cast<void>(runtime_.observe());
       set_error(g4::NetworkErrorCode::WebSocketRead, std::nullopt,
                 std::nullopt);
-      static_cast<void>(runtime_.submit_transport_failure());
       return g4::TransportStartResult::Started;
     case Action::NeedsResync:
       bootstrap(base);
@@ -268,7 +273,8 @@ public:
       observation_.stopped = true;
       observation_.running = false;
     }
-    if (action_ == Action::LiveWithFailureOnStop) {
+    if (action_ == Action::LiveWithFailureOnStop ||
+        action_ == Action::LiveWithTerminalBeforeRuntimeFault) {
       static_cast<void>(runtime_.submit_transport_failure());
     }
     std::lock_guard lock{state_->mutex};
@@ -477,8 +483,9 @@ void success_resets_incident_counter() {
 }
 
 void stale_live_does_not_reset_incident_counter() {
-  auto script = make_script(
-      {Action::TransportFailure, Action::LiveThenFailureAtCut, Action::Live});
+  auto script =
+      make_script({Action::TransportFailure,
+                   Action::LiveWithTerminalBeforeRuntimeFault, Action::Live});
   g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
   g5::SpotRecovery recovery{runtime, fixed_clock(), script_options(script)};
   REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
@@ -495,6 +502,100 @@ void stale_live_does_not_reset_incident_counter() {
                (std::vector<std::uint64_t>{1U, 2U, 3U}));
   }
   recovery.stop();
+}
+
+void create_vs_ordinary_stop_quiesces_factory_attempt() {
+  auto script = make_script({Action::Live});
+  std::promise<void> factory_entered;
+  auto factory_entered_future = factory_entered.get_future();
+  std::promise<void> release_factory;
+  auto release_factory_future = release_factory.get_future().share();
+  std::promise<void> shutdown_established;
+  auto shutdown_established_future = shutdown_established.get_future();
+
+  auto options = script_options(script);
+  options.attempt_factory = [script, &factory_entered,
+                             release_factory_future](g3::MarketRuntime &runtime,
+                                                     const g3::RuntimeClock &,
+                                                     std::uint64_t generation)
+      -> std::unique_ptr<g5::detail::RecoveryAttempt> {
+    factory_entered.set_value();
+    release_factory_future.wait();
+    return std::make_unique<ScriptAttempt>(runtime, generation, Action::Live,
+                                           script);
+  };
+  options.lifecycle_shutdown_established = [&shutdown_established] {
+    shutdown_established.set_value();
+  };
+
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  g5::SpotRecovery recovery{runtime, fixed_clock(), std::move(options)};
+  REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+  factory_entered_future.wait();
+
+  std::thread stopper{[&recovery] { recovery.stop(); }};
+  shutdown_established_future.wait();
+  release_factory.set_value();
+  stopper.join();
+
+  const auto stopped = recovery.observe();
+  REQUIRE_EQ(stopped.state, g5::RecoveryState::Stopped);
+  REQUIRE_EQ(stopped.active_transport_count, 0U);
+  REQUIRE_EQ(runtime.observe().state, g3::RuntimeState::Stopped);
+  {
+    std::lock_guard lock{script->mutex};
+    REQUIRE_EQ(script->created_generations, (std::vector<std::uint64_t>{1U}));
+    REQUIRE(script->started_generations.empty());
+    REQUIRE_EQ(script->stopped_generations, (std::vector<std::uint64_t>{1U}));
+    REQUIRE_EQ(script->active, 0U);
+  }
+}
+
+void acceptance_gate_wins_before_backoff_commit() {
+  auto script = make_script({Action::Live, Action::Live});
+  std::promise<void> before_backoff;
+  auto before_backoff_future = before_backoff.get_future();
+  std::promise<void> release_backoff;
+  auto release_backoff_future = release_backoff.get_future().share();
+  std::promise<void> shutdown_established;
+  auto shutdown_established_future = shutdown_established.get_future();
+
+  auto options = script_options(script);
+  options.before_backoff_commit = [&before_backoff, release_backoff_future] {
+    before_backoff.set_value();
+    release_backoff_future.wait();
+  };
+  options.lifecycle_shutdown_established = [&shutdown_established] {
+    shutdown_established.set_value();
+  };
+
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  g5::SpotRecovery recovery{runtime, fixed_clock(), std::move(options)};
+  REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+  REQUIRE_EQ(recovery.wait_for_generation_live(1U).state,
+             g5::RecoveryState::Live);
+  REQUIRE(recovery.request_controlled_recovery_for_acceptance());
+  before_backoff_future.wait();
+
+  std::optional<g5::QuiescentAcceptanceCut> cut;
+  std::thread accepter{[&] { cut = recovery.quiesce_for_acceptance(); }};
+  shutdown_established_future.wait();
+  release_backoff.set_value();
+  accepter.join();
+
+  REQUIRE(!cut.has_value());
+  REQUIRE_EQ(recovery.observe().state, g5::RecoveryState::Stopping);
+  {
+    std::lock_guard lock{script->mutex};
+    REQUIRE_EQ(script->created_generations, (std::vector<std::uint64_t>{1U}));
+    REQUIRE_EQ(script->stopped_generations, (std::vector<std::uint64_t>{1U}));
+    REQUIRE(script->delays.empty());
+    REQUIRE_EQ(script->active, 0U);
+  }
+
+  recovery.stop();
+  REQUIRE_EQ(recovery.observe().state, g5::RecoveryState::Stopped);
+  REQUIRE_EQ(runtime.observe().state, g3::RuntimeState::Stopped);
 }
 
 void final_acceptance_failure_race_is_rejected() {
@@ -652,6 +753,10 @@ int main() {
       {"SUCCESS_RESETS_INCIDENT_COUNTER", success_resets_incident_counter},
       {"STALE_LIVE_DOES_NOT_RESET_INCIDENT_COUNTER",
        stale_live_does_not_reset_incident_counter},
+      {"CREATE_VS_ORDINARY_STOP_QUIESCES_FACTORY_ATTEMPT",
+       create_vs_ordinary_stop_quiesces_factory_attempt},
+      {"ACCEPTANCE_GATE_WINS_BEFORE_BACKOFF_COMMIT",
+       acceptance_gate_wins_before_backoff_commit},
       {"FINAL_ACCEPTANCE_FAILURE_RACE_REJECTED",
        final_acceptance_failure_race_is_rejected},
       {"FINAL_ACCEPTANCE_CLEAN_CUT_AND_FULL_STOP",

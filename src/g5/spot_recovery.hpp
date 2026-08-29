@@ -87,6 +87,8 @@ using BackoffWaiter =
 struct RecoveryTestOptions final {
   AttemptFactory attempt_factory;
   BackoffWaiter backoff_waiter;
+  std::function<void()> lifecycle_shutdown_established;
+  std::function<void()> before_backoff_commit;
 };
 
 [[nodiscard]] std::optional<std::chrono::seconds>

@@ -1,6 +1,10 @@
 #include "spot_transport.hpp"
 
 #include <boost/asio.hpp>
+#include <boost/asio/bind_cancellation_slot.hpp>
+#include <boost/asio/cancellation_signal.hpp>
+#include <boost/beast.hpp>
+#include <boost/beast/websocket.hpp>
 
 #include <atomic>
 #include <barrier>
@@ -9,6 +13,7 @@
 #include <cstdlib>
 #include <future>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <utility>
@@ -19,6 +24,152 @@ namespace {
 namespace core = binance_market_data::projection::v1;
 namespace g3 = binance_market_data::gateway::g3;
 namespace g4 = binance_market_data::gateway::g4;
+namespace asio = boost::asio;
+namespace beast = boost::beast;
+namespace websocket = beast::websocket;
+using tcp = asio::ip::tcp;
+using ErrorCode = boost::system::error_code;
+
+class LocalWebSocketPair final {
+public:
+  LocalWebSocketPair()
+      : acceptor_{server_context_, {tcp::v4(), 0U}},
+        client_{std::make_unique<Stream>(client_context_)},
+        server_{std::make_unique<Stream>(server_context_)} {}
+
+  [[nodiscard]] bool handshake() {
+    ErrorCode client_error;
+    client_->next_layer().connect(acceptor_.local_endpoint(), client_error);
+    if (client_error) {
+      return false;
+    }
+
+    ErrorCode server_error;
+    acceptor_.accept(server_->next_layer(), server_error);
+    if (server_error) {
+      return false;
+    }
+
+    std::thread server_handshake{
+        [this, &server_error] { server_->accept(server_error); }};
+    client_->handshake("localhost", "/", client_error);
+    server_handshake.join();
+    return !client_error && !server_error;
+  }
+
+  using Stream = websocket::stream<tcp::socket>;
+
+  asio::io_context client_context_;
+  asio::io_context server_context_;
+  tcp::acceptor acceptor_;
+  std::unique_ptr<Stream> client_;
+  std::unique_ptr<Stream> server_;
+};
+
+void set_idle_timeout(LocalWebSocketPair::Stream &stream,
+                      std::chrono::steady_clock::duration idle_timeout) {
+  websocket::stream_base::timeout timeouts;
+  timeouts.handshake_timeout = websocket::stream_base::none();
+  timeouts.idle_timeout = idle_timeout;
+  timeouts.keep_alive_pings = false;
+  stream.set_option(timeouts);
+}
+
+[[nodiscard]] bool outstanding_websocket_read_is_explicitly_cancelled() {
+  LocalWebSocketPair pair;
+  if (!pair.handshake()) {
+    return false;
+  }
+  set_idle_timeout(*pair.client_, g4::detail::kWebSocketIdleTimeout);
+
+  asio::cancellation_signal cancellation;
+  beast::flat_buffer buffer;
+  ErrorCode read_result;
+  std::size_t completion_count = 0U;
+  pair.client_->async_read(
+      buffer,
+      asio::bind_cancellation_slot(
+          cancellation.slot(), [&pair, &read_result, &completion_count](
+                                   const ErrorCode &error_code, std::size_t) {
+            read_result = error_code;
+            ++completion_count;
+            // Production releases its owning reference at the cancellation
+            // cut. Destruction after the composed read completion cancels
+            // Beast's still-future internal idle wait without changing policy.
+            pair.client_.reset();
+          }));
+
+  const auto started_at = std::chrono::steady_clock::now();
+  cancellation.emit(asio::cancellation_type::terminal);
+  ErrorCode ignored;
+  pair.client_->next_layer().cancel(ignored);
+  pair.client_->next_layer().close(ignored);
+  static_cast<void>(pair.client_context_.run());
+  const auto elapsed = std::chrono::steady_clock::now() - started_at;
+
+  return completion_count == 1U &&
+         read_result == asio::error::operation_aborted && !pair.client_ &&
+         pair.client_context_.stopped() && elapsed < std::chrono::seconds{1};
+}
+
+[[nodiscard]] bool idle_timeout_ready_before_stop_cut_is_preserved() {
+  LocalWebSocketPair pair;
+  if (!pair.handshake()) {
+    return false;
+  }
+  // A zero test-only duration makes Beast's authoritative idle timer due as
+  // soon as async_read arms it. The context is deliberately not run yet, so
+  // the timer completion is ready but has not executed.
+  set_idle_timeout(*pair.client_, std::chrono::steady_clock::duration::zero());
+
+  asio::cancellation_signal cancellation;
+  beast::flat_buffer buffer;
+  ErrorCode read_result;
+  std::size_t completion_count = 0U;
+  bool shutdown_cut_executed = false;
+  pair.client_->async_read(
+      buffer,
+      asio::bind_cancellation_slot(
+          cancellation.slot(),
+          [&pair, &read_result, &completion_count,
+           &shutdown_cut_executed](const ErrorCode &error_code, std::size_t) {
+            read_result = error_code;
+            ++completion_count;
+            if (shutdown_cut_executed) {
+              pair.client_.reset();
+            }
+          }));
+
+  std::optional<asio::steady_timer> shutdown_barrier;
+  asio::post(pair.client_context_, [&] {
+    // Match SpotTransport's network-domain sequencing: the stop request first
+    // reaches the io_context and then arms an immediate barrier, forcing a
+    // reactor turn before cancellation is emitted.
+    shutdown_barrier.emplace(pair.client_context_);
+    shutdown_barrier->expires_at(std::chrono::steady_clock::now());
+    shutdown_barrier->async_wait([&](const ErrorCode &error_code) {
+      if (error_code) {
+        return;
+      }
+      shutdown_cut_executed = true;
+      if (completion_count == 0U) {
+        cancellation.emit(asio::cancellation_type::terminal);
+        ErrorCode ignored;
+        pair.client_->next_layer().cancel(ignored);
+        pair.client_->next_layer().close(ignored);
+      } else {
+        // AsyncWebSocket::cancel() observes done_ and skips emission before
+        // SpotTransport releases its owning reference at this same cut.
+        pair.client_.reset();
+      }
+    });
+  });
+
+  static_cast<void>(pair.client_context_.run());
+  return shutdown_cut_executed && completion_count == 1U &&
+         read_result == beast::error::timeout && !pair.client_ &&
+         pair.client_context_.stopped();
+}
 
 [[nodiscard]] core::NumericSpec numeric_spec() {
   const auto price = core::DecimalScale::create(2U);
@@ -35,9 +186,6 @@ namespace g4 = binance_market_data::gateway::g4;
 }
 
 [[nodiscard]] bool exchange_info_tls_stall_times_out() {
-  namespace asio = boost::asio;
-  using tcp = asio::ip::tcp;
-
   asio::io_context server_context;
   tcp::acceptor acceptor{server_context, {tcp::v4(), 0U}};
   const auto port = acceptor.local_endpoint().port();
@@ -272,6 +420,12 @@ int main() {
   if (!final_acceptance_rejects_failures()) {
     return EXIT_FAILURE;
   }
+  if (!outstanding_websocket_read_is_explicitly_cancelled()) {
+    return EXIT_FAILURE;
+  }
+  if (!idle_timeout_ready_before_stop_cut_is_preserved()) {
+    return EXIT_FAILURE;
+  }
 
   g3::RuntimeClock clock = [] {
     return g3::ClockSample{1700000000123456000ULL, 9000000000999ULL};
@@ -318,6 +472,9 @@ int main() {
   std::cout << "EXCHANGE_INFO_ASYNC_TIMEOUT=PASS\n"
                "WEBSOCKET_IDLE_POLICY=PASS\n"
                "FINAL_ACCEPTANCE_REJECTION=PASS\n"
+               "OUTSTANDING_WEBSOCKET_READ_CANCEL=PASS\n"
+               "IDLE_TIMEOUT_STOP_BOUNDARY=PASS\n"
+               "IO_CONTEXT_NATURAL_DRAIN=PASS\n"
                "CLEAN_STARTED_STOP_NO_FALSE_FAILURE=PASS\n"
                "PREEXISTING_FAILURE_SURVIVES_STOP_CUT=PASS\n"
                "CONCURRENT_STOP_WINNER_WAITER=PASS\n"

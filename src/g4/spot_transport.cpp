@@ -647,15 +647,6 @@ public:
     if (timer_pending_) {
       timer_.cancel();
     }
-    try {
-      websocket::stream_base::timeout disabled_timeouts;
-      disabled_timeouts.handshake_timeout = websocket::stream_base::none();
-      disabled_timeouts.idle_timeout = websocket::stream_base::none();
-      disabled_timeouts.keep_alive_pings = false;
-      stream_.set_option(disabled_timeouts);
-    } catch (...) {
-      // Socket cancellation below remains the fail-closed teardown path.
-    }
     read_cancellation_.emit(asio::cancellation_type::terminal);
     ErrorCode ignored;
     beast::get_lowest_layer(stream_).socket().cancel(ignored);
@@ -1293,16 +1284,33 @@ private:
       return;
     }
     network_clean_cancel_requested_ = true;
-    cancel_network_operations();
-    release_network_work();
+    clean_shutdown_barrier_.emplace(context_);
+    clean_shutdown_barrier_->expires_at(std::chrono::steady_clock::now());
+    clean_shutdown_barrier_->async_wait([this](const ErrorCode &) {
+      // Boost 1.91's reactor appends ready socket completions before timers and
+      // dequeues every already-due steady timer into one scheduler batch. This
+      // extra reactor turn is the network-domain shutdown cut: a read failure
+      // or Beast idle timeout already ready before the cut runs before terminal
+      // read cancellation can complete. Beast time_out() therefore sets
+      // timed_out first, and the read's check_stop_now() must surface
+      // beast::error::timeout. No websocket timeout option is changed.
+      cancel_network_operations();
+      release_network_work();
+    });
   }
 
   void cancel_network_operations() noexcept {
-    if (websocket_) {
-      websocket_->cancel();
+    // Each composed operation retains its own shared Async* owner through its
+    // completion. Dropping these parent references after requesting
+    // cancellation lets AsyncWebSocket destruction cancel Beast's still-future
+    // internal idle wait, so io_context drains without changing timeout policy.
+    auto websocket = std::move(websocket_);
+    if (websocket) {
+      websocket->cancel();
     }
-    if (depth_request_) {
-      depth_request_->cancel();
+    auto depth_request = std::move(depth_request_);
+    if (depth_request) {
+      depth_request->cancel();
     }
     if (test_cancel_timer_.has_value()) {
       test_cancel_timer_->cancel();
@@ -1323,6 +1331,7 @@ private:
       work_guard_;
   std::shared_ptr<AsyncWebSocket> websocket_;
   std::shared_ptr<AsyncHttpsGet> depth_request_;
+  std::optional<asio::steady_timer> clean_shutdown_barrier_;
   std::optional<asio::steady_timer> test_cancel_timer_;
   std::thread network_thread_;
   detail::TransportTestOptions test_options_;
