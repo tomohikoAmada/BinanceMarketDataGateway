@@ -1,6 +1,7 @@
 #include "market_runtime.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <exception>
@@ -189,7 +190,7 @@ public:
       return RebootstrapResetResult::Busy;
     }
 
-    reset_request_.emplace(last_admitted_ticket_);
+    reset_request_.emplace(last_admitted_ticket_, ResetKind::Recovery);
     condition_.notify_all();
     condition_.wait(lock, [this] {
       return reset_request_->result.has_value() || stopped_;
@@ -199,6 +200,43 @@ public:
       return RebootstrapResetResult::Stopped;
     }
     const auto result = *reset_request_->result;
+    reset_request_.reset();
+    condition_.notify_all();
+    return result;
+  }
+
+  [[nodiscard]] PlannedRebootstrapResetResult
+  reset_live_for_planned_rebootstrap() {
+    std::unique_lock lock{mutex_};
+    if (stopped_) {
+      return PlannedRebootstrapResetResult::Stopped;
+    }
+    if (!started_) {
+      return PlannedRebootstrapResetResult::NotStarted;
+    }
+    if (stop_requested_) {
+      return PlannedRebootstrapResetResult::Stopping;
+    }
+    if (observation_.state != RuntimeState::Live ||
+        observation_.projection_status !=
+            core::ProjectionStatus::Synchronized ||
+        observation_.fault_reason.has_value()) {
+      return PlannedRebootstrapResetResult::InvalidState;
+    }
+    if (reset_request_.has_value()) {
+      return PlannedRebootstrapResetResult::Busy;
+    }
+
+    reset_request_.emplace(last_admitted_ticket_, ResetKind::Planned);
+    condition_.notify_all();
+    condition_.wait(lock, [this] {
+      return reset_request_->result.has_value() || stopped_;
+    });
+    if (!reset_request_->result.has_value()) {
+      reset_request_.reset();
+      return PlannedRebootstrapResetResult::Stopped;
+    }
+    const auto result = to_planned_reset_result(*reset_request_->result);
     reset_request_.reset();
     condition_.notify_all();
     return result;
@@ -229,6 +267,20 @@ public:
     }
     publish_tickets_locked();
     return observation_;
+  }
+
+  [[nodiscard]] TimedRecoveryWaitResult
+  wait_until_recovery_required_for(std::stop_token stop_token,
+                                   std::chrono::nanoseconds duration) {
+    std::unique_lock lock{mutex_};
+    const auto ready = condition_.wait_for(lock, stop_token, duration, [this] {
+      return recovery_required_locked() || stop_requested_ || stopped_;
+    });
+    if (stop_token.stop_requested() || stop_requested_ || stopped_) {
+      return TimedRecoveryWaitResult::Stopped;
+    }
+    return ready ? TimedRecoveryWaitResult::RecoveryRequired
+                 : TimedRecoveryWaitResult::DeadlineReached;
   }
 
   [[nodiscard]] SnapshotResult capture_snapshot() {
@@ -279,6 +331,11 @@ public:
   }
 
 private:
+  enum class ResetKind : std::uint8_t {
+    Recovery,
+    Planned,
+  };
+
   struct SnapshotRequest final {
     explicit SnapshotRequest(std::uint64_t target_value)
         : target{target_value} {}
@@ -288,11 +345,34 @@ private:
   };
 
   struct ResetRequest final {
-    explicit ResetRequest(std::uint64_t target_value) : target{target_value} {}
+    ResetRequest(std::uint64_t target_value, ResetKind reset_kind)
+        : target{target_value}, kind{reset_kind} {}
 
     std::uint64_t target;
+    ResetKind kind;
     std::optional<RebootstrapResetResult> result;
   };
+
+  [[nodiscard]] static PlannedRebootstrapResetResult
+  to_planned_reset_result(RebootstrapResetResult result) noexcept {
+    switch (result) {
+    case RebootstrapResetResult::Reset:
+      return PlannedRebootstrapResetResult::Reset;
+    case RebootstrapResetResult::NotStarted:
+      return PlannedRebootstrapResetResult::NotStarted;
+    case RebootstrapResetResult::InvalidState:
+      return PlannedRebootstrapResetResult::InvalidState;
+    case RebootstrapResetResult::Busy:
+      return PlannedRebootstrapResetResult::Busy;
+    case RebootstrapResetResult::Stopping:
+      return PlannedRebootstrapResetResult::Stopping;
+    case RebootstrapResetResult::Stopped:
+      return PlannedRebootstrapResetResult::Stopped;
+    case RebootstrapResetResult::InternalError:
+      return PlannedRebootstrapResetResult::InternalError;
+    }
+    return PlannedRebootstrapResetResult::InternalError;
+  }
 
   void owner_loop() noexcept {
     {
@@ -405,6 +485,27 @@ private:
 
   void perform_reset_request() noexcept {
     auto result = RebootstrapResetResult::Reset;
+    ResetKind reset_kind = ResetKind::Recovery;
+    {
+      std::lock_guard lock{mutex_};
+      if (!reset_request_.has_value()) {
+        return;
+      }
+      reset_kind = reset_request_->kind;
+      const bool valid_recovery =
+          observation_.state == RuntimeState::Faulted ||
+          observation_.state == RuntimeState::NeedsResync;
+      const bool valid_planned = observation_.state == RuntimeState::Live &&
+                                 observation_.projection_status ==
+                                     core::ProjectionStatus::Synchronized &&
+                                 !observation_.fault_reason.has_value();
+      if ((reset_kind == ResetKind::Recovery && !valid_recovery) ||
+          (reset_kind == ResetKind::Planned && !valid_planned)) {
+        reset_request_->result = RebootstrapResetResult::InvalidState;
+        condition_.notify_all();
+        return;
+      }
+    }
     try {
       projection_.reset();
       bootstrap_.clear();
@@ -719,6 +820,11 @@ RebootstrapResetResult MarketRuntime::reset_for_rebootstrap() {
   return impl_->reset_for_rebootstrap();
 }
 
+PlannedRebootstrapResetResult
+MarketRuntime::reset_live_for_planned_rebootstrap() {
+  return impl_->reset_live_for_planned_rebootstrap();
+}
+
 std::optional<RuntimeObservation>
 MarketRuntime::wait_until_live_or_recovery_required(
     std::stop_token stop_token) {
@@ -728,6 +834,11 @@ MarketRuntime::wait_until_live_or_recovery_required(
 std::optional<RuntimeObservation>
 MarketRuntime::wait_until_recovery_required(std::stop_token stop_token) {
   return impl_->wait_until_recovery_required(stop_token);
+}
+
+TimedRecoveryWaitResult MarketRuntime::wait_until_recovery_required_for(
+    std::stop_token stop_token, std::chrono::nanoseconds duration) {
+  return impl_->wait_until_recovery_required_for(stop_token, duration);
 }
 
 IngressObservation MarketRuntime::ingress_observation() const noexcept {

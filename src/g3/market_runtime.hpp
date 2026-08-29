@@ -5,6 +5,7 @@
 #include <binance_market_data/projection/v1/snapshots.pb.h>
 #include <binance_market_data/projection_adapter/v1/proto_adapter.hpp>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -108,6 +109,22 @@ enum class RebootstrapResetResult : std::uint8_t {
   InternalError,
 };
 
+enum class PlannedRebootstrapResetResult : std::uint8_t {
+  Reset,
+  NotStarted,
+  InvalidState,
+  Busy,
+  Stopping,
+  Stopped,
+  InternalError,
+};
+
+enum class TimedRecoveryWaitResult : std::uint8_t {
+  RecoveryRequired,
+  DeadlineReached,
+  Stopped,
+};
+
 enum class SnapshotRequestError : std::uint8_t {
   NotStarted,
   NotLive,
@@ -171,12 +188,22 @@ public:
   // monotonic.
   [[nodiscard]] RebootstrapResetResult reset_for_rebootstrap();
 
+  // The caller must first stop and join the healthy source generation and
+  // establish an observe() FIFO barrier. This separate owner command accepts
+  // only Live/Synchronized/no-fault state; it never manufactures a recovery
+  // fault. Lifetime ticket counters remain monotonic.
+  [[nodiscard]] PlannedRebootstrapResetResult
+  reset_live_for_planned_rebootstrap();
+
   // Blocking state waits used by the G5 lifecycle coordinator. A requested
   // stop returns std::nullopt without manufacturing a runtime fault.
   [[nodiscard]] std::optional<RuntimeObservation>
   wait_until_live_or_recovery_required(std::stop_token stop_token);
   [[nodiscard]] std::optional<RuntimeObservation>
   wait_until_recovery_required(std::stop_token stop_token);
+  [[nodiscard]] TimedRecoveryWaitResult
+  wait_until_recovery_required_for(std::stop_token stop_token,
+                                   std::chrono::nanoseconds duration);
 
   [[nodiscard]] IngressObservation ingress_observation() const noexcept;
 

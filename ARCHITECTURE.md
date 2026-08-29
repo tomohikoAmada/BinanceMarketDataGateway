@@ -2,7 +2,7 @@
 
 The detailed, ordered development authority is
 [docs/MILESTONES.md](docs/MILESTONES.md). This document records only the
-responsibility split and the current foundation/G5 boundary.
+responsibility split and the current foundation/G6 boundary.
 
 ## Dependency direction
 
@@ -85,10 +85,24 @@ HTTP 4xx classifications fail closed. Recovery always returns through fresh
 WebSocket buffering and REST depth bootstrap. G5 adds no continuity predicate or
 second sequence classifier.
 
+The opt-in G6 target adds the 23h50m project planned-rotation policy to that same
+coordinator. A generation's injected monotonic birth timestamp is captured
+before its transport start. While qualified Live, one timed condition-variable
+wait ends on recovery, the planned deadline, or stop; there is no polling loop.
+On a clean deadline cut, the old transport stops and joins before the owner FIFO
+barrier and before a distinct owner-thread healthy reset. Only then may the next
+generation start and conservatively re-enter G4 bootstrap. A clean rotation has
+no recovery backoff or budget cost. A real transport fault or Projection
+`NeedsResync` observed at the cut wins and follows G5 recovery. G6 remains
+break-before-make, permits at most one active transport, and adds no sequence
+classifier, gRPC, publication, or subscriptions. The reviewed Boost 1.91
+reactor/scheduler shutdown barrier is unchanged and requires re-proof on upgrade.
+
 ## MarketRuntime Projection boundary
 
-The G3 `MarketRuntime`, G4 transport, and G5 recovery coordinator use, and future
-Gateway runtime work must continue to use, the existing Projection APIs directly:
+The G3 `MarketRuntime`, G4 transport, and G5/G6 lifecycle coordinator use, and
+future Gateway runtime work must continue to use, the existing Projection APIs
+directly:
 construct one `BookProjection` per `venue + market + symbol`, adapt Contracts
 messages with `ProtoAdapter`, feed updates in source receive order, and follow
 Projection's returned classification. It must not add a
@@ -100,5 +114,5 @@ The foundation and frozen G1 link proof remain runtime-free. The completed G2
 synthetic host remains the deterministic direct-Projection proof. G3 establishes
 serialized concurrency and bounded runtime ownership independently of transport.
 G4 is the first real network/bootstrap implementation. G5 adds bounded automatic
-recovery without changing Projection continuity ownership. Planned rotation,
-publication, and gRPC remain G6 and G7 work respectively.
+recovery and G6 adds planned break-before-make rotation without changing
+Projection continuity ownership. Publication and gRPC remain G7 work.

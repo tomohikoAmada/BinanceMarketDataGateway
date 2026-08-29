@@ -7,10 +7,11 @@ checked for this checkpoint is Contracts
 `518880bdfa60948c3b65b6b3525d024526995166` and Projection
 `01a66aa80c764d2600da2cc309c0fd69655b55c`.
 
-The current implementation is G0, G1, GW-PREQ-002, G2, G3, G4, and G5 complete.
+The current implementation is G0, G1, GW-PREQ-002, G2, G3, G4, G5, and G6
+complete.
 The deterministic synthetic host, serialized `MarketRuntime`, first real Binance
-Spot BTCUSDT network/bootstrap runtime, and bounded reconnect/resync recovery are
-implemented.
+Spot BTCUSDT network/bootstrap runtime, bounded reconnect/resync recovery, and
+planned connection rotation are implemented.
 Historical G2/G3 attempts, including the deleted `feat/g2-deterministic-synthetic-host`
 branch and its recovery bundle, are not implementation authority. Historical PR #5 is
 retained only as a closed, not-merged, abandoned implementation attempt.
@@ -69,6 +70,7 @@ runtime framework.
 - `G3=COMPLETE`.
 - `G4=COMPLETE`.
 - `G5=COMPLETE`.
+- `G6=COMPLETE`.
 - `G2_SYNTHETIC_HOST_IMPLEMENTED=YES`.
 - `G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES`.
 - `CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES`.
@@ -76,7 +78,8 @@ runtime framework.
 - `GATEWAY_NETWORK=SPOT_BTCUSDT_IMPLEMENTED`.
 - `RECONNECT=IMPLEMENTED`.
 - `AUTOMATIC_RECOVERY=IMPLEMENTED`.
-- `NEXT=G6`.
+- `PLANNED_ROTATION=IMPLEMENTED`.
+- `NEXT=G7`.
 
 Gateway `main` currently has typed configuration, synchronous Foundation
 lifecycle, a daemon CLI that immediately starts and stops Foundation, Foundation
@@ -88,8 +91,9 @@ observation and snapshot capture, and deterministic joined shutdown. G4 adds
 verified TLS Binance exchangeInfo/depth REST, raw Spot diff-depth WebSocket,
 strict transport JSON decoding, real receive timestamps, connection generation
 1 identity, authoritative NumericSpec derivation, and bounded real bootstrap
-through that runtime. Reconnect/recovery is implemented in G5; planned rotation,
-gRPC, publication, and subscriptions are not implemented.
+through that runtime. Reconnect/recovery is implemented in G5 and planned
+rotation is implemented in G6; gRPC, publication, and subscriptions are not
+implemented.
 
 ## G0 — Repository Foundation
 
@@ -140,7 +144,7 @@ The normal graph is verified by
 `scripts/gw-preq-002-verify-graph.py`; its invariant is one Contracts message
 lineage plus Projection, with no Contracts gRPC package and no `grpc` package.
 
-`NEXT=G6`.
+`NEXT=G7`.
 
 ## G2 — Deterministic Synthetic Host
 
@@ -272,19 +276,44 @@ refreshed on 2026-08-29.
 The opt-in real G5 acceptance proved generation 1 Live, a controlled normal
 recovery cut, distinct generation 2 transport identity, fresh verified TLS
 WebSocket and REST bootstrap, Synchronized/Live Projection, a later real update,
-and owner-domain snapshot capture. Planned pre-24-hour rotation remains G6.
+and owner-domain snapshot capture.
 
-`NEXT=G6`.
+`NEXT=G7`.
 
 ## G6 — Planned Connection Rotation
 
-**STATUS=NOT_STARTED**
+**STATUS=COMPLETE**
 
-Use an injected clock to replace a connection before the applicable Binance
-connection lifetime expires, assign the appropriate new connection identity and
-generation, and conservatively rebootstrap through the same recovery path. V1
-does not require make-before-break deterministic source stitching. G6 has no
-gRPC.
+G6 integrates an optional planned-rotation policy into the single G5 lifecycle
+coordinator. The production project policy is 23 hours 50 minutes, a ten-minute
+safety margin before Binance's documented 24-hour Spot WebSocket lifetime; it is
+not a Binance-prescribed value. Each transport attempt captures its generation
+birth from the injected monotonic clock before `start()`, receives a fresh
+deadline, and waits without fixed-interval polling for runtime recovery, the
+deadline, or stop.
+
+A clean deadline cut stops and joins generation N, establishes the owner FIFO
+barrier, requires stopped/no-terminal-error transport plus
+Live/Synchronized/no-fault runtime, and invokes the distinct healthy planned
+reset command on the existing `MarketRuntime` owner thread. Generation N+1 then
+immediately re-enters the G4 WebSocket-buffer/REST-snapshot/Projection bootstrap
+path. Lifetime ticket counters remain monotonic, planned rotations consume no G5
+backoff or recovery budget, and at most one transport is active. Genuine
+transport failure or `NeedsResync` at the cut wins and uses ordinary bounded G5
+recovery.
+
+G6 remains break-before-make with no cross-generation source stitching, second
+sequence classifier, gRPC, publication, or subscriptions. The accepted Boost
+1.91 network-domain shutdown barrier is unchanged and must be re-proved before
+any Boost/backend upgrade.
+
+The explicit real G6 acceptance used a five-second acceptance-only rotation age:
+generation 1 reached Live and applied a later update, the planned clean cut
+completed, and distinct generation 2 freshly bootstrapped, reached Live, applied
+a later update, and produced an owner-domain snapshot with zero planned-rotation
+recovery attempts.
+
+`NEXT=G7`.
 
 ## G7 — Bounded Publication + SubscribeOrderBook + gRPC
 
