@@ -2,7 +2,7 @@
 
 The detailed, ordered development authority is
 [docs/MILESTONES.md](docs/MILESTONES.md). This document records only the
-responsibility split and the current foundation/G4 boundary.
+responsibility split and the current foundation/G5 boundary.
 
 ## Dependency direction
 
@@ -74,10 +74,21 @@ bounded ingress. Projection remains private to the G3 owner. G4 assigns one
 stable connection ID and generation 1, handles server ping/pong and
 `serverShutdown`, fails closed without retry/reconnect, and stops/join cleanly.
 
+The opt-in G5 target adds one concrete recovery coordinator. It retains the same
+G3 runtime, private Projection, and owner thread while replacing G4 transport
+attempts one at a time. The old network thread joins before the runtime owner
+barrier/reset and before a higher, never-reused connection generation is
+created. Projection reset is an owner-domain control, runtime state transitions
+are observed with condition-variable waits, and stop interrupts deterministic
+bounded backoff. HTTP 429/418 honor strict `Retry-After`; terminal internal and
+HTTP 4xx classifications fail closed. Recovery always returns through fresh
+WebSocket buffering and REST depth bootstrap. G5 adds no continuity predicate or
+second sequence classifier.
+
 ## MarketRuntime Projection boundary
 
-The G3 `MarketRuntime` and G4 transport use, and future Gateway runtime work must
-continue to use, the existing Projection APIs directly:
+The G3 `MarketRuntime`, G4 transport, and G5 recovery coordinator use, and future
+Gateway runtime work must continue to use, the existing Projection APIs directly:
 construct one `BookProjection` per `venue + market + symbol`, adapt Contracts
 messages with `ProtoAdapter`, feed updates in source receive order, and follow
 Projection's returned classification. It must not add a
@@ -88,5 +99,6 @@ generic runtime framework.
 The foundation and frozen G1 link proof remain runtime-free. The completed G2
 synthetic host remains the deterministic direct-Projection proof. G3 establishes
 serialized concurrency and bounded runtime ownership independently of transport.
-G4 is the first real network/bootstrap implementation. Recovery, planned
-rotation, publication, and gRPC remain G5, G6, and G7 work respectively.
+G4 is the first real network/bootstrap implementation. G5 adds bounded automatic
+recovery without changing Projection continuity ownership. Planned rotation,
+publication, and gRPC remain G6 and G7 work respectively.

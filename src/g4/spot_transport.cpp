@@ -3,6 +3,8 @@
 #include "spot_protocol.hpp"
 
 #include <boost/asio.hpp>
+#include <boost/asio/bind_cancellation_slot.hpp>
+#include <boost/asio/cancellation_signal.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
@@ -645,6 +647,7 @@ public:
     if (timer_pending_) {
       timer_.cancel();
     }
+    read_cancellation_.emit(asio::cancellation_type::terminal);
     ErrorCode ignored;
     beast::get_lowest_layer(stream_).socket().cancel(ignored);
     beast::get_lowest_layer(stream_).socket().close(ignored);
@@ -752,55 +755,62 @@ private:
       return;
     }
     io_pending_ = true;
-    stream_.async_read(buffer_, [self = shared_from_this()](
-                                    const ErrorCode &error_code, std::size_t) {
-      self->io_pending_ = false;
-      if (self->done_) {
-        return;
-      }
-      if (error_code) {
-        if (is_clean_cancellation(error_code, self->cancel_requested_)) {
-          self->complete_cancelled_piece();
-        } else if (error_code == beast::error::timeout) {
-          self->fail(error_from_code(NetworkErrorCode::Timeout,
-                                     "websocket-idle", error_code));
-        } else {
-          self->fail(error_from_code(NetworkErrorCode::WebSocketRead,
-                                     "websocket-read", error_code));
-        }
-        return;
-      }
-      const bool retire_after_message = self->cancel_requested_;
-      g3::ClockSample received_at{};
-      try {
-        received_at = self->clock_();
-      } catch (const std::exception &failure) {
-        self->fail(network_error(NetworkErrorCode::Internal,
-                                 "websocket-receive-clock", failure.what()));
-        return;
-      } catch (...) {
-        self->fail(network_error(NetworkErrorCode::Internal,
-                                 "websocket-receive-clock",
-                                 "receive clock failed"));
-        return;
-      }
-      if (!self->stream_.got_text()) {
-        self->fail(network_error(NetworkErrorCode::Protocol, "websocket-frame",
-                                 "Binance raw stream returned binary data"));
-        return;
-      }
-      auto payload = beast::buffers_to_string(self->buffer_.data());
-      self->buffer_.consume(self->buffer_.size());
-      if (!self->callbacks_.message(std::move(payload), received_at)) {
-        self->retire_cleanly();
-        return;
-      }
-      if (retire_after_message) {
-        self->complete_cancelled_piece();
-        return;
-      }
-      self->read();
-    });
+    stream_.async_read(
+        buffer_,
+        asio::bind_cancellation_slot(
+            read_cancellation_.slot(),
+            [self = shared_from_this()](const ErrorCode &error_code,
+                                        std::size_t) {
+              self->io_pending_ = false;
+              if (self->done_) {
+                return;
+              }
+              if (error_code) {
+                if (is_clean_cancellation(error_code,
+                                          self->cancel_requested_)) {
+                  self->complete_cancelled_piece();
+                } else if (error_code == beast::error::timeout) {
+                  self->fail(error_from_code(NetworkErrorCode::Timeout,
+                                             "websocket-idle", error_code));
+                } else {
+                  self->fail(error_from_code(NetworkErrorCode::WebSocketRead,
+                                             "websocket-read", error_code));
+                }
+                return;
+              }
+              const bool retire_after_message = self->cancel_requested_;
+              g3::ClockSample received_at{};
+              try {
+                received_at = self->clock_();
+              } catch (const std::exception &failure) {
+                self->fail(network_error(NetworkErrorCode::Internal,
+                                         "websocket-receive-clock",
+                                         failure.what()));
+                return;
+              } catch (...) {
+                self->fail(network_error(NetworkErrorCode::Internal,
+                                         "websocket-receive-clock",
+                                         "receive clock failed"));
+                return;
+              }
+              if (!self->stream_.got_text()) {
+                self->fail(
+                    network_error(NetworkErrorCode::Protocol, "websocket-frame",
+                                  "Binance raw stream returned binary data"));
+                return;
+              }
+              auto payload = beast::buffers_to_string(self->buffer_.data());
+              self->buffer_.consume(self->buffer_.size());
+              if (!self->callbacks_.message(std::move(payload), received_at)) {
+                self->retire_cleanly();
+                return;
+              }
+              if (retire_after_message) {
+                self->complete_cancelled_piece();
+                return;
+              }
+              self->read();
+            }));
   }
 
   [[nodiscard]] bool handle_cancelled_io(const ErrorCode &error_code,
@@ -896,6 +906,7 @@ private:
   beast::flat_buffer buffer_;
   g3::RuntimeClock clock_;
   WebSocketCallbacks callbacks_;
+  asio::cancellation_signal read_cancellation_;
   std::uint64_t timeout_generation_{0U};
   std::size_t cancellation_completions_pending_{0U};
   bool io_pending_{false};
@@ -988,16 +999,22 @@ bool detail::live_acceptance_ready(
 class SpotTransport::Impl final {
 public:
   Impl(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+       std::uint64_t connection_generation,
        detail::TransportTestOptions test_options)
       : runtime_{runtime}, clock_{std::move(clock)},
         tls_context_{ssl::context::tls_client}, test_options_{test_options} {
     if (!clock_) {
       throw std::invalid_argument{"G4 transport clock must be injected"};
     }
+    if (connection_generation == 0U) {
+      throw std::invalid_argument{"G4 connection generation must be nonzero"};
+    }
     configure_ssl_context(tls_context_);
     const auto opened_at = clock_();
-    observation_.connection_id =
-        "binance-spot-btcusdt-g1-" + std::to_string(opened_at.utc_ns);
+    observation_.connection_generation = connection_generation;
+    observation_.connection_id = "binance-spot-btcusdt-g" +
+                                 std::to_string(connection_generation) + "-" +
+                                 std::to_string(opened_at.utc_ns);
   }
 
   ~Impl() { stop(); }
@@ -1023,8 +1040,12 @@ public:
     });
     condition_.wait(lock, [this] {
       return observation_.websocket_handshake ||
-             observation_.terminal_error.has_value();
+             observation_.terminal_error.has_value() || observation_.stopped ||
+             stop_requested_;
     });
+    if (observation_.stopped || stop_requested_) {
+      return TransportStartResult::Stopped;
+    }
     return observation_.websocket_handshake ? TransportStartResult::Started
                                             : TransportStartResult::Failed;
   }
@@ -1032,15 +1053,26 @@ public:
   void stop() noexcept {
     bool started = false;
     {
-      std::lock_guard lock{mutex_};
+      std::unique_lock lock{mutex_};
       if (observation_.stopped) {
         return;
       }
+      if (stop_in_progress_) {
+        if (test_options_.stop_waiter_entered) {
+          test_options_.stop_waiter_entered();
+        }
+        condition_.wait(lock, [this] { return observation_.stopped; });
+        return;
+      }
+      stop_in_progress_ = true;
       stop_requested_ = true;
       observation_.running = false;
       started = observation_.started;
     }
     condition_.notify_all();
+    if (test_options_.stop_winner_gate) {
+      test_options_.stop_winner_gate();
+    }
     if (started) {
       asio::post(context_, [this] { begin_clean_shutdown(); });
       if (network_thread_.joinable()) {
@@ -1055,6 +1087,7 @@ public:
       std::lock_guard lock{mutex_};
       observation_.stopped = true;
       observation_.running = false;
+      stop_in_progress_ = false;
     }
     condition_.notify_all();
   }
@@ -1076,6 +1109,13 @@ private:
                                        "test-clean-cancellation", error_code),
                        false);
     });
+    if (test_options_.stop_cut_mode ==
+        detail::TransportStopCutTestMode::StartPendingUntilStop) {
+      if (test_options_.start_pending) {
+        test_options_.start_pending();
+      }
+      return;
+    }
     {
       std::lock_guard lock{mutex_};
       observation_.tls_verified = true;
@@ -1244,16 +1284,33 @@ private:
       return;
     }
     network_clean_cancel_requested_ = true;
-    cancel_network_operations();
-    release_network_work();
+    clean_shutdown_barrier_.emplace(context_);
+    clean_shutdown_barrier_->expires_at(std::chrono::steady_clock::now());
+    clean_shutdown_barrier_->async_wait([this](const ErrorCode &) {
+      // Boost 1.91's reactor appends ready socket completions before timers and
+      // dequeues every already-due steady timer into one scheduler batch. This
+      // extra reactor turn is the network-domain shutdown cut: a read failure
+      // or Beast idle timeout already ready before the cut runs before terminal
+      // read cancellation can complete. Beast time_out() therefore sets
+      // timed_out first, and the read's check_stop_now() must surface
+      // beast::error::timeout. No websocket timeout option is changed.
+      cancel_network_operations();
+      release_network_work();
+    });
   }
 
   void cancel_network_operations() noexcept {
-    if (websocket_) {
-      websocket_->cancel();
+    // Each composed operation retains its own shared Async* owner through its
+    // completion. Dropping these parent references after requesting
+    // cancellation lets AsyncWebSocket destruction cancel Beast's still-future
+    // internal idle wait, so io_context drains without changing timeout policy.
+    auto websocket = std::move(websocket_);
+    if (websocket) {
+      websocket->cancel();
     }
-    if (depth_request_) {
-      depth_request_->cancel();
+    auto depth_request = std::move(depth_request_);
+    if (depth_request) {
+      depth_request->cancel();
     }
     if (test_cancel_timer_.has_value()) {
       test_cancel_timer_->cancel();
@@ -1274,6 +1331,7 @@ private:
       work_guard_;
   std::shared_ptr<AsyncWebSocket> websocket_;
   std::shared_ptr<AsyncHttpsGet> depth_request_;
+  std::optional<asio::steady_timer> clean_shutdown_barrier_;
   std::optional<asio::steady_timer> test_cancel_timer_;
   std::thread network_thread_;
   detail::TransportTestOptions test_options_;
@@ -1282,12 +1340,19 @@ private:
   std::condition_variable condition_;
   TransportObservation observation_;
   bool stop_requested_{false};
+  bool stop_in_progress_{false};
   bool network_clean_cancel_requested_{false};
 };
 
 SpotTransport::SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                              detail::TransportTestOptions test_options)
-    : impl_{std::make_unique<Impl>(runtime, std::move(clock), test_options)} {}
+    : SpotTransport(runtime, std::move(clock), 1U, test_options) {}
+
+SpotTransport::SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                             std::uint64_t connection_generation,
+                             detail::TransportTestOptions test_options)
+    : impl_{std::make_unique<Impl>(runtime, std::move(clock),
+                                   connection_generation, test_options)} {}
 
 SpotTransport::~SpotTransport() = default;
 

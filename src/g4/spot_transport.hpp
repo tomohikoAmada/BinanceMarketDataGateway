@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -79,10 +80,14 @@ enum class TransportStopCutTestMode : std::uint8_t {
   None,
   CleanCancellation,
   PreexistingFailure,
+  StartPendingUntilStop,
 };
 
 struct TransportTestOptions final {
   TransportStopCutTestMode stop_cut_mode{TransportStopCutTestMode::None};
+  std::function<void()> start_pending;
+  std::function<void()> stop_winner_gate;
+  std::function<void()> stop_waiter_entered;
 };
 
 struct ExchangeInfoEndpoint final {
@@ -106,6 +111,9 @@ live_acceptance_ready(const TransportObservation &transport,
 class SpotTransport final {
 public:
   SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                detail::TransportTestOptions test_options = {});
+  SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                std::uint64_t connection_generation,
                 detail::TransportTestOptions test_options = {});
   ~SpotTransport();
 
