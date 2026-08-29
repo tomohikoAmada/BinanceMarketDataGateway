@@ -19,6 +19,8 @@ option(BMD_GATEWAY_BUILD_G5_RECOVERY
        "Build bounded G5 Spot reconnect/resync recovery and focused tests" OFF)
 option(BMD_GATEWAY_BUILD_G6_ROTATION
        "Build planned G6 Spot connection rotation and focused tests" OFF)
+option(BMD_GATEWAY_BUILD_G7_PUBLICATION
+       "Build bounded G7 order-book publication and synchronous gRPC" OFF)
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
        "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
 option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
@@ -29,6 +31,10 @@ option(BMD_GATEWAY_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 
 if(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT)
     set(BMD_GATEWAY_BUILD_G3_RUNTIME ON)
+endif()
+
+if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
+    set(BMD_GATEWAY_BUILD_G6_ROTATION ON)
 endif()
 
 if(BMD_GATEWAY_BUILD_G6_ROTATION)
@@ -210,6 +216,7 @@ if(BMD_GATEWAY_BUILD_G3_RUNTIME)
 
     add_library(bmd_gateway_g3_runtime
         src/g3/market_runtime.cpp
+        src/g7/order_book_publication.cpp
     )
     set_target_properties(
         bmd_gateway_g3_runtime
@@ -222,6 +229,7 @@ if(BMD_GATEWAY_BUILD_G3_RUNTIME)
         bmd_gateway_g3_runtime
         PUBLIC
             ${CMAKE_CURRENT_SOURCE_DIR}/src/g3
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g7
     )
     target_link_libraries(
         bmd_gateway_g3_runtime
@@ -479,6 +487,96 @@ if(BMD_GATEWAY_BUILD_G6_ROTATION)
         bmd_gateway_apply_sanitizers(bmd_gateway_g6_rotation_tests)
         add_test(NAME gateway_g6_rotation_tests
                  COMMAND bmd_gateway_g6_rotation_tests)
+    endif()
+endif()
+
+if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
+    find_package(BinanceMarketDataContractsGrpc 0.1.0 EXACT CONFIG REQUIRED)
+
+    add_library(bmd_gateway_g7_grpc
+        src/g7/grpc_service.cpp
+    )
+    set_target_properties(
+        bmd_gateway_g7_grpc
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_g7_grpc
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g7
+    )
+    target_link_libraries(
+        bmd_gateway_g7_grpc
+        PUBLIC
+            bmd_gateway_g6_rotation
+            BinanceMarketDataContracts::Grpc
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g7_grpc)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g7_grpc)
+
+    add_executable(bmd-gateway-g7-spot-grpc-live
+        app/g7_spot_grpc_live/main.cpp
+    )
+    set_target_properties(
+        bmd-gateway-g7-spot-grpc-live
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_link_libraries(
+        bmd-gateway-g7-spot-grpc-live
+        PRIVATE
+            bmd_gateway_g7_grpc
+    )
+    bmd_gateway_apply_warnings(bmd-gateway-g7-spot-grpc-live)
+    bmd_gateway_apply_sanitizers(bmd-gateway-g7-spot-grpc-live)
+
+    if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_g7_order_book_publication_tests
+            tests/g7_order_book_publication_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_g7_order_book_publication_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g7_order_book_publication_tests
+            PRIVATE
+                bmd_gateway_g3_runtime
+        )
+        bmd_gateway_apply_warnings(
+            bmd_gateway_g7_order_book_publication_tests)
+        bmd_gateway_apply_sanitizers(
+            bmd_gateway_g7_order_book_publication_tests)
+        add_test(NAME gateway_g7_order_book_publication_tests
+                 COMMAND bmd_gateway_g7_order_book_publication_tests)
+
+        add_executable(bmd_gateway_g7_grpc_service_tests
+            tests/g7_grpc_service_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_g7_grpc_service_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g7_grpc_service_tests
+            PRIVATE
+                bmd_gateway_g7_grpc
+        )
+        bmd_gateway_apply_warnings(bmd_gateway_g7_grpc_service_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_g7_grpc_service_tests)
+        add_test(NAME gateway_g7_grpc_service_tests
+                 COMMAND bmd_gateway_g7_grpc_service_tests)
     endif()
 endif()
 
