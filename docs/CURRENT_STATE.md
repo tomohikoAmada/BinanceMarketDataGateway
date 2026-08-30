@@ -12,6 +12,7 @@ G4=COMPLETE
 G5=COMPLETE
 G6=COMPLETE
 G7=COMPLETE
+G8=COMPLETE
 G2_SYNTHETIC_HOST_IMPLEMENTED=YES
 G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES
 CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES
@@ -32,7 +33,8 @@ MAKE_BEFORE_BREAK=NO
 GATEWAY_GRPC_BUSINESS_FLOW=SUBSCRIBE_ORDER_BOOK_IMPLEMENTED
 RECORDER_DEPENDENCY=NO
 GW-PREQ-002=COMPLETE
-NEXT=G8
+PROJECTION_M6_GATEWAY_INTEGRATION_ACCEPTANCE=COMPLETE
+NEXT=G9
 FIRST_RUNNABLE=G2
 FIRST_REAL_NETWORK=G4
 FIRST_GRPC=G7
@@ -76,11 +78,18 @@ Gateway `main` currently contains:
   `SubscribeOrderBook` service. The existing `MarketRuntime` owner exclusively
   owns subscriber admission, snapshot cuts, registry mutation, Applied-update
   fanout, and recovery/rotation terminalization. Each accepted synchronous RPC
-  handler exclusively owns its stream writer.
+  handler exclusively owns its stream writer; and
+- the G8 Projection M6 integration acceptance composition. It proves
+  deterministic real-gRPC Projection `NeedsResync`, real consumer-visible G5
+  controlled recovery, and real consumer-visible G6 planned rotation using the
+  existing G3-G7 architecture. Old subscriptions terminate before full
+  rebootstrap, fresh subscriptions restart `session_sequence`, and the
+  acceptance adds no production runtime redesign.
 
 There is no make-before-break source stitching. G7 has no `SubscribeEvents`,
-`GetGatewayStatus`, Projection M6/G8 integration acceptance, USD-M, or
-multi-market runtime. G4 remains independently usable as a one-shot transport.
+`GetGatewayStatus`, USD-M, or multi-market runtime. G8 is an acceptance/test
+composition and opt-in CMake wiring; it does not add a production runtime
+layer. G4 remains independently usable as a one-shot transport.
 G5 recovers transport, snapshot, malformed-input, bounded-admission, bootstrap
 overflow, `serverShutdown`, and Projection `NeedsResync` failures through a new
 connection and the same conservative bootstrap path. Internal adapter,
