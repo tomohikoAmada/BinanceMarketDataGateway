@@ -7,7 +7,7 @@ Read in this order before making Gateway changes:
 3. [ARCHITECTURE.md](ARCHITECTURE.md)
 4. milestone-specific evidence as needed
 
-G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, G7, and G8 are complete. The deterministic G2
+G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, G7, G8, and G9 are complete. The deterministic G2
 synthetic host, serialized G3 `MarketRuntime`, real G4 Binance Spot BTCUSDT
 transport/bootstrap, bounded G5 reconnect/resync recovery, and break-before-make
 G6 planned connection rotation are implemented. G7 adds bounded owner-domain
@@ -15,14 +15,16 @@ order-book publication and the first synchronous `SubscribeOrderBook` gRPC flow.
 G8 closes the Projection M6 real-Gateway order-book integration acceptance using
 the existing G3-G7 production architecture and adds no second order book,
 sequence classifier, recovery coordinator, or production runtime abstraction.
-The next runtime milestone is G9 `SubscribeEvents`.
+G9 adds focused bounded synchronous `SubscribeEvents` for Spot BTCUSDT
+`DIFF_DEPTH`, `AGG_TRADE`, and `BOOK_TICKER`.
+The next runtime milestone is G10 minimal `GetGatewayStatus`.
 Keep Phase A small and independently buildable.
 
 This repository contains the G0 foundation, frozen G1 proof, deterministic G2
 synthetic host, serialized G3 runtime, real G4 Spot transport, G5 recovery, and
-G6 rotation, G7 publication/gRPC, and the G8 integration acceptance; future
-runtime work follows the milestone authority. The next milestone is G9
-`SubscribeEvents`. Keep Phase A small and independently buildable.
+G6 rotation, G7 publication/gRPC, G8 integration acceptance, and G9
+`SubscribeEvents`; future runtime work follows the milestone authority. The next
+milestone is G10 `GetGatewayStatus`. Keep Phase A small and independently buildable.
 
 ## Boundaries
 
@@ -53,6 +55,11 @@ runtime work follows the milestone authority. The next milestone is G9
   mutation stay on the G3 owner; each accepted RPC handler is its sole writer.
   Existing sessions terminate before G5 recovery or G6 planned reset and never
   cross a full Projection rebootstrap.
+- G9 implements synchronous `SubscribeEvents` with exactly one V1 selector.
+  `DIFF_DEPTH` publication is PRE_PROJECTION_NORMALIZED; G7 OrderBook remains
+  Projection-Applied-only. G9 adds no second classifier or generic event bus,
+  and Event sessions terminate at actual source-generation replacement rather
+  than stitching across it.
 - Do not copy Contracts `.proto` files or introduce floating FetchContent dependencies.
 
 ## Phase A implementation rules

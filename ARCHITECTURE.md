@@ -2,7 +2,7 @@
 
 The detailed, ordered development authority is
 [docs/MILESTONES.md](docs/MILESTONES.md). This document records only the
-responsibility split and the current foundation/G8 boundary.
+responsibility split and the current foundation/G9 boundary.
 
 ## Dependency direction
 
@@ -126,6 +126,35 @@ generation provenance, per-session sequencing, and final shutdown. G8 adds no
 production runtime layer, second order book, sequence classifier, recovery
 coordinator, or other runtime abstraction.
 
+## G9 SubscribeEvents
+
+G9 adds `SubscribeEvents` to the existing synchronous Gateway service. V1 accepts
+exactly one selector per request for Binance Spot BTCUSDT: `DIFF_DEPTH`,
+`AGG_TRADE`, or `BOOK_TICKER`. Its transport profile uses one combined Binance
+Spot WebSocket; the historical depth-only G4-G8 paths remain independently
+usable.
+
+`SubscribeEvents(DIFF_DEPTH)` is a `PRE_PROJECTION_NORMALIZED` source event
+feed. `SubscribeOrderBook` remains the Projection-Applied mutation/snapshot
+feed. Projection remains the only sequence and gap classifier; G9 does not add
+a second classifier or describe the event feed as a Projection publication path.
+
+G9 uses a focused bounded Event publication registry with no dedicated
+publication thread: at most eight Event subscribers, 64 ordinary slots per
+subscriber, and one terminal control slot. Matching subscribers may share
+immutable normalized payloads, while slow consumers terminate independently.
+This is not a generic event bus.
+
+Event subscriptions bind to one source generation and never cross an actual
+source replacement. Recoverable replacement and planned rotation terminalize
+with `CONNECTION_GENERATION_CHANGED` / `RESUBSCRIBE`. Permanent failure
+terminates unavailable without fabricating a future generation, and Projection
+`NeedsResync` alone is not the Event terminal event.
+
+G7 and G9 use the same generated Gateway service, synchronous server, and
+context tracking / TryCancel lifetime protocol. Their mechanical tracked-context
+maximum is 24; this is not a generic RPC framework.
+
 ## MarketRuntime Projection boundary
 
 The G3 `MarketRuntime`, G4 transport, and G5/G6 lifecycle coordinator use, and
@@ -146,5 +175,4 @@ recovery and G6 adds planned break-before-make rotation without changing
 Projection continuity ownership. G7 adds bounded publication and the first
 synchronous gRPC business flow without adding a second classifier or order book.
 G8 closes the Projection M6 real-Gateway order-book integration acceptance.
-Later work is G9 `SubscribeEvents`, G10 minimal `GetGatewayStatus`, and G11
-USD-M / multi-market runtime.
+Later work is G10 minimal `GetGatewayStatus` and G11 USD-M / multi-market runtime.

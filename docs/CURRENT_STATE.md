@@ -13,6 +13,7 @@ G5=COMPLETE
 G6=COMPLETE
 G7=COMPLETE
 G8=COMPLETE
+G9=COMPLETE
 G2_SYNTHETIC_HOST_IMPLEMENTED=YES
 G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES
 CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES
@@ -22,19 +23,24 @@ RECONNECT=IMPLEMENTED
 AUTOMATIC_RECOVERY=IMPLEMENTED
 PLANNED_ROTATION=IMPLEMENTED
 SUBSCRIBE_ORDER_BOOK=IMPLEMENTED
+SUBSCRIBE_EVENTS=IMPLEMENTED
 BOUNDED_PUBLICATION=IMPLEMENTED
+EVENT_PUBLICATION=IMPLEMENTED
 GRPC=IMPLEMENTED
 MAX_ACTIVE_SUBSCRIPTIONS=8
+MAX_ACTIVE_EVENT_SUBSCRIPTIONS=8
 ORDINARY_QUEUE_CAPACITY=64
 TERMINAL_CONTROL_CAPACITY=1
+EVENT_ORDINARY_QUEUE_CAPACITY=64
+EVENT_TERMINAL_CONTROL_CAPACITY=1
 PENDING_ADMISSION_CAPACITY=8
 IDLE_CLIENT_CANCELLATION_CHECK_INTERVAL=250ms
 MAKE_BEFORE_BREAK=NO
-GATEWAY_GRPC_BUSINESS_FLOW=SUBSCRIBE_ORDER_BOOK_IMPLEMENTED
+GATEWAY_GRPC_BUSINESS_FLOW=SUBSCRIBE_ORDER_BOOK_AND_SUBSCRIBE_EVENTS_IMPLEMENTED
 RECORDER_DEPENDENCY=NO
 GW-PREQ-002=COMPLETE
 PROJECTION_M6_GATEWAY_INTEGRATION_ACCEPTANCE=COMPLETE
-NEXT=G9
+NEXT=G10
 FIRST_RUNNABLE=G2
 FIRST_REAL_NETWORK=G4
 FIRST_GRPC=G7
@@ -85,11 +91,21 @@ Gateway `main` currently contains:
   existing G3-G7 architecture. Old subscriptions terminate before full
   rebootstrap, fresh subscriptions restart `session_sequence`, and the
   acceptance adds no production runtime redesign.
+- the G9 synchronous `SubscribeEvents` flow. V1 accepts exactly one selector
+  for Spot BTCUSDT `DIFF_DEPTH`, `AGG_TRADE`, or `BOOK_TICKER` over one combined
+  Binance Spot WebSocket; the legacy depth-only G4-G8 profile remains available.
+  `DIFF_DEPTH` is pre-Projection normalized, while G7 `SubscribeOrderBook`
+  remains Projection-Applied-only. Event publication is bounded with exact
+  per-session `session_sequence`; sessions do not cross source-generation
+  replacement and recovery/rotation use
+  `CONNECTION_GENERATION_CHANGED`/`RESUBSCRIBE`. There is no second sequence
+  classifier, generic event bus, or new publication thread.
 
-There is no make-before-break source stitching. G7 has no `SubscribeEvents`,
-`GetGatewayStatus`, USD-M, or multi-market runtime. G8 is an acceptance/test
-composition and opt-in CMake wiring; it does not add a production runtime
-layer. G4 remains independently usable as a one-shot transport.
+There is no make-before-break source stitching. G7 historically implemented only
+`SubscribeOrderBook`; the current Gateway also implements G9 `SubscribeEvents`.
+`GetGatewayStatus`, USD-M, and multi-market runtime remain unimplemented. G8 is
+an acceptance/test composition and opt-in CMake wiring; it does not add a
+production runtime layer. G4 remains independently usable as a one-shot transport.
 G5 recovers transport, snapshot, malformed-input, bounded-admission, bootstrap
 overflow, `serverShutdown`, and Projection `NeedsResync` failures through a new
 connection and the same conservative bootstrap path. Internal adapter,
@@ -124,6 +140,8 @@ construction. G7 publishes only Projection `Applied` updates. Its limits are
 eight resident accepted channels, 64 ordinary records per channel, one separate
 terminal slot per channel, and eight pending admissions. Existing sessions
 terminate and resubscribe rather than cross G5/G6 full Projection rebootstrap.
+G9 event subscribers are separately bounded at eight active sessions, 64 ordinary
+records, and one terminal control slot per session.
 
 The [2026-08-23 handoff](HANDOFF_2026-08-23.md) is historical provenance, not
 current project status.
