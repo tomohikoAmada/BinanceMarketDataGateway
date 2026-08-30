@@ -35,6 +35,23 @@ struct PlannedRotationCut final {
   g3::RuntimeObservation runtime;
 };
 
+enum class SourceGenerationCloseOutcome : std::uint8_t {
+  Replacement,
+  PermanentFailure,
+  GlobalShutdown,
+};
+
+struct SourceGenerationLifecycle final {
+  std::function<bool(std::uint64_t)> open;
+  std::function<bool(std::uint64_t)> quiesce;
+  std::function<bool(std::uint64_t, SourceGenerationCloseOutcome)> close;
+};
+
+struct RecoveryOptions final {
+  g4::SpotTransportOptions transport;
+  SourceGenerationLifecycle source_generation_lifecycle;
+};
+
 enum class RecoveryCause : std::uint8_t {
   NeedsResync,
   TransportFailure,
@@ -127,7 +144,13 @@ public:
   SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                detail::RecoveryTestOptions test_options = {});
   SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+               RecoveryOptions options,
+               detail::RecoveryTestOptions test_options = {});
+  SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                PlannedRotationPolicy planned_rotation,
+               detail::RecoveryTestOptions test_options = {});
+  SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+               PlannedRotationPolicy planned_rotation, RecoveryOptions options,
                detail::RecoveryTestOptions test_options = {});
   ~SpotRecovery();
 

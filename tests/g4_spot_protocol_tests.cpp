@@ -16,6 +16,7 @@
 namespace {
 
 namespace common_wire = binance_market_data::common::v1;
+namespace g3 = binance_market_data::gateway::g3;
 namespace g4 = binance_market_data::gateway::g4;
 
 class TestFailure final : public std::exception {
@@ -221,6 +222,84 @@ void stream_name_and_server_shutdown() {
              1770123456789ULL);
 }
 
+void combined_event_frames() {
+  const auto received_at =
+      g3::ClockSample{1700000000123456000ULL, 9000000000999ULL};
+  const auto depth = g4::parse_combined_event_frame(
+      R"json({"stream":"btcusdt@depth@100ms","data":{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":157,"u":160,"b":[["100.00","1.000"]],"a":[]}})json",
+      received_at, "combined-g1");
+  REQUIRE(std::holds_alternative<g4::NormalizedSpotEvent>(depth));
+  const auto &depth_event = std::get<g4::NormalizedSpotEvent>(depth);
+  REQUIRE(std::holds_alternative<g4::market::DepthUpdate>(depth_event));
+  REQUIRE_EQ(std::get<g4::market::DepthUpdate>(depth_event).final_update_id(),
+             160U);
+
+  const auto trade = g4::parse_combined_event_frame(
+      R"json({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1672515782136,"s":"BTCUSDT","a":5933014,"p":"100.25","q":"0.125","f":100,"l":105,"T":1672515782137,"m":true,"M":true}})json",
+      received_at, "combined-g1");
+  REQUIRE(std::holds_alternative<g4::NormalizedSpotEvent>(trade));
+  const auto &trade_event = std::get<g4::NormalizedSpotEvent>(trade);
+  REQUIRE(std::holds_alternative<g4::market::AggTrade>(trade_event));
+  const auto &normalized_trade = std::get<g4::market::AggTrade>(trade_event);
+  REQUIRE_EQ(normalized_trade.aggregate_trade_id(), 5933014U);
+  REQUIRE_EQ(normalized_trade.price(), "100.25");
+  REQUIRE_EQ(normalized_trade.quantity(), "0.125");
+  REQUIRE_EQ(normalized_trade.first_trade_id(), 100U);
+  REQUIRE_EQ(normalized_trade.last_trade_id(), 105U);
+  REQUIRE_EQ(normalized_trade.trade_time_ms(), 1672515782137ULL);
+  REQUIRE(normalized_trade.buyer_is_maker());
+  REQUIRE_EQ(normalized_trade.metadata().stream(),
+             common_wire::STREAM_AGG_TRADE);
+  REQUIRE_EQ(normalized_trade.metadata().schema_version(), "agg-trade.v1");
+  REQUIRE_EQ(normalized_trade.metadata().exchange_event_time_ms(),
+             1672515782136ULL);
+  REQUIRE_EQ(normalized_trade.metadata().exchange_trade_time_ms(),
+             1672515782137ULL);
+
+  const auto ticker = g4::parse_combined_event_frame(
+      R"json({"stream":"btcusdt@bookTicker","data":{"u":400900217,"s":"BTCUSDT","b":"100.00","B":"1.500","a":"100.01","A":"0.000"}})json",
+      received_at, "combined-g1");
+  REQUIRE(std::holds_alternative<g4::NormalizedSpotEvent>(ticker));
+  const auto &ticker_event = std::get<g4::NormalizedSpotEvent>(ticker);
+  REQUIRE(std::holds_alternative<g4::market::BookTicker>(ticker_event));
+  const auto &normalized_ticker =
+      std::get<g4::market::BookTicker>(ticker_event);
+  REQUIRE_EQ(normalized_ticker.update_id(), 400900217U);
+  REQUIRE_EQ(normalized_ticker.best_bid_price(), "100.00");
+  REQUIRE_EQ(normalized_ticker.best_ask_quantity(), "0.000");
+  REQUIRE_EQ(normalized_ticker.metadata().stream(),
+             common_wire::STREAM_BOOK_TICKER);
+  REQUIRE_EQ(normalized_ticker.metadata().schema_version(), "book-ticker.v1");
+  REQUIRE(!normalized_ticker.metadata().has_exchange_event_time_ms());
+  REQUIRE(!normalized_ticker.metadata().has_exchange_trade_time_ms());
+}
+
+void malformed_combined_event_frames() {
+  const std::vector<std::string_view> invalid{
+      R"json(not-json)json",
+      R"json({"stream":"btcusdt@aggTrade"})json",
+      R"json({"stream":"ethusdt@aggTrade","data":{}})json",
+      R"json({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1,"s":"ETHUSDT","a":1,"p":"1","q":"1","f":1,"l":1,"T":1,"m":true,"M":true}})json",
+      R"json({"stream":"btcusdt@aggTrade","data":{"e":"trade","E":1,"s":"BTCUSDT","a":1,"p":"1","q":"1","f":1,"l":1,"T":1,"m":true,"M":true}})json",
+      R"json({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1,"s":"BTCUSDT","a":1,"p":"1e2","q":"1","f":1,"l":1,"T":1,"m":true,"M":true}})json",
+      R"json({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1,"s":"BTCUSDT","a":"1","p":"1","q":"1","f":1,"l":1,"T":1,"m":true,"M":true}})json",
+      R"json({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1,"s":"BTCUSDT","a":1,"p":"1","q":"1","f":1,"l":1,"T":1,"m":1,"M":true}})json",
+      R"json({"stream":"btcusdt@bookTicker","data":{"u":1,"s":"BTCUSDT","b":"0","B":"1","a":"2","A":"1"}})json",
+      R"json({"stream":"btcusdt@bookTicker","data":{"u":1,"s":"ETHUSDT","b":"1","B":"1","a":"2","A":"1"}})json",
+      R"json({"stream":"btcusdt@bookTicker","data":{"u":"1","s":"BTCUSDT","b":"1","B":"1","a":"2","A":"1"}})json",
+      R"json({"stream":"btcusdt@depth@100ms","data":{"e":"depthUpdate","E":1,"s":"BTCUSDT","U":1,"u":1,"b":[],"a":[],"pu":0}})json",
+  };
+  for (const auto payload : invalid) {
+    REQUIRE(std::holds_alternative<g4::ProtocolError>(
+        g4::parse_combined_event_frame(payload, {1U, 2U}, "connection")));
+  }
+
+  // The legacy raw depth parser remains a separate unchanged framing path.
+  REQUIRE(std::holds_alternative<g4::market::DepthUpdate>(g4::parse_depth_frame(
+      R"json({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":1,"u":1,"b":[],"a":[]})json",
+      {1U, 2U}, "connection")));
+}
+
 } // namespace
 
 int main() {
@@ -232,6 +311,8 @@ int main() {
       {"WRONG_SYMBOL_AND_MALFORMED_DEPTH", wrong_symbol_and_malformed_depth},
       {"SNAPSHOT_JSON_PARSE", snapshot_json_parse},
       {"STREAM_NAME_AND_SERVER_SHUTDOWN", stream_name_and_server_shutdown},
+      {"COMBINED_EVENT_FRAMES", combined_event_frames},
+      {"MALFORMED_COMBINED_EVENT_FRAMES", malformed_combined_event_frames},
   };
 
   for (const auto &[name, test] : tests) {

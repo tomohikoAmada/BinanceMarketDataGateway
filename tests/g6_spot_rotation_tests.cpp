@@ -650,6 +650,58 @@ void monotonic_clock_failure_quiesces_attempt() {
   recovery.stop();
 }
 
+void event_generation_planned_rotation_two_phase_cut() {
+  auto state = make_script({Action::Live, Action::Live});
+  auto rotation = std::make_shared<RotationGate>();
+  auto lifecycle_steps = std::make_shared<std::vector<std::string>>();
+  auto lifecycle_mutex = std::make_shared<std::mutex>();
+  g5::RecoveryOptions recovery_options;
+  recovery_options.source_generation_lifecycle.open =
+      [lifecycle_steps, lifecycle_mutex](std::uint64_t generation) {
+        std::lock_guard lock{*lifecycle_mutex};
+        lifecycle_steps->push_back("open-" + std::to_string(generation));
+        return true;
+      };
+  recovery_options.source_generation_lifecycle.quiesce =
+      [lifecycle_steps, lifecycle_mutex](std::uint64_t generation) {
+        std::lock_guard lock{*lifecycle_mutex};
+        lifecycle_steps->push_back("quiesce-" + std::to_string(generation));
+        return true;
+      };
+  recovery_options.source_generation_lifecycle.close =
+      [lifecycle_steps, lifecycle_mutex](
+          std::uint64_t generation, g5::SourceGenerationCloseOutcome outcome) {
+        std::lock_guard lock{*lifecycle_mutex};
+        lifecycle_steps->push_back(
+            std::string{
+                outcome == g5::SourceGenerationCloseOutcome::Replacement
+                    ? "replacement-"
+                : outcome == g5::SourceGenerationCloseOutcome::PermanentFailure
+                    ? "permanent-"
+                    : "shutdown-"} +
+            std::to_string(generation));
+        return true;
+      };
+
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  g5::SpotRecovery recovery{runtime, fixed_clock(), short_policy(),
+                            std::move(recovery_options),
+                            script_options(state, rotation)};
+  REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+  static_cast<void>(recovery.wait_for_generation_live(1U));
+  rotation->wait_for_calls(1U);
+  rotation->trigger(g3::TimedRecoveryWaitResult::DeadlineReached);
+  const auto second = recovery.wait_for_generation_live(2U);
+  REQUIRE_EQ(second.planned_rotation_count, 1U);
+  REQUIRE_EQ(second.total_recovery_count, 0U);
+  REQUIRE_EQ(second.max_active_transport_count, 1U);
+  recovery.stop();
+  std::lock_guard lock{*lifecycle_mutex};
+  REQUIRE_EQ(*lifecycle_steps,
+             (std::vector<std::string>{"open-1", "quiesce-1", "replacement-1",
+                                       "open-2", "quiesce-2", "shutdown-2"}));
+}
+
 } // namespace
 
 int main() {
@@ -671,6 +723,8 @@ int main() {
       {"SERVER_SHUTDOWN_REMAINS_G5", server_shutdown_remains_g5},
       {"MONOTONIC_CLOCK_FAILURE_QUIESCES_ATTEMPT",
        monotonic_clock_failure_quiesces_attempt},
+      {"EVENT_GENERATION_PLANNED_ROTATION_TWO_PHASE_CUT",
+       event_generation_planned_rotation_two_phase_cut},
   };
 
   for (const auto &[name, test] : tests) {
