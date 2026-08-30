@@ -21,6 +21,8 @@ option(BMD_GATEWAY_BUILD_G6_ROTATION
        "Build planned G6 Spot connection rotation and focused tests" OFF)
 option(BMD_GATEWAY_BUILD_G7_PUBLICATION
        "Build bounded G7 order-book publication and synchronous gRPC" OFF)
+option(BMD_GATEWAY_BUILD_G8_INTEGRATION_ACCEPTANCE
+       "Build G8 Projection M6 integration acceptance" OFF)
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
        "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
 option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
@@ -31,6 +33,10 @@ option(BMD_GATEWAY_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 
 if(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT)
     set(BMD_GATEWAY_BUILD_G3_RUNTIME ON)
+endif()
+
+if(BMD_GATEWAY_BUILD_G8_INTEGRATION_ACCEPTANCE)
+    set(BMD_GATEWAY_BUILD_G7_PUBLICATION ON)
 endif()
 
 if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
@@ -577,6 +583,50 @@ if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
         bmd_gateway_apply_sanitizers(bmd_gateway_g7_grpc_service_tests)
         add_test(NAME gateway_g7_grpc_service_tests
                  COMMAND bmd_gateway_g7_grpc_service_tests)
+    endif()
+endif()
+
+if(BMD_GATEWAY_BUILD_G8_INTEGRATION_ACCEPTANCE)
+    add_executable(bmd-gateway-g8-integration-live
+        app/g8_integration_live/main.cpp
+    )
+    set_target_properties(
+        bmd-gateway-g8-integration-live
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_link_libraries(
+        bmd-gateway-g8-integration-live
+        PRIVATE
+            bmd_gateway_g7_grpc
+    )
+    bmd_gateway_apply_warnings(bmd-gateway-g8-integration-live)
+    bmd_gateway_apply_sanitizers(bmd-gateway-g8-integration-live)
+
+    if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_g8_projection_m6_integration_tests
+            tests/g8_projection_m6_integration_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_g8_projection_m6_integration_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g8_projection_m6_integration_tests
+            PRIVATE
+                bmd_gateway_g7_grpc
+        )
+        bmd_gateway_apply_warnings(
+            bmd_gateway_g8_projection_m6_integration_tests)
+        bmd_gateway_apply_sanitizers(
+            bmd_gateway_g8_projection_m6_integration_tests)
+        add_test(NAME gateway_g8_projection_m6_integration_tests
+                 COMMAND bmd_gateway_g8_projection_m6_integration_tests)
     endif()
 endif()
 
