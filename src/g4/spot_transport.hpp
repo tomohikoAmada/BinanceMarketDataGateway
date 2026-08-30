@@ -1,6 +1,7 @@
 #pragma once
 
 #include "market_runtime.hpp"
+#include "spot_protocol.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -54,6 +55,24 @@ enum class TransportStartResult : std::uint8_t {
   Stopped,
 };
 
+enum class SpotTransportProfile : std::uint8_t {
+  DepthOnly,
+  G9CombinedEvents,
+};
+
+enum class NormalizedEventSinkResult : std::uint8_t {
+  Continue,
+  InvariantFailure,
+};
+
+using NormalizedEventSink = std::function<NormalizedEventSinkResult(
+    std::shared_ptr<const NormalizedSpotEvent>, std::uint64_t)>;
+
+struct SpotTransportOptions final {
+  SpotTransportProfile profile{SpotTransportProfile::DepthOnly};
+  NormalizedEventSink normalized_event_sink;
+};
+
 struct TransportObservation final {
   bool started{false};
   bool running{false};
@@ -64,6 +83,9 @@ struct TransportObservation final {
   bool server_ping_observed{false};
   bool server_shutdown_observed{false};
   std::size_t depth_frame_count{0U};
+  std::size_t agg_trade_frame_count{0U};
+  std::size_t book_ticker_frame_count{0U};
+  SpotTransportProfile profile{SpotTransportProfile::DepthOnly};
   std::string connection_id;
   std::uint64_t connection_generation{1U};
   std::optional<NetworkError> terminal_error;
@@ -114,6 +136,10 @@ public:
                 detail::TransportTestOptions test_options = {});
   SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                 std::uint64_t connection_generation,
+                detail::TransportTestOptions test_options = {});
+  SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                std::uint64_t connection_generation,
+                SpotTransportOptions options,
                 detail::TransportTestOptions test_options = {});
   ~SpotTransport();
 

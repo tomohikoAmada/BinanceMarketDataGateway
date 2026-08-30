@@ -739,6 +739,80 @@ void stop_during_active_connection() {
   REQUIRE_EQ(script->active, 0U);
 }
 
+struct SourceLifecycleTrace final {
+  std::mutex mutex;
+  std::vector<std::string> steps;
+};
+
+[[nodiscard]] g5::RecoveryOptions
+lifecycle_options(const std::shared_ptr<SourceLifecycleTrace> &trace) {
+  g5::RecoveryOptions options;
+  options.source_generation_lifecycle.open = [trace](std::uint64_t generation) {
+    std::lock_guard lock{trace->mutex};
+    trace->steps.push_back("open-" + std::to_string(generation));
+    return true;
+  };
+  options.source_generation_lifecycle.quiesce =
+      [trace](std::uint64_t generation) {
+        std::lock_guard lock{trace->mutex};
+        trace->steps.push_back("quiesce-" + std::to_string(generation));
+        return true;
+      };
+  options.source_generation_lifecycle.close =
+      [trace](std::uint64_t generation,
+              g5::SourceGenerationCloseOutcome outcome) {
+        const auto name =
+            outcome == g5::SourceGenerationCloseOutcome::Replacement
+                ? "replacement-"
+            : outcome == g5::SourceGenerationCloseOutcome::PermanentFailure
+                ? "permanent-"
+                : "shutdown-";
+        std::lock_guard lock{trace->mutex};
+        trace->steps.push_back(name + std::to_string(generation));
+        return true;
+      };
+  return options;
+}
+
+void event_generation_two_phase_recovery_and_permanent_cut() {
+  {
+    auto script = make_script({Action::Live, Action::Live});
+    auto trace = std::make_shared<SourceLifecycleTrace>();
+    g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+    g5::SpotRecovery recovery{runtime, fixed_clock(), lifecycle_options(trace),
+                              script_options(script)};
+    REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+    static_cast<void>(recovery.wait_for_generation_live(1U));
+    REQUIRE(recovery.request_controlled_recovery_for_acceptance());
+    static_cast<void>(recovery.wait_for_generation_live(2U));
+    recovery.stop();
+    std::lock_guard lock{trace->mutex};
+    REQUIRE_EQ(trace->steps,
+               (std::vector<std::string>{"open-1", "quiesce-1", "replacement-1",
+                                         "open-2", "quiesce-2", "shutdown-2"}));
+  }
+
+  {
+    auto script = make_script({Action::Live});
+    auto trace = std::make_shared<SourceLifecycleTrace>();
+    g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+    g5::SpotRecovery recovery{runtime, fixed_clock(), lifecycle_options(trace),
+                              script_options(script)};
+    REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+    static_cast<void>(recovery.wait_for_generation_live(1U));
+    REQUIRE_EQ(runtime.submit_depth_update(make_update(102U, 102U, 1U, true)),
+               g3::AdmissionResult::Accepted);
+    const auto terminal = recovery.wait_until_terminal();
+    REQUIRE(terminal.terminal);
+    REQUIRE_EQ(terminal.last_recovery_cause,
+               g5::RecoveryCause::InternalFailure);
+    recovery.stop();
+    std::lock_guard lock{trace->mutex};
+    REQUIRE_EQ(trace->steps, (std::vector<std::string>{"open-1", "quiesce-1",
+                                                       "permanent-1"}));
+  }
+}
+
 } // namespace
 
 int main() {
@@ -766,6 +840,8 @@ int main() {
        terminal_http_and_bad_retry_after},
       {"STOP_DURING_BACKOFF", stop_during_backoff},
       {"STOP_DURING_ACTIVE_CONNECTION", stop_during_active_connection},
+      {"EVENT_GENERATION_TWO_PHASE_RECOVERY_AND_PERMANENT_CUT",
+       event_generation_two_phase_recovery_and_permanent_cut},
   };
 
   for (const auto &[name, test] : tests) {

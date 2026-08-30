@@ -23,6 +23,8 @@ option(BMD_GATEWAY_BUILD_G7_PUBLICATION
        "Build bounded G7 order-book publication and synchronous gRPC" OFF)
 option(BMD_GATEWAY_BUILD_G8_INTEGRATION_ACCEPTANCE
        "Build G8 Projection M6 integration acceptance" OFF)
+option(BMD_GATEWAY_BUILD_G9_EVENTS
+       "Build G9 contiguous event publication and SubscribeEvents" OFF)
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
        "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
 option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
@@ -36,6 +38,10 @@ if(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT)
 endif()
 
 if(BMD_GATEWAY_BUILD_G8_INTEGRATION_ACCEPTANCE)
+    set(BMD_GATEWAY_BUILD_G7_PUBLICATION ON)
+endif()
+
+if(BMD_GATEWAY_BUILD_G9_EVENTS)
     set(BMD_GATEWAY_BUILD_G7_PUBLICATION ON)
 endif()
 
@@ -496,6 +502,55 @@ if(BMD_GATEWAY_BUILD_G6_ROTATION)
     endif()
 endif()
 
+if(BMD_GATEWAY_BUILD_G9_EVENTS)
+    add_library(bmd_gateway_g9_events
+        src/g9/event_publication.cpp
+    )
+    set_target_properties(
+        bmd_gateway_g9_events
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_g9_events
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g9
+    )
+    target_link_libraries(
+        bmd_gateway_g9_events
+        PUBLIC
+            bmd_gateway_g4_spot_protocol
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g9_events)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g9_events)
+
+    if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_g9_event_publication_tests
+            tests/g9_event_publication_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_g9_event_publication_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g9_event_publication_tests
+            PRIVATE
+                bmd_gateway_g9_events
+        )
+        bmd_gateway_apply_warnings(
+            bmd_gateway_g9_event_publication_tests)
+        bmd_gateway_apply_sanitizers(
+            bmd_gateway_g9_event_publication_tests)
+        add_test(NAME gateway_g9_event_publication_tests
+                 COMMAND bmd_gateway_g9_event_publication_tests)
+    endif()
+endif()
+
 if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
     find_package(BinanceMarketDataContractsGrpc 0.1.0 EXACT CONFIG REQUIRED)
 
@@ -520,6 +575,18 @@ if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
             bmd_gateway_g6_rotation
             BinanceMarketDataContracts::Grpc
     )
+    if(BMD_GATEWAY_BUILD_G9_EVENTS)
+        target_compile_definitions(
+            bmd_gateway_g7_grpc
+            PUBLIC
+                BMD_GATEWAY_G9_ENABLED=1
+        )
+        target_link_libraries(
+            bmd_gateway_g7_grpc
+            PUBLIC
+                bmd_gateway_g9_events
+        )
+    endif()
     bmd_gateway_apply_warnings(bmd_gateway_g7_grpc)
     bmd_gateway_apply_sanitizers(bmd_gateway_g7_grpc)
 
@@ -583,7 +650,51 @@ if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
         bmd_gateway_apply_sanitizers(bmd_gateway_g7_grpc_service_tests)
         add_test(NAME gateway_g7_grpc_service_tests
                  COMMAND bmd_gateway_g7_grpc_service_tests)
+
+        if(BMD_GATEWAY_BUILD_G9_EVENTS)
+            add_executable(bmd_gateway_g9_grpc_service_tests
+                tests/g9_grpc_service_tests.cpp
+            )
+            set_target_properties(
+                bmd_gateway_g9_grpc_service_tests
+                PROPERTIES
+                    CXX_STANDARD 20
+                    CXX_STANDARD_REQUIRED YES
+                    CXX_EXTENSIONS NO
+            )
+            target_link_libraries(
+                bmd_gateway_g9_grpc_service_tests
+                PRIVATE
+                    bmd_gateway_g7_grpc
+            )
+            bmd_gateway_apply_warnings(
+                bmd_gateway_g9_grpc_service_tests)
+            bmd_gateway_apply_sanitizers(
+                bmd_gateway_g9_grpc_service_tests)
+            add_test(NAME gateway_g9_grpc_service_tests
+                     COMMAND bmd_gateway_g9_grpc_service_tests)
+        endif()
     endif()
+endif()
+
+if(BMD_GATEWAY_BUILD_G9_EVENTS)
+    add_executable(bmd-gateway-g9-spot-events-live
+        app/g9_spot_events_live/main.cpp
+    )
+    set_target_properties(
+        bmd-gateway-g9-spot-events-live
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_link_libraries(
+        bmd-gateway-g9-spot-events-live
+        PRIVATE
+            bmd_gateway_g7_grpc
+    )
+    bmd_gateway_apply_warnings(bmd-gateway-g9-spot-events-live)
+    bmd_gateway_apply_sanitizers(bmd-gateway-g9-spot-events-live)
 endif()
 
 if(BMD_GATEWAY_BUILD_G8_INTEGRATION_ACCEPTANCE)

@@ -53,6 +53,96 @@ string_field(const Json &object, std::string_view name) {
   return iterator->get_ref<const std::string &>();
 }
 
+[[nodiscard]] std::optional<bool> boolean_field(const Json &object,
+                                                std::string_view name) {
+  const auto iterator = object.find(std::string{name});
+  if (iterator == object.end() || !iterator->is_boolean()) {
+    return std::nullopt;
+  }
+  return iterator->get<bool>();
+}
+
+[[nodiscard]] bool plain_decimal(std::string_view value,
+                                 bool allow_zero) noexcept {
+  if (value.empty() || value.front() == '+' || value.front() == '-') {
+    return false;
+  }
+  const auto decimal = value.find('.');
+  if (decimal != std::string_view::npos &&
+      value.find('.', decimal + 1U) != std::string_view::npos) {
+    return false;
+  }
+  const auto whole = value.substr(0U, decimal);
+  const auto fraction = decimal == std::string_view::npos
+                            ? std::string_view{}
+                            : value.substr(decimal + 1U);
+  const auto digits = [](std::string_view text) {
+    return std::all_of(text.begin(), text.end(),
+                       [](char value) { return value >= '0' && value <= '9'; });
+  };
+  if (whole.empty() || !digits(whole) ||
+      (decimal != std::string_view::npos && fraction.empty()) ||
+      !digits(fraction)) {
+    return false;
+  }
+  const auto nonzero = [](char value) { return value != '0'; };
+  return allow_zero || std::any_of(value.begin(), value.end(), nonzero);
+}
+
+void populate_event_metadata(market::DepthUpdate &event,
+                             std::string_view connection_id,
+                             g3::ClockSample received_at,
+                             std::uint64_t exchange_event_time_ms) {
+  auto *metadata = event.mutable_metadata();
+  metadata->set_venue(common_wire::VENUE_BINANCE);
+  metadata->set_market(common_wire::MARKET_SPOT);
+  metadata->set_symbol("BTCUSDT");
+  metadata->set_producer("gateway-g4-spot");
+  metadata->set_producer_version("1.0.0");
+  metadata->set_connection_id(std::string{connection_id});
+  metadata->set_stream(common_wire::STREAM_DIFF_DEPTH);
+  metadata->set_schema_version("depth-update.v1");
+  metadata->set_exchange_event_time_ms(exchange_event_time_ms);
+  metadata->set_receive_time_utc_ns(received_at.utc_ns);
+  metadata->set_receive_monotonic_ns(received_at.monotonic_ns);
+}
+
+void populate_event_metadata(market::AggTrade &event,
+                             std::string_view connection_id,
+                             g3::ClockSample received_at,
+                             std::uint64_t exchange_event_time_ms,
+                             std::uint64_t exchange_trade_time_ms) {
+  auto *metadata = event.mutable_metadata();
+  metadata->set_venue(common_wire::VENUE_BINANCE);
+  metadata->set_market(common_wire::MARKET_SPOT);
+  metadata->set_symbol("BTCUSDT");
+  metadata->set_producer("gateway-g4-spot");
+  metadata->set_producer_version("1.0.0");
+  metadata->set_connection_id(std::string{connection_id});
+  metadata->set_stream(common_wire::STREAM_AGG_TRADE);
+  metadata->set_schema_version("agg-trade.v1");
+  metadata->set_exchange_event_time_ms(exchange_event_time_ms);
+  metadata->set_exchange_trade_time_ms(exchange_trade_time_ms);
+  metadata->set_receive_time_utc_ns(received_at.utc_ns);
+  metadata->set_receive_monotonic_ns(received_at.monotonic_ns);
+}
+
+void populate_event_metadata(market::BookTicker &event,
+                             std::string_view connection_id,
+                             g3::ClockSample received_at) {
+  auto *metadata = event.mutable_metadata();
+  metadata->set_venue(common_wire::VENUE_BINANCE);
+  metadata->set_market(common_wire::MARKET_SPOT);
+  metadata->set_symbol("BTCUSDT");
+  metadata->set_producer("gateway-g4-spot");
+  metadata->set_producer_version("1.0.0");
+  metadata->set_connection_id(std::string{connection_id});
+  metadata->set_stream(common_wire::STREAM_BOOK_TICKER);
+  metadata->set_schema_version("book-ticker.v1");
+  metadata->set_receive_time_utc_ns(received_at.utc_ns);
+  metadata->set_receive_monotonic_ns(received_at.monotonic_ns);
+}
+
 template <typename RepeatedLevels>
 [[nodiscard]] std::optional<ProtocolError>
 append_levels(const Json &levels, RepeatedLevels *output,
@@ -275,18 +365,7 @@ DepthFrameResult parse_depth_frame(std::string_view payload,
   }
 
   market::DepthUpdate update;
-  auto *metadata = update.mutable_metadata();
-  metadata->set_venue(common_wire::VENUE_BINANCE);
-  metadata->set_market(common_wire::MARKET_SPOT);
-  metadata->set_symbol("BTCUSDT");
-  metadata->set_producer("gateway-g4-spot");
-  metadata->set_producer_version("1.0.0");
-  metadata->set_connection_id(std::string{connection_id});
-  metadata->set_stream(common_wire::STREAM_DIFF_DEPTH);
-  metadata->set_schema_version("depth-update.v1");
-  metadata->set_exchange_event_time_ms(*event_time);
-  metadata->set_receive_time_utc_ns(received_at.utc_ns);
-  metadata->set_receive_monotonic_ns(received_at.monotonic_ns);
+  populate_event_metadata(update, connection_id, received_at, *event_time);
   update.set_first_update_id(*first);
   update.set_final_update_id(*final);
   if (const auto failure =
@@ -298,6 +377,126 @@ DepthFrameResult parse_depth_frame(std::string_view payload,
     return *failure;
   }
   return update;
+}
+
+CombinedFrameResult parse_combined_event_frame(std::string_view payload,
+                                               g3::ClockSample received_at,
+                                               std::string_view connection_id) {
+  const auto decoded = parse_json(payload);
+  if (const auto *failure = std::get_if<ProtocolError>(&decoded)) {
+    return *failure;
+  }
+  const auto &root = std::get<Json>(decoded);
+  if (!has_exact_keys(root, {"stream", "data"})) {
+    return error(ProtocolErrorCode::InvalidShape, "payload",
+                 "combined stream envelope has an unexpected shape");
+  }
+  const auto stream = string_field(root, "stream");
+  const auto data = root.find("data");
+  if (!stream.has_value() || data == root.end() || !data->is_object()) {
+    return error(ProtocolErrorCode::InvalidField, "stream",
+                 "combined stream and data must be valid");
+  }
+  if (connection_id.empty()) {
+    return error(ProtocolErrorCode::InvalidField, "connection_id",
+                 "connection_id must be non-empty");
+  }
+
+  if (*stream == "btcusdt@depth@100ms") {
+    const auto nested =
+        parse_depth_frame(data->dump(), received_at, connection_id);
+    if (const auto *shutdown = std::get_if<ServerShutdown>(&nested)) {
+      return *shutdown;
+    }
+    if (const auto *failure = std::get_if<ProtocolError>(&nested)) {
+      return *failure;
+    }
+    return NormalizedSpotEvent{
+        std::get<market::DepthUpdate>(std::move(nested))};
+  }
+
+  if (*stream == "btcusdt@aggTrade") {
+    if (!has_exact_keys(
+            *data, {"e", "E", "s", "a", "p", "q", "f", "l", "T", "m", "M"})) {
+      return error(ProtocolErrorCode::InvalidShape, "data",
+                   "aggTrade has an unexpected shape");
+    }
+    const auto event = string_field(*data, "e");
+    const auto symbol = string_field(*data, "s");
+    const auto aggregate_id = unsigned_field(*data, "a");
+    const auto price = string_field(*data, "p");
+    const auto quantity = string_field(*data, "q");
+    const auto first_trade_id = unsigned_field(*data, "f");
+    const auto last_trade_id = unsigned_field(*data, "l");
+    const auto event_time = unsigned_field(*data, "E");
+    const auto trade_time = unsigned_field(*data, "T");
+    const auto buyer_is_maker = boolean_field(*data, "m");
+    const auto best_match = boolean_field(*data, "M");
+    if (!event.has_value() || *event != "aggTrade") {
+      return error(ProtocolErrorCode::WrongEvent, "e",
+                   "combined stream payload is not aggTrade");
+    }
+    if (!symbol.has_value() || *symbol != "BTCUSDT") {
+      return error(ProtocolErrorCode::WrongSymbol, "s",
+                   "aggTrade symbol must be BTCUSDT");
+    }
+    if (!aggregate_id.has_value() || !price.has_value() ||
+        !plain_decimal(*price, false) || !quantity.has_value() ||
+        !plain_decimal(*quantity, false) || !first_trade_id.has_value() ||
+        !last_trade_id.has_value() || !event_time.has_value() ||
+        !trade_time.has_value() || !buyer_is_maker.has_value() ||
+        !best_match.has_value()) {
+      return error(ProtocolErrorCode::InvalidField, "aggTrade",
+                   "aggTrade fields have invalid types or decimal values");
+    }
+    market::AggTrade trade;
+    populate_event_metadata(trade, connection_id, received_at, *event_time,
+                            *trade_time);
+    trade.set_aggregate_trade_id(*aggregate_id);
+    trade.set_price(std::string{*price});
+    trade.set_quantity(std::string{*quantity});
+    trade.set_first_trade_id(*first_trade_id);
+    trade.set_last_trade_id(*last_trade_id);
+    trade.set_trade_time_ms(*trade_time);
+    trade.set_buyer_is_maker(*buyer_is_maker);
+    return NormalizedSpotEvent{std::move(trade)};
+  }
+
+  if (*stream == "btcusdt@bookTicker") {
+    if (!has_exact_keys(*data, {"u", "s", "b", "B", "a", "A"})) {
+      return error(ProtocolErrorCode::InvalidShape, "data",
+                   "bookTicker has an unexpected shape");
+    }
+    const auto update_id = unsigned_field(*data, "u");
+    const auto symbol = string_field(*data, "s");
+    const auto bid_price = string_field(*data, "b");
+    const auto bid_quantity = string_field(*data, "B");
+    const auto ask_price = string_field(*data, "a");
+    const auto ask_quantity = string_field(*data, "A");
+    if (!symbol.has_value() || *symbol != "BTCUSDT") {
+      return error(ProtocolErrorCode::WrongSymbol, "s",
+                   "bookTicker symbol must be BTCUSDT");
+    }
+    if (!update_id.has_value() || !bid_price.has_value() ||
+        !plain_decimal(*bid_price, false) || !bid_quantity.has_value() ||
+        !plain_decimal(*bid_quantity, true) || !ask_price.has_value() ||
+        !plain_decimal(*ask_price, false) || !ask_quantity.has_value() ||
+        !plain_decimal(*ask_quantity, true)) {
+      return error(ProtocolErrorCode::InvalidField, "bookTicker",
+                   "bookTicker fields have invalid types or decimal values");
+    }
+    market::BookTicker ticker;
+    populate_event_metadata(ticker, connection_id, received_at);
+    ticker.set_update_id(*update_id);
+    ticker.set_best_bid_price(std::string{*bid_price});
+    ticker.set_best_bid_quantity(std::string{*bid_quantity});
+    ticker.set_best_ask_price(std::string{*ask_price});
+    ticker.set_best_ask_quantity(std::string{*ask_quantity});
+    return NormalizedSpotEvent{std::move(ticker)};
+  }
+
+  return error(ProtocolErrorCode::WrongEvent, "stream",
+               "combined stream is not configured for G9");
 }
 
 DepthSnapshotResult parse_depth_snapshot(std::string_view payload,

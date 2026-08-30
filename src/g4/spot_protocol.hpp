@@ -48,6 +48,10 @@ using DecimalScaleResult = std::variant<core::DecimalScale, ProtocolError>;
 using SpotMetadataResult = std::variant<SpotMetadata, ProtocolError>;
 using DepthFrameResult =
     std::variant<market::DepthUpdate, ServerShutdown, ProtocolError>;
+using NormalizedSpotEvent =
+    std::variant<market::DepthUpdate, market::AggTrade, market::BookTicker>;
+using CombinedFrameResult =
+    std::variant<NormalizedSpotEvent, ServerShutdown, ProtocolError>;
 using DepthSnapshotResult =
     std::variant<market::ExchangeDepthSnapshot, ProtocolError>;
 
@@ -59,6 +63,11 @@ decimal_scale_from_quantum(std::string_view quantum);
 [[nodiscard]] DepthFrameResult
 parse_depth_frame(std::string_view payload, g3::ClockSample received_at,
                   std::string_view connection_id);
+
+[[nodiscard]] CombinedFrameResult
+parse_combined_event_frame(std::string_view payload,
+                           g3::ClockSample received_at,
+                           std::string_view connection_id);
 
 [[nodiscard]] DepthSnapshotResult
 parse_depth_snapshot(std::string_view payload, g3::ClockSample received_at,

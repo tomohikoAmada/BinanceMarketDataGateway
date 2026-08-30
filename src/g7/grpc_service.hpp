@@ -2,6 +2,9 @@
 
 #include "market_runtime.hpp"
 #include "order_book_publication.hpp"
+#if defined(BMD_GATEWAY_G9_ENABLED)
+#include "event_publication.hpp"
+#endif
 
 #include <binance_market_data/gateway/v1/gateway_service.grpc.pb.h>
 #include <grpcpp/grpcpp.h>
@@ -29,6 +32,11 @@ enum class RequestValidationError : std::uint8_t {
 using RequestValidationResult =
     std::variant<ValidatedOrderBookSubscription, RequestValidationError>;
 
+#if defined(BMD_GATEWAY_G9_ENABLED)
+using EventRequestValidationResult =
+    std::variant<g9::ValidatedEventSubscription, RequestValidationError>;
+#endif
+
 [[nodiscard]] RequestValidationResult validate_order_book_request(
     const gateway_wire::OrderBookSubscriptionRequest &request,
     const std::string &gateway_instance_id);
@@ -37,29 +45,65 @@ using RequestValidationResult =
 materialize_stream_item(const SubscriberChannel &channel,
                         const PeekedPublication &publication);
 
+#if defined(BMD_GATEWAY_G9_ENABLED)
+[[nodiscard]] EventRequestValidationResult
+validate_event_request(const gateway_wire::EventSubscriptionRequest &request,
+                       const std::string &gateway_instance_id);
+
+[[nodiscard]] gateway_wire::GatewayEventEnvelope
+materialize_event_envelope(const g9::EventSubscriberChannel &channel,
+                           const g9::PeekedEventPublication &publication);
+#endif
+
+#if defined(BMD_GATEWAY_G9_ENABLED)
+inline constexpr std::size_t kMaximumGrpcTrackedContexts =
+    kMaximumActiveSubscriptions + kPendingAdmissionCapacity +
+    g9::kMaximumActiveEventSubscriptions;
+#else
+inline constexpr std::size_t kMaximumGrpcTrackedContexts =
+    kMaximumActiveSubscriptions + kPendingAdmissionCapacity;
+#endif
+
 struct GrpcServiceOptions final {
   GrpcServiceOptions(
       std::chrono::milliseconds idle_interval =
           kIdleClientCancellationCheckInterval,
-      std::size_t tracked_context_limit = kMaximumActiveSubscriptions +
-                                          kPendingAdmissionCapacity,
+      std::size_t tracked_context_limit = kMaximumGrpcTrackedContexts,
       std::function<
           bool(grpc::ServerWriter<gateway_wire::OrderBookStreamItem> &,
                const gateway_wire::OrderBookStreamItem &)>
-          writer = {})
+          writer = {}
+#if defined(BMD_GATEWAY_G9_ENABLED)
+      ,
+      std::function<
+          bool(grpc::ServerWriter<gateway_wire::GatewayEventEnvelope> &,
+               const gateway_wire::GatewayEventEnvelope &)>
+          event_writer = {}
+#endif
+      )
       : idle_cancellation_check_interval{idle_interval},
         maximum_tracked_contexts{tracked_context_limit},
-        write_override{std::move(writer)} {}
+        write_override{std::move(writer)}
+#if defined(BMD_GATEWAY_G9_ENABLED)
+        ,
+        event_write_override{std::move(event_writer)}
+#endif
+  {
+  }
 
   std::chrono::milliseconds idle_cancellation_check_interval{
       kIdleClientCancellationCheckInterval};
-  std::size_t maximum_tracked_contexts{kMaximumActiveSubscriptions +
-                                       kPendingAdmissionCapacity};
+  std::size_t maximum_tracked_contexts{kMaximumGrpcTrackedContexts};
   // Empty in production. Focused tests may replace the blocking Write call
   // while retaining the real generated synchronous RPC handler.
   std::function<bool(grpc::ServerWriter<gateway_wire::OrderBookStreamItem> &,
                      const gateway_wire::OrderBookStreamItem &)>
       write_override;
+#if defined(BMD_GATEWAY_G9_ENABLED)
+  std::function<bool(grpc::ServerWriter<gateway_wire::GatewayEventEnvelope> &,
+                     const gateway_wire::GatewayEventEnvelope &)>
+      event_write_override;
+#endif
   // Empty in production. Focused tests use these gates to deterministically
   // order handler finalization against the shutdown cancellation snapshot.
   std::function<void(grpc::StatusCode)> before_context_finalization;
@@ -76,6 +120,17 @@ public:
   OrderBookGrpcService(g3::MarketRuntime &runtime,
                        std::string gateway_instance_id,
                        GrpcServiceOptions options = {});
+#if defined(BMD_GATEWAY_G9_ENABLED)
+  OrderBookGrpcService(g3::MarketRuntime &runtime,
+                       g9::EventPublication &event_publication,
+                       std::string gateway_instance_id,
+                       GrpcServiceOptions options = {});
+
+  [[nodiscard]] grpc::Status SubscribeEvents(
+      grpc::ServerContext *context,
+      const gateway_wire::EventSubscriptionRequest *request,
+      grpc::ServerWriter<gateway_wire::GatewayEventEnvelope> *writer) override;
+#endif
 
   [[nodiscard]] grpc::Status SubscribeOrderBook(
       grpc::ServerContext *context,
@@ -109,10 +164,17 @@ private:
   void untrack_context(grpc::ServerContext *context) noexcept;
   void
   close_channel(const std::shared_ptr<SubscriberChannel> &channel) noexcept;
+#if defined(BMD_GATEWAY_G9_ENABLED)
+  void close_event_channel(
+      const std::shared_ptr<g9::EventSubscriberChannel> &channel) noexcept;
+#endif
   [[nodiscard]] grpc::Status
   map_admission_error(g3::SubscriptionAdmissionError error) const;
 
   g3::MarketRuntime &runtime_;
+#if defined(BMD_GATEWAY_G9_ENABLED)
+  g9::EventPublication *event_publication_{nullptr};
+#endif
   const std::string gateway_instance_id_;
   const GrpcServiceOptions options_;
 
@@ -131,6 +193,12 @@ public:
   OrderBookGrpcServer(g3::MarketRuntime &runtime,
                       std::string gateway_instance_id,
                       GrpcServiceOptions options = {});
+#if defined(BMD_GATEWAY_G9_ENABLED)
+  OrderBookGrpcServer(g3::MarketRuntime &runtime,
+                      g9::EventPublication &event_publication,
+                      std::string gateway_instance_id,
+                      GrpcServiceOptions options = {});
+#endif
   ~OrderBookGrpcServer();
 
   OrderBookGrpcServer(const OrderBookGrpcServer &) = delete;

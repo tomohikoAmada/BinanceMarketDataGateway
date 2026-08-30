@@ -18,8 +18,8 @@ namespace core = binance_market_data::projection::v1;
 class LiveSpotAttempt final : public detail::RecoveryAttempt {
 public:
   LiveSpotAttempt(g3::MarketRuntime &runtime, const g3::RuntimeClock &clock,
-                  std::uint64_t generation)
-      : transport_{runtime, clock, generation} {}
+                  std::uint64_t generation, g4::SpotTransportOptions options)
+      : transport_{runtime, clock, generation, std::move(options)} {}
 
   [[nodiscard]] g4::TransportStartResult start() override {
     return transport_.start();
@@ -164,9 +164,12 @@ class SpotRecovery::Impl final {
 public:
   Impl(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
        std::optional<PlannedRotationPolicy> planned_rotation,
-       detail::RecoveryTestOptions test_options)
+       RecoveryOptions options, detail::RecoveryTestOptions test_options)
       : runtime_{runtime}, clock_{std::move(clock)},
         planned_rotation_{planned_rotation},
+        transport_options_{std::move(options.transport)},
+        source_generation_lifecycle_{
+            std::move(options.source_generation_lifecycle)},
         attempt_factory_{std::move(test_options.attempt_factory)},
         backoff_waiter_{std::move(test_options.backoff_waiter)},
         rotation_waiter_{std::move(test_options.rotation_waiter)},
@@ -181,12 +184,24 @@ public:
         planned_rotation_->age <= std::chrono::nanoseconds::zero()) {
       throw std::invalid_argument{"G6 planned rotation age must be positive"};
     }
+    const auto lifecycle_callback_count =
+        static_cast<unsigned>(
+            static_cast<bool>(source_generation_lifecycle_.open)) +
+        static_cast<unsigned>(
+            static_cast<bool>(source_generation_lifecycle_.quiesce)) +
+        static_cast<unsigned>(
+            static_cast<bool>(source_generation_lifecycle_.close));
+    if (lifecycle_callback_count != 0U && lifecycle_callback_count != 3U) {
+      throw std::invalid_argument{
+          "G9 source generation lifecycle callbacks must be all-or-none"};
+    }
     if (!attempt_factory_) {
-      attempt_factory_ = [](g3::MarketRuntime &attempt_runtime,
-                            const g3::RuntimeClock &attempt_clock,
-                            std::uint64_t generation) {
+      attempt_factory_ = [transport_options = transport_options_](
+                             g3::MarketRuntime &attempt_runtime,
+                             const g3::RuntimeClock &attempt_clock,
+                             std::uint64_t generation) {
         return std::make_unique<LiveSpotAttempt>(attempt_runtime, attempt_clock,
-                                                 generation);
+                                                 generation, transport_options);
       };
     }
   }
@@ -405,6 +420,7 @@ private:
         }
         if (stop_token.stop_requested() || shutdown_requested()) {
           static_cast<void>(quiesce_attempt(attempt));
+          close_source_generation(SourceGenerationCloseOutcome::GlobalShutdown);
           break;
         }
 
@@ -428,16 +444,20 @@ private:
         const auto start_result = attempt->start();
         if (stop_token.stop_requested() || shutdown_requested()) {
           static_cast<void>(quiesce_attempt(attempt));
+          close_source_generation(SourceGenerationCloseOutcome::GlobalShutdown);
           break;
         }
 
         bool planned_rotation_due = false;
         std::optional<g3::RuntimeObservation> runtime_observation;
         if (start_result == g4::TransportStartResult::Started) {
+          open_source_generation(attempt->observe(), generation);
           runtime_observation =
               runtime_.wait_until_live_or_recovery_required(stop_token);
           if (!runtime_observation.has_value()) {
             static_cast<void>(quiesce_attempt(attempt));
+            close_source_generation(
+                SourceGenerationCloseOutcome::GlobalShutdown);
             break;
           }
           if (runtime_observation->state == g3::RuntimeState::Live) {
@@ -457,10 +477,14 @@ private:
                       *generation_started, *rotation_deadline, stop_token);
                 } catch (...) {
                   static_cast<void>(quiesce_attempt(attempt));
+                  close_source_generation(
+                      SourceGenerationCloseOutcome::PermanentFailure);
                   throw;
                 }
                 if (wait_result == g3::TimedRecoveryWaitResult::Stopped) {
                   static_cast<void>(quiesce_attempt(attempt));
+                  close_source_generation(
+                      SourceGenerationCloseOutcome::GlobalShutdown);
                   break;
                 }
                 planned_rotation_due =
@@ -478,6 +502,8 @@ private:
                   condition_.notify_all();
                   if (shutdown_won) {
                     static_cast<void>(quiesce_attempt(attempt));
+                    close_source_generation(
+                        SourceGenerationCloseOutcome::GlobalShutdown);
                     break;
                   }
                 }
@@ -486,6 +512,8 @@ private:
                     runtime_.wait_until_recovery_required(stop_token);
                 if (!runtime_observation.has_value()) {
                   static_cast<void>(quiesce_attempt(attempt));
+                  close_source_generation(
+                      SourceGenerationCloseOutcome::GlobalShutdown);
                   break;
                 }
               }
@@ -495,6 +523,7 @@ private:
 
         const auto transport_observation = quiesce_attempt(attempt);
         if (stop_token.stop_requested() || shutdown_requested()) {
+          close_source_generation(SourceGenerationCloseOutcome::GlobalShutdown);
           break;
         }
         // This owner barrier is deliberately after the transport network thread
@@ -509,6 +538,8 @@ private:
             !final_runtime.fault_reason.has_value()) {
           if (runtime_.submit_transport_failure() !=
               g3::AdmissionResult::Accepted) {
+            close_source_generation(
+                SourceGenerationCloseOutcome::PermanentFailure);
             set_terminal(
                 RecoveryCause::InternalFailure,
                 internal_error("terminal transport fault admission failed"),
@@ -528,8 +559,11 @@ private:
             // single ordering decision after source quiescence.
             std::lock_guard lock{mutex_};
             if (shutdown_requested_ || stop_token.stop_requested()) {
+              close_source_generation(
+                  SourceGenerationCloseOutcome::GlobalShutdown);
               break;
             }
+            close_source_generation(SourceGenerationCloseOutcome::Replacement);
             reset_result = runtime_.reset_live_for_planned_rebootstrap();
             if (reset_result == g3::PlannedRebootstrapResetResult::Reset) {
               observation_.last_rotation_generation = generation;
@@ -553,6 +587,8 @@ private:
         const auto decision =
             classify_failure(final_runtime, transport_observation);
         if (!decision.recoverable) {
+          close_source_generation(
+              SourceGenerationCloseOutcome::PermanentFailure);
           set_terminal(decision.cause,
                        transport_observation.terminal_error.value_or(
                            internal_error("nonrecoverable G5 failure")),
@@ -567,10 +603,14 @@ private:
         {
           std::lock_guard lock{mutex_};
           if (shutdown_requested_ || stop_token.stop_requested()) {
+            close_source_generation(
+                SourceGenerationCloseOutcome::GlobalShutdown);
             break;
           }
           if (observation_.consecutive_recovery_attempts >=
               detail::kMaximumRecoveryAttempts) {
+            close_source_generation(
+                SourceGenerationCloseOutcome::PermanentFailure);
             observation_.last_recovery_cause = decision.cause;
             observation_.state = RecoveryState::Exhausted;
             observation_.terminal = true;
@@ -580,6 +620,7 @@ private:
             condition_.notify_all();
             return;
           }
+          close_source_generation(SourceGenerationCloseOutcome::Replacement);
           recovery_attempt = ++observation_.consecutive_recovery_attempts;
           observation_.last_recovery_cause = decision.cause;
           auto delay = detail::normal_backoff_delay(recovery_attempt);
@@ -628,9 +669,11 @@ private:
         }
       }
     } catch (const std::exception &error) {
+      close_source_after_exception();
       set_terminal(RecoveryCause::InternalFailure, internal_error(error.what()),
                    false);
     } catch (...) {
+      close_source_after_exception();
       set_terminal(RecoveryCause::InternalFailure,
                    internal_error("unknown coordinator exception"), false);
     }
@@ -705,10 +748,20 @@ private:
            !runtime.fault_reason.has_value();
   }
 
-  [[nodiscard]] g4::TransportObservation quiesce_attempt(
-      const std::shared_ptr<detail::RecoveryAttempt> &attempt) noexcept {
+  [[nodiscard]] g4::TransportObservation
+  quiesce_attempt(const std::shared_ptr<detail::RecoveryAttempt> &attempt) {
     attempt->stop();
     const auto transport = attempt->observe();
+    if (source_generation_open_.has_value() &&
+        *source_generation_open_ == transport.connection_generation &&
+        !source_generation_quiesced_) {
+      if (!source_generation_lifecycle_.quiesce(
+              transport.connection_generation)) {
+        throw std::runtime_error{
+            "G9 source generation quiesce invariant failed"};
+      }
+      source_generation_quiesced_ = true;
+    }
     {
       std::lock_guard lock{attempt_mutex_};
       if (active_attempt_ == attempt) {
@@ -723,6 +776,59 @@ private:
     }
     condition_.notify_all();
     return transport;
+  }
+
+  void open_source_generation(const g4::TransportObservation &transport,
+                              std::uint64_t expected_generation) {
+    if (!source_generation_lifecycle_.open) {
+      return;
+    }
+    if (source_generation_open_.has_value() || source_generation_quiesced_ ||
+        !transport.started || !transport.running || transport.stopped ||
+        !transport.websocket_handshake ||
+        transport.connection_generation != expected_generation ||
+        !source_generation_lifecycle_.open(expected_generation)) {
+      throw std::runtime_error{"G9 source generation open invariant failed"};
+    }
+    source_generation_open_ = expected_generation;
+  }
+
+  void close_source_generation(SourceGenerationCloseOutcome outcome) {
+    if (!source_generation_lifecycle_.close ||
+        !source_generation_open_.has_value()) {
+      return;
+    }
+    if (!source_generation_quiesced_ ||
+        !source_generation_lifecycle_.close(*source_generation_open_,
+                                            outcome)) {
+      throw std::runtime_error{"G9 source generation close invariant failed"};
+    }
+    source_generation_open_.reset();
+    source_generation_quiesced_ = false;
+  }
+
+  void close_source_after_exception() noexcept {
+    if (!source_generation_open_.has_value()) {
+      return;
+    }
+    if (!source_generation_quiesced_) {
+      std::shared_ptr<detail::RecoveryAttempt> attempt;
+      {
+        std::lock_guard lock{attempt_mutex_};
+        attempt = active_attempt_;
+      }
+      if (attempt != nullptr) {
+        try {
+          static_cast<void>(quiesce_attempt(attempt));
+        } catch (...) {
+          return;
+        }
+      }
+    }
+    try {
+      close_source_generation(SourceGenerationCloseOutcome::PermanentFailure);
+    } catch (...) {
+    }
   }
 
   [[nodiscard]] bool try_mark_live(const g3::RuntimeObservation &runtime,
@@ -788,6 +894,10 @@ private:
   g3::MarketRuntime &runtime_;
   g3::RuntimeClock clock_;
   std::optional<PlannedRotationPolicy> planned_rotation_;
+  g4::SpotTransportOptions transport_options_;
+  SourceGenerationLifecycle source_generation_lifecycle_;
+  std::optional<std::uint64_t> source_generation_open_;
+  bool source_generation_quiesced_{false};
   detail::AttemptFactory attempt_factory_;
   detail::BackoffWaiter backoff_waiter_;
   detail::RotationWaiter rotation_waiter_;
@@ -811,13 +921,28 @@ private:
 
 SpotRecovery::SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                            detail::RecoveryTestOptions test_options)
+    : SpotRecovery(runtime, std::move(clock), RecoveryOptions{},
+                   std::move(test_options)) {}
+
+SpotRecovery::SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                           RecoveryOptions options,
+                           detail::RecoveryTestOptions test_options)
     : impl_{std::make_unique<Impl>(runtime, std::move(clock), std::nullopt,
+                                   std::move(options),
                                    std::move(test_options))} {}
 
 SpotRecovery::SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                            PlannedRotationPolicy planned_rotation,
                            detail::RecoveryTestOptions test_options)
+    : SpotRecovery(runtime, std::move(clock), planned_rotation,
+                   RecoveryOptions{}, std::move(test_options)) {}
+
+SpotRecovery::SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                           PlannedRotationPolicy planned_rotation,
+                           RecoveryOptions options,
+                           detail::RecoveryTestOptions test_options)
     : impl_{std::make_unique<Impl>(runtime, std::move(clock), planned_rotation,
+                                   std::move(options),
                                    std::move(test_options))} {}
 
 SpotRecovery::~SpotRecovery() = default;

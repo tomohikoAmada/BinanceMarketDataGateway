@@ -446,6 +446,14 @@ int main() {
   g3::MarketRuntime runtime{{4U, 4U}, clock, numeric_spec()};
   g4::SpotTransport transport{runtime, clock};
   g4::SpotTransport next_transport{runtime, clock, 2U};
+  g4::SpotTransportOptions combined_options;
+  combined_options.profile = g4::SpotTransportProfile::G9CombinedEvents;
+  combined_options.normalized_event_sink =
+      [](std::shared_ptr<const g4::NormalizedSpotEvent>, std::uint64_t) {
+        return g4::NormalizedEventSinkResult::Continue;
+      };
+  g4::SpotTransport combined_transport{runtime, clock, 3U,
+                                       std::move(combined_options)};
 
   const auto before = transport.observe();
   if (before.started || before.running || before.stopped ||
@@ -458,8 +466,16 @@ int main() {
       next_before.connection_id == before.connection_id) {
     return EXIT_FAILURE;
   }
+  const auto combined_before = combined_transport.observe();
+  if (before.profile != g4::SpotTransportProfile::DepthOnly ||
+      next_before.profile != g4::SpotTransportProfile::DepthOnly ||
+      combined_before.profile != g4::SpotTransportProfile::G9CombinedEvents ||
+      combined_before.connection_generation != 3U) {
+    return EXIT_FAILURE;
+  }
   transport.stop();
   next_transport.stop();
+  combined_transport.stop();
   transport.stop();
   const auto after = transport.observe();
   if (!after.stopped || after.running || after.started ||
@@ -480,6 +496,7 @@ int main() {
                "CONCURRENT_STOP_WINNER_WAITER=PASS\n"
                "START_PENDING_UNTIL_STOP=PASS\n"
                "EXPLICIT_GENERATION_IDENTITY=PASS\n"
+               "DEPTH_ONLY_AND_G9_COMBINED_PROFILES=PASS\n"
                "CLEAN_TRANSPORT_STOP_CORE=PASS\n";
   return EXIT_SUCCESS;
 }
