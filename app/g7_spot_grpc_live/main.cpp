@@ -193,8 +193,7 @@ int main() {
 
   if (!stream_valid || !client_disconnected || !subscriber_removed ||
       !grpc_shutdown || !gateway_shutdown) {
-    std::cerr << "REAL_G7_ACCEPTANCE=FAIL"
-              << " stream_valid=" << stream_valid
+    std::cerr << "REAL_G7_ACCEPTANCE=FAIL" << " stream_valid=" << stream_valid
               << " client_disconnected=" << client_disconnected
               << " subscriber_removed=" << subscriber_removed
               << " grpc_shutdown=" << grpc_shutdown
