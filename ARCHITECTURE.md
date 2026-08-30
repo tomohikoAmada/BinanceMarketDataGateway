@@ -2,7 +2,7 @@
 
 The detailed, ordered development authority is
 [docs/MILESTONES.md](docs/MILESTONES.md). This document records only the
-responsibility split and the current foundation/G7 boundary.
+responsibility split and the current foundation/G8 boundary.
 
 ## Dependency direction
 
@@ -118,6 +118,14 @@ rebootstrap. Service shutdown closes admission, executes a reserved owner
 publication-shutdown control, cancels a bounded snapshot of active contexts,
 then shuts down and waits for the synchronous server before G5/G6/runtime stop.
 
+G8 composes the existing G3-G7 production components at the accepted
+cross-repository boundary. Its deterministic and real acceptance paths prove
+consumer-visible behavior across Projection `NeedsResync`, G5 recovery and
+rebootstrap, G6 planned rotation and rebootstrap, fresh resubscription,
+generation provenance, per-session sequencing, and final shutdown. G8 adds no
+production runtime layer, second order book, sequence classifier, recovery
+coordinator, or other runtime abstraction.
+
 ## MarketRuntime Projection boundary
 
 The G3 `MarketRuntime`, G4 transport, and G5/G6 lifecycle coordinator use, and
@@ -137,5 +145,6 @@ G4 is the first real network/bootstrap implementation. G5 adds bounded automatic
 recovery and G6 adds planned break-before-make rotation without changing
 Projection continuity ownership. G7 adds bounded publication and the first
 synchronous gRPC business flow without adding a second classifier or order book.
-Projection M6 integration acceptance, `SubscribeEvents`, and
-`GetGatewayStatus` remain later work.
+G8 closes the Projection M6 real-Gateway order-book integration acceptance.
+Later work is G9 `SubscribeEvents`, G10 minimal `GetGatewayStatus`, and G11
+USD-M / multi-market runtime.
