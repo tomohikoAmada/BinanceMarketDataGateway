@@ -60,6 +60,12 @@ struct GrpcServiceOptions final {
   std::function<bool(grpc::ServerWriter<gateway_wire::OrderBookStreamItem> &,
                      const gateway_wire::OrderBookStreamItem &)>
       write_override;
+  // Empty in production. Focused tests use these gates to deterministically
+  // order handler finalization against the shutdown cancellation snapshot.
+  std::function<void(grpc::StatusCode)> before_context_finalization;
+  std::function<void(grpc::StatusCode)> after_context_finalization;
+  std::function<void()> cancellation_snapshot_ready;
+  std::function<void()> context_finalization_waiting;
 };
 
 // The generated synchronous service surface. A handler owns exactly one
@@ -92,7 +98,14 @@ private:
     Full,
   };
 
+  struct TrackedContext final {
+    grpc::ServerContext *context;
+    bool selected_for_try_cancel{false};
+  };
+
   [[nodiscard]] TrackResult track_context(grpc::ServerContext *context);
+  [[nodiscard]] grpc::Status finalize_context(grpc::ServerContext *context,
+                                              grpc::Status proposed_status);
   void untrack_context(grpc::ServerContext *context) noexcept;
   void
   close_channel(const std::shared_ptr<SubscriberChannel> &channel) noexcept;
@@ -105,7 +118,7 @@ private:
 
   mutable std::mutex mutex_;
   std::condition_variable contexts_condition_;
-  std::vector<grpc::ServerContext *> contexts_;
+  std::vector<TrackedContext> contexts_;
   bool admission_open_{true};
   bool shutdown_started_{false};
   bool cancellation_snapshot_active_{false};

@@ -213,6 +213,117 @@ void initial_cut_and_provenance() {
   REQUIRE(observation.last_publication_thread_id != std::this_thread::get_id());
 }
 
+void buffered_generation_mismatch_faults_before_apply() {
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
+  REQUIRE_EQ(runtime.submit_depth_update(make_update(101U, "2.000"),
+                                         g3::SourceProvenance{11U}),
+             g3::AdmissionResult::Accepted);
+  REQUIRE_EQ(
+      runtime.submit_snapshot(make_snapshot(), g3::SourceProvenance{10U}),
+      g3::AdmissionResult::Accepted);
+
+  const auto observation = runtime.observe();
+  REQUIRE_EQ(observation.state, g3::RuntimeState::Faulted);
+  REQUIRE_EQ(observation.fault_reason,
+             std::optional<g3::FaultReason>{g3::FaultReason::InternalError});
+  REQUIRE_EQ(observation.current_projection_generation,
+             std::optional<std::uint64_t>{10U});
+  REQUIRE_EQ(observation.last_update_id, std::optional<std::uint64_t>{100U});
+  REQUIRE(!observation.last_apply.has_value());
+  REQUIRE_EQ(observation.resident_subscription_count, 0U);
+}
+
+void live_generation_mismatch_faults_before_apply_and_publication() {
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  bootstrap(runtime, 20U);
+  const auto accepted = accept(runtime);
+  for (int index = 0; index < 2; ++index) {
+    ack_required(accepted.channel, peek_required(accepted.channel));
+  }
+
+  REQUIRE_EQ(runtime.submit_depth_update(make_update(102U, "3.000"),
+                                         g3::SourceProvenance{21U}),
+             g3::AdmissionResult::Accepted);
+  const auto observation = runtime.observe();
+  REQUIRE_EQ(observation.state, g3::RuntimeState::Faulted);
+  REQUIRE_EQ(observation.fault_reason,
+             std::optional<g3::FaultReason>{g3::FaultReason::InternalError});
+  REQUIRE_EQ(observation.current_projection_generation,
+             std::optional<std::uint64_t>{20U});
+  REQUIRE_EQ(observation.last_update_id, std::optional<std::uint64_t>{101U});
+
+  const auto terminal = peek_required(accepted.channel);
+  REQUIRE(terminal.is_terminal());
+  REQUIRE(terminal.ordinary == nullptr);
+  REQUIRE_EQ(terminal.terminal->connection_generation,
+             std::optional<std::uint64_t>{20U});
+  REQUIRE_EQ(terminal.terminal->reason,
+             common::CONSUMER_GAP_REASON_RESUME_NOT_AVAILABLE);
+}
+
+void same_generation_buffered_and_live_updates_remain_normal() {
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
+  REQUIRE_EQ(runtime.submit_depth_update(make_update(101U, "2.000"),
+                                         g3::SourceProvenance{30U}),
+             g3::AdmissionResult::Accepted);
+  REQUIRE_EQ(
+      runtime.submit_snapshot(make_snapshot(), g3::SourceProvenance{30U}),
+      g3::AdmissionResult::Accepted);
+  auto observation = runtime.observe();
+  REQUIRE_EQ(observation.state, g3::RuntimeState::Live);
+  REQUIRE_EQ(observation.current_projection_generation,
+             std::optional<std::uint64_t>{30U});
+  REQUIRE_EQ(observation.last_update_id, std::optional<std::uint64_t>{101U});
+
+  const auto accepted = accept(runtime);
+  for (int index = 0; index < 2; ++index) {
+    ack_required(accepted.channel, peek_required(accepted.channel));
+  }
+  REQUIRE_EQ(runtime.submit_depth_update(make_update(102U, "3.000"),
+                                         g3::SourceProvenance{30U}),
+             g3::AdmissionResult::Accepted);
+  observation = runtime.observe();
+  REQUIRE_EQ(observation.state, g3::RuntimeState::Live);
+  REQUIRE_EQ(observation.last_update_id, std::optional<std::uint64_t>{102U});
+  const auto publication = peek_required(accepted.channel);
+  REQUIRE_EQ(publication.ordinary->kind(),
+             g7::PublicationPayloadKind::DepthUpdate);
+  REQUIRE_EQ(publication.ordinary->connection_generation,
+             std::optional<std::uint64_t>{30U});
+}
+
+void absent_provenance_synthetic_flow_remains_supported() {
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
+  REQUIRE_EQ(runtime.submit_depth_update(make_update(101U, "2.000")),
+             g3::AdmissionResult::Accepted);
+  REQUIRE_EQ(runtime.submit_snapshot(make_snapshot()),
+             g3::AdmissionResult::Accepted);
+  auto observation = runtime.observe();
+  REQUIRE_EQ(observation.state, g3::RuntimeState::Live);
+  REQUIRE(!observation.current_projection_generation.has_value());
+  REQUIRE_EQ(observation.last_update_id, std::optional<std::uint64_t>{101U});
+
+  const auto accepted = accept(runtime);
+  auto publication = peek_required(accepted.channel);
+  ack_required(accepted.channel, publication);
+  publication = peek_required(accepted.channel);
+  REQUIRE(!publication.ordinary->connection_generation.has_value());
+  ack_required(accepted.channel, publication);
+
+  REQUIRE_EQ(runtime.submit_depth_update(make_update(102U, "3.000")),
+             g3::AdmissionResult::Accepted);
+  observation = runtime.observe();
+  REQUIRE_EQ(observation.state, g3::RuntimeState::Live);
+  REQUIRE_EQ(observation.last_update_id, std::optional<std::uint64_t>{102U});
+  publication = peek_required(accepted.channel);
+  REQUIRE_EQ(publication.ordinary->kind(),
+             g7::PublicationPayloadKind::DepthUpdate);
+  REQUIRE(!publication.ordinary->connection_generation.has_value());
+}
+
 void mandatory_initial_capacity() {
   g3::MarketRuntime runtime{{8U, 8U, g7::PublicationLimits{8U, 1U, 8U}},
                             fixed_clock(),
@@ -682,6 +793,14 @@ void publication_shutdown_and_lifetime() {
 int main() {
   const std::vector<std::pair<std::string_view, void (*)()>> tests{
       {"initial_cut_and_provenance", initial_cut_and_provenance},
+      {"buffered_generation_mismatch_faults_before_apply",
+       buffered_generation_mismatch_faults_before_apply},
+      {"live_generation_mismatch_faults_before_apply_and_publication",
+       live_generation_mismatch_faults_before_apply_and_publication},
+      {"same_generation_buffered_and_live_updates_remain_normal",
+       same_generation_buffered_and_live_updates_remain_normal},
+      {"absent_provenance_synthetic_flow_remains_supported",
+       absent_provenance_synthetic_flow_remains_supported},
       {"mandatory_initial_capacity", mandatory_initial_capacity},
       {"owner_target_ticket_subscription_cut",
        owner_target_ticket_subscription_cut},

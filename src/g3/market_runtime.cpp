@@ -1025,6 +1025,13 @@ private:
   }
 
   void apply_update(const DepthUpdateInput &input) {
+    if (current_projection_generation_.has_value() &&
+        input.provenance.connection_generation.has_value() &&
+        current_projection_generation_ !=
+            input.provenance.connection_generation) {
+      transition_to_fault(FaultReason::InternalError, std::nullopt);
+      return;
+    }
     auto adapted = adapter::adapt_depth_update(
         input.update, projection_.numeric_spec(), expected_identity_);
     if (std::holds_alternative<adapter::AdapterError>(adapted)) {

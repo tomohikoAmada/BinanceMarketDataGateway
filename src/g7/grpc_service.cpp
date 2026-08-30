@@ -209,45 +209,57 @@ grpc::Status OrderBookGrpcService::SubscribeOrderBook(
             "bounded G7 handler tracking is full"};
   }
 
+  bool finalization_committed = false;
   struct Untrack final {
     OrderBookGrpcService *service;
     grpc::ServerContext *context;
-    ~Untrack() { service->untrack_context(context); }
-  } untrack{this, context};
+    bool *finalization_committed;
+    ~Untrack() {
+      if (!*finalization_committed) {
+        service->untrack_context(context);
+      }
+    }
+  } untrack{this, context, &finalization_committed};
+  const auto finalize = [&](grpc::Status proposed_status) {
+    auto final_status = finalize_context(context, std::move(proposed_status));
+    finalization_committed = true;
+    return final_status;
+  };
 
   const auto validated =
       validate_order_book_request(*request, gateway_instance_id_);
   if (const auto *failure = std::get_if<RequestValidationError>(&validated)) {
-    return *failure == RequestValidationError::InvalidArgument
-               ? grpc::Status{grpc::StatusCode::INVALID_ARGUMENT,
-                              "unsupported or malformed order-book request"}
-               : grpc::Status{
-                     grpc::StatusCode::FAILED_PRECONDITION,
-                     "required payload schema negotiation unavailable"};
+    return finalize(
+        *failure == RequestValidationError::InvalidArgument
+            ? grpc::Status{grpc::StatusCode::INVALID_ARGUMENT,
+                           "unsupported or malformed order-book request"}
+            : grpc::Status{grpc::StatusCode::FAILED_PRECONDITION,
+                           "required payload schema negotiation unavailable"});
   }
 
   auto admission = runtime_.admit_order_book_subscription(
       std::get<ValidatedOrderBookSubscription>(validated));
   if (const auto *failure =
           std::get_if<g3::SubscriptionAdmissionError>(&admission)) {
-    return map_admission_error(*failure);
+    return finalize(map_admission_error(*failure));
   }
   auto channel =
       std::get<g3::AcceptedSubscription>(std::move(admission)).channel;
   if (channel == nullptr) {
-    return {grpc::StatusCode::INTERNAL, "accepted channel is missing"};
+    return finalize(
+        {grpc::StatusCode::INTERNAL, "accepted channel is missing"});
   }
 
   for (;;) {
     if (context->IsCancelled()) {
       close_channel(channel);
-      return {grpc::StatusCode::CANCELLED, "client cancelled"};
+      return finalize({grpc::StatusCode::CANCELLED, "client cancelled"});
     }
     auto publication = channel->peek();
     if (!publication.has_value()) {
       if (channel->state() == SubscriberState::Closed) {
         close_channel(channel);
-        return grpc::Status::OK;
+        return finalize(grpc::Status::OK);
       }
       channel->wait_for_change(options_.idle_cancellation_check_interval);
       continue;
@@ -258,8 +270,8 @@ grpc::Status OrderBookGrpcService::SubscribeOrderBook(
       item = materialize_stream_item(*channel, publication);
     } catch (...) {
       close_channel(channel);
-      return {grpc::StatusCode::INTERNAL,
-              "failed to materialize order-book stream item"};
+      return finalize({grpc::StatusCode::INTERNAL,
+                       "failed to materialize order-book stream item"});
     }
     bool write_succeeded = false;
     try {
@@ -268,27 +280,29 @@ grpc::Status OrderBookGrpcService::SubscribeOrderBook(
                             : writer->Write(item);
     } catch (...) {
       close_channel(channel);
-      return {grpc::StatusCode::INTERNAL, "subscriber writer test seam failed"};
+      return finalize(
+          {grpc::StatusCode::INTERNAL, "subscriber writer test seam failed"});
     }
     if (context->IsCancelled() || !write_succeeded) {
       close_channel(channel);
-      return context->IsCancelled()
-                 ? grpc::Status{grpc::StatusCode::CANCELLED, "client cancelled"}
-                 : grpc::Status::OK;
+      return finalize(
+          context->IsCancelled()
+              ? grpc::Status{grpc::StatusCode::CANCELLED, "client cancelled"}
+              : grpc::Status::OK);
     }
     const auto acknowledged = channel->acknowledge(publication);
     if (acknowledged == AcknowledgeResult::Mismatch) {
       close_channel(channel);
-      return {grpc::StatusCode::INTERNAL,
-              "subscriber peek/ack invariant failed"};
+      return finalize(
+          {grpc::StatusCode::INTERNAL, "subscriber peek/ack invariant failed"});
     }
     if (acknowledged == AcknowledgeResult::Closed) {
       close_channel(channel);
-      return grpc::Status::OK;
+      return finalize(grpc::Status::OK);
     }
     if (publication.is_terminal()) {
       runtime_.notify_subscriber_closed();
-      return grpc::Status::OK;
+      return finalize(grpc::Status::OK);
     }
   }
 }
@@ -313,7 +327,13 @@ void OrderBookGrpcService::begin_shutdown() noexcept {
     std::lock_guard lock{mutex_};
     cancellation_snapshot_active_ = true;
     context_count = contexts_.size();
-    std::copy(contexts_.begin(), contexts_.end(), contexts.begin());
+    for (std::size_t index = 0U; index < context_count; ++index) {
+      contexts_[index].selected_for_try_cancel = true;
+      contexts[index] = contexts_[index].context;
+    }
+  }
+  if (options_.cancellation_snapshot_ready) {
+    options_.cancellation_snapshot_ready();
   }
   for (std::size_t index = 0U; index < context_count; ++index) {
     auto *context = contexts[index];
@@ -351,8 +371,39 @@ OrderBookGrpcService::track_context(grpc::ServerContext *context) {
   if (contexts_.size() == options_.maximum_tracked_contexts) {
     return TrackResult::Full;
   }
-  contexts_.push_back(context);
+  contexts_.push_back(TrackedContext{context});
   return TrackResult::Tracked;
+}
+
+grpc::Status
+OrderBookGrpcService::finalize_context(grpc::ServerContext *context,
+                                       grpc::Status proposed_status) {
+  if (options_.before_context_finalization) {
+    options_.before_context_finalization(proposed_status.error_code());
+  }
+  std::unique_lock lock{mutex_};
+  if (cancellation_snapshot_active_ && options_.context_finalization_waiting) {
+    options_.context_finalization_waiting();
+  }
+  contexts_condition_.wait(lock,
+                           [this] { return !cancellation_snapshot_active_; });
+  const auto found = std::find_if(
+      contexts_.begin(), contexts_.end(),
+      [context](const auto &entry) { return entry.context == context; });
+  const auto selected_for_try_cancel =
+      found != contexts_.end() && found->selected_for_try_cancel;
+  if (found != contexts_.end()) {
+    contexts_.erase(found);
+  }
+  lock.unlock();
+  if (proposed_status.ok() && selected_for_try_cancel) {
+    proposed_status =
+        grpc::Status{grpc::StatusCode::CANCELLED, "server shutdown"};
+  }
+  if (options_.after_context_finalization) {
+    options_.after_context_finalization(proposed_status.error_code());
+  }
+  return proposed_status;
 }
 
 void OrderBookGrpcService::untrack_context(
@@ -360,7 +411,9 @@ void OrderBookGrpcService::untrack_context(
   std::unique_lock lock{mutex_};
   contexts_condition_.wait(lock,
                            [this] { return !cancellation_snapshot_active_; });
-  const auto found = std::find(contexts_.begin(), contexts_.end(), context);
+  const auto found = std::find_if(
+      contexts_.begin(), contexts_.end(),
+      [context](const auto &entry) { return entry.context == context; });
   if (found != contexts_.end()) {
     contexts_.erase(found);
   }

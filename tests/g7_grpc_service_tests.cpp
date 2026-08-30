@@ -292,6 +292,206 @@ void request_validation_policy() {
              g7::RequestValidationError::InvalidArgument);
 }
 
+void server_cancelled_ok_handler_returns_cancelled() {
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  bootstrap(runtime);
+
+  std::promise<grpc::StatusCode> proposed_status;
+  auto proposed_status_future = proposed_status.get_future();
+  std::promise<void> release_finalization;
+  auto release_finalization_future = release_finalization.get_future().share();
+  std::promise<void> snapshot_ready;
+  auto snapshot_ready_future = snapshot_ready.get_future();
+  std::promise<void> release_snapshot;
+  auto release_snapshot_future = release_snapshot.get_future().share();
+  std::promise<void> finalization_waiting;
+  auto finalization_waiting_future = finalization_waiting.get_future();
+  std::promise<grpc::StatusCode> final_status;
+  auto final_status_future = final_status.get_future();
+
+  g7::GrpcServiceOptions options;
+  options.idle_cancellation_check_interval = std::chrono::milliseconds{1};
+  options.before_context_finalization = [&](grpc::StatusCode status) {
+    proposed_status.set_value(status);
+    release_finalization_future.wait();
+  };
+  options.cancellation_snapshot_ready = [&] {
+    snapshot_ready.set_value();
+    release_snapshot_future.wait();
+  };
+  options.context_finalization_waiting = [&] {
+    finalization_waiting.set_value();
+  };
+  options.after_context_finalization = [&](grpc::StatusCode status) {
+    final_status.set_value(status);
+  };
+
+  g7::OrderBookGrpcServer server{runtime, "gw-loopback", std::move(options)};
+  REQUIRE(server.start("127.0.0.1:0"));
+  auto stub = make_stub(server.selected_port());
+  grpc::ClientContext context;
+  auto reader = stub->SubscribeOrderBook(&context, valid_request());
+  wire::OrderBookStreamItem item;
+  REQUIRE(reader->Read(&item));
+  REQUIRE(reader->Read(&item));
+  REQUIRE_EQ(server.service().tracked_context_count(), 1U);
+
+  runtime.close_publication_admission();
+  REQUIRE_EQ(runtime.shutdown_publication(),
+             g3::PublicationShutdownResult::ShutDown);
+  const auto proposed = proposed_status_future.get();
+
+  auto shutdown = std::async(std::launch::async, [&] { server.shutdown(); });
+  snapshot_ready_future.wait();
+  const auto tracked_during_snapshot = server.service().tracked_context_count();
+  release_finalization.set_value();
+  finalization_waiting_future.wait();
+  const auto tracked_while_finalizer_waited =
+      server.service().tracked_context_count();
+  release_snapshot.set_value();
+
+  const auto finalized = final_status_future.get();
+  REQUIRE(!reader->Read(&item));
+  const auto client_status = reader->Finish();
+  shutdown.get();
+  const auto tracked_after_shutdown = server.service().tracked_context_count();
+  runtime.stop();
+
+  REQUIRE_EQ(proposed, grpc::StatusCode::OK);
+  REQUIRE_EQ(finalized, grpc::StatusCode::CANCELLED);
+  REQUIRE_EQ(client_status.error_code(), grpc::StatusCode::CANCELLED);
+  REQUIRE_EQ(tracked_during_snapshot, 1U);
+  REQUIRE_EQ(tracked_while_finalizer_waited, 1U);
+  REQUIRE_EQ(tracked_after_shutdown, 0U);
+}
+
+void server_context_lifetime_snapshot_blocks_finalization() {
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  bootstrap(runtime);
+
+  std::promise<void> finalization_reached;
+  auto finalization_reached_future = finalization_reached.get_future();
+  std::promise<void> release_finalization;
+  auto release_finalization_future = release_finalization.get_future().share();
+  std::promise<void> snapshot_ready;
+  auto snapshot_ready_future = snapshot_ready.get_future();
+  std::promise<void> release_snapshot;
+  auto release_snapshot_future = release_snapshot.get_future().share();
+  std::promise<void> finalization_waiting;
+  auto finalization_waiting_future = finalization_waiting.get_future();
+  std::promise<void> finalization_complete;
+  auto finalization_complete_future = finalization_complete.get_future();
+
+  g7::GrpcServiceOptions options;
+  options.idle_cancellation_check_interval = std::chrono::milliseconds{1};
+  options.before_context_finalization = [&](grpc::StatusCode status) {
+    if (status == grpc::StatusCode::OK) {
+      finalization_reached.set_value();
+    }
+    release_finalization_future.wait();
+  };
+  options.cancellation_snapshot_ready = [&] {
+    snapshot_ready.set_value();
+    release_snapshot_future.wait();
+  };
+  options.context_finalization_waiting = [&] {
+    finalization_waiting.set_value();
+  };
+  options.after_context_finalization = [&](grpc::StatusCode) {
+    finalization_complete.set_value();
+  };
+
+  g7::OrderBookGrpcServer server{runtime, "gw-loopback", std::move(options)};
+  REQUIRE(server.start("127.0.0.1:0"));
+  auto stub = make_stub(server.selected_port());
+  grpc::ClientContext context;
+  auto reader = stub->SubscribeOrderBook(&context, valid_request());
+  wire::OrderBookStreamItem item;
+  REQUIRE(reader->Read(&item));
+  REQUIRE(reader->Read(&item));
+
+  runtime.close_publication_admission();
+  REQUIRE_EQ(runtime.shutdown_publication(),
+             g3::PublicationShutdownResult::ShutDown);
+  finalization_reached_future.wait();
+
+  auto shutdown = std::async(std::launch::async, [&] { server.shutdown(); });
+  snapshot_ready_future.wait();
+  release_finalization.set_value();
+  finalization_waiting_future.wait();
+  const auto completion_while_snapshot_active =
+      finalization_complete_future.wait_for(std::chrono::seconds::zero());
+  const auto tracked_while_snapshot_active =
+      server.service().tracked_context_count();
+  release_snapshot.set_value();
+
+  finalization_complete_future.wait();
+  REQUIRE(!reader->Read(&item));
+  static_cast<void>(reader->Finish());
+  shutdown.get();
+  const auto tracked_after_shutdown = server.service().tracked_context_count();
+  runtime.stop();
+
+  REQUIRE(completion_while_snapshot_active == std::future_status::timeout);
+  REQUIRE_EQ(tracked_while_snapshot_active, 1U);
+  REQUIRE_EQ(tracked_after_shutdown, 0U);
+}
+
+void server_cancel_preserves_preexisting_non_ok_status() {
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  bootstrap(runtime);
+
+  std::promise<grpc::StatusCode> proposed_status;
+  auto proposed_status_future = proposed_status.get_future();
+  std::promise<void> release_finalization;
+  auto release_finalization_future = release_finalization.get_future().share();
+  std::promise<void> snapshot_ready;
+  auto snapshot_ready_future = snapshot_ready.get_future();
+  std::promise<void> release_snapshot;
+  auto release_snapshot_future = release_snapshot.get_future().share();
+  std::promise<grpc::StatusCode> final_status;
+  auto final_status_future = final_status.get_future();
+
+  g7::GrpcServiceOptions options;
+  options.before_context_finalization = [&](grpc::StatusCode status) {
+    proposed_status.set_value(status);
+    release_finalization_future.wait();
+  };
+  options.cancellation_snapshot_ready = [&] {
+    snapshot_ready.set_value();
+    release_snapshot_future.wait();
+  };
+  options.after_context_finalization = [&](grpc::StatusCode status) {
+    final_status.set_value(status);
+  };
+
+  g7::OrderBookGrpcServer server{runtime, "gw-loopback", std::move(options)};
+  REQUIRE(server.start("127.0.0.1:0"));
+  auto stub = make_stub(server.selected_port());
+  auto invalid_request = valid_request();
+  invalid_request.set_symbol("ETHUSDT");
+  grpc::ClientContext context;
+  auto reader = stub->SubscribeOrderBook(&context, invalid_request);
+  const auto proposed = proposed_status_future.get();
+
+  auto shutdown = std::async(std::launch::async, [&] { server.shutdown(); });
+  snapshot_ready_future.wait();
+  release_finalization.set_value();
+  release_snapshot.set_value();
+
+  const auto finalized = final_status_future.get();
+  wire::OrderBookStreamItem item;
+  REQUIRE(!reader->Read(&item));
+  static_cast<void>(reader->Finish());
+  shutdown.get();
+  const auto tracked_after_shutdown = server.service().tracked_context_count();
+  runtime.stop();
+
+  REQUIRE_EQ(proposed, grpc::StatusCode::INVALID_ARGUMENT);
+  REQUIRE_EQ(finalized, grpc::StatusCode::INVALID_ARGUMENT);
+  REQUIRE_EQ(tracked_after_shutdown, 0U);
+}
+
 void idle_cancel_and_shutdown_join() {
   g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
   bootstrap(runtime);
@@ -546,6 +746,12 @@ int main() {
       {"preaccept_rejection", preaccept_rejection},
       {"loopback_request_status_policy", loopback_request_status_policy},
       {"request_validation_policy", request_validation_policy},
+      {"server_cancelled_ok_handler_returns_cancelled",
+       server_cancelled_ok_handler_returns_cancelled},
+      {"server_context_lifetime_snapshot_blocks_finalization",
+       server_context_lifetime_snapshot_blocks_finalization},
+      {"server_cancel_preserves_preexisting_non_ok_status",
+       server_cancel_preserves_preexisting_non_ok_status},
       {"idle_cancel_and_shutdown_join", idle_cancel_and_shutdown_join},
       {"idle_client_cancel_cleanup", idle_client_cancel_cleanup},
       {"terminal_write_failure_is_not_retried",
