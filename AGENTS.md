@@ -7,7 +7,7 @@ Read in this order before making Gateway changes:
 3. [ARCHITECTURE.md](ARCHITECTURE.md)
 4. milestone-specific evidence as needed
 
-G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, G7, G8, and G9 are complete. The deterministic G2
+G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, G7, G8, G9, and G10 are complete. The deterministic G2
 synthetic host, serialized G3 `MarketRuntime`, real G4 Binance Spot BTCUSDT
 transport/bootstrap, bounded G5 reconnect/resync recovery, and break-before-make
 G6 planned connection rotation are implemented. G7 adds bounded owner-domain
@@ -17,14 +17,17 @@ the existing G3-G7 production architecture and adds no second order book,
 sequence classifier, recovery coordinator, or production runtime abstraction.
 G9 adds focused bounded synchronous `SubscribeEvents` for Spot BTCUSDT
 `DIFF_DEPTH`, `AGG_TRADE`, and `BOOK_TICKER`.
-The next runtime milestone is G10 minimal `GetGatewayStatus`.
+G10 adds minimal synchronous `GetGatewayStatus` for one Spot BTCUSDT market,
+assembled from existing runtime, recovery, and publication observations.
+The next runtime milestone is G11 USD-M + Multi-Market Runtime.
 Keep Phase A small and independently buildable.
 
 This repository contains the G0 foundation, frozen G1 proof, deterministic G2
 synthetic host, serialized G3 runtime, real G4 Spot transport, G5 recovery, and
-G6 rotation, G7 publication/gRPC, G8 integration acceptance, and G9
-`SubscribeEvents`; future runtime work follows the milestone authority. The next
-milestone is G10 `GetGatewayStatus`. Keep Phase A small and independently buildable.
+G6 rotation, G7 publication/gRPC, G8 integration acceptance, G9
+`SubscribeEvents`, and G10 `GetGatewayStatus`; future runtime work follows the
+milestone authority. The next milestone is G11 USD-M + Multi-Market Runtime.
+Keep Phase A small and independently buildable.
 
 ## Boundaries
 
@@ -60,6 +63,13 @@ milestone is G10 `GetGatewayStatus`. Keep Phase A small and independently builda
   Projection-Applied-only. G9 adds no second classifier or generic event bus,
   and Event sessions terminate at actual source-generation replacement rather
   than stitching across it.
+- G10 implements a one-shot read-only `GetGatewayStatus` for one Spot BTCUSDT
+  market. It has no health/metrics/telemetry framework; last-event freshness is
+  the normalized WebSocket receive observation, generation is optional only
+  while uniquely applicable, and the status count is G7 resident plus G9
+  active Event subscriptions. Pending G7 admissions are excluded. The unary
+  status RPC does not enter the 24-context streaming TryCancel tracker, and
+  expensive status collection is limited to one concurrent RPC.
 - Do not copy Contracts `.proto` files or introduce floating FetchContent dependencies.
 
 ## Phase A implementation rules

@@ -2,7 +2,7 @@
 
 The detailed, ordered development authority is
 [docs/MILESTONES.md](docs/MILESTONES.md). This document records only the
-responsibility split and the current foundation/G9 boundary.
+responsibility split and the current foundation/G10 boundary.
 
 ## Dependency direction
 
@@ -155,6 +155,35 @@ G7 and G9 use the same generated Gateway service, synchronous server, and
 context tracking / TryCancel lifetime protocol. Their mechanical tracked-context
 maximum is 24; this is not a generic RPC framework.
 
+## G10 Minimal GetGatewayStatus
+
+G10 adds a focused synchronous `GatewayStatusAssembler` for the existing
+Contracts `GetGatewayStatus` unary surface. It reads `MarketRuntime`,
+`SpotRecovery`, and `EventPublication` observations, and uses the existing
+Gateway service identity plus an injected runtime clock. The assembler does not
+own or schedule those runtime components and creates no thread, queue, cache,
+health state machine, metrics registry, or control path.
+
+The snapshot contains exactly one BINANCE/SPOT/BTCUSDT market. It maps G3
+`RuntimeState` to Contracts `StreamLifecycleState`, reports monotonic Gateway
+server uptime, carries the optional receive UTC time of the most recently
+successfully normalized WebSocket `DepthUpdate`, `AggTrade`, or `BookTicker`,
+and carries `connection_generation` only while exactly one active transport
+uniquely applies. Last-event freshness is independent of subscribers and
+Projection Apply classification; G4 observes it and G5 carries it across
+transport generations. Subscription count is G7 resident plus G9 active Event
+subscriptions, excluding pending G7 admissions.
+
+Status collection is sequential rather than a global atomic cut: each component
+observation is authoritative at its own point within one bounded collection
+interval. One expensive status RPC may collect at a time; additional concurrent
+requests return `RESOURCE_EXHAUSTED` instead of entering a waiting queue.
+
+`GetGatewayStatus` is unary and is not inserted into the G7/G9 streaming
+`ServerContext` tracker. That tracker remains mechanically bounded at 24, and
+normal synchronous `Server::Shutdown()` / `Server::Wait()` provides the unary
+handler lifetime barrier. The established G7/G9 TryCancel protocol is unchanged.
+
 ## MarketRuntime Projection boundary
 
 The G3 `MarketRuntime`, G4 transport, and G5/G6 lifecycle coordinator use, and
@@ -175,4 +204,5 @@ recovery and G6 adds planned break-before-make rotation without changing
 Projection continuity ownership. G7 adds bounded publication and the first
 synchronous gRPC business flow without adding a second classifier or order book.
 G8 closes the Projection M6 real-Gateway order-book integration acceptance.
-Later work is G10 minimal `GetGatewayStatus` and G11 USD-M / multi-market runtime.
+Future work after G10 is G11 USD-M / multi-market runtime. G11 is not a generic
+multi-market registry implemented by the current Gateway.

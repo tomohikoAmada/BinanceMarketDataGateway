@@ -8,13 +8,15 @@ checked for this checkpoint is Contracts
 `01a66aa80c764d2600da2cc309c0fd69655b55c`.
 
 The current implementation is G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, G7, G8,
-and G9 complete.
+G9, and G10 complete.
 The deterministic synthetic host, serialized `MarketRuntime`, first real Binance
 Spot BTCUSDT network/bootstrap runtime, bounded reconnect/resync recovery, and
 planned connection rotation are implemented. G7 adds bounded order-book
 publication and the first synchronous `SubscribeOrderBook` gRPC flow. G8 adds
 the Projection M6 integration acceptance composition. G9 adds bounded synchronous
 `SubscribeEvents` for Spot BTCUSDT `DIFF_DEPTH`, `AGG_TRADE`, and `BOOK_TICKER`.
+G10 adds minimal synchronous `GetGatewayStatus` for one Binance Spot BTCUSDT
+market.
 Historical G2/G3 attempts, including the deleted `feat/g2-deterministic-synthetic-host`
 branch and its recovery bundle, are not implementation authority. Historical PR #5 is
 retained only as a closed, not-merged, abandoned implementation attempt.
@@ -77,6 +79,7 @@ runtime framework.
 - `G7=COMPLETE`.
 - `G8=COMPLETE`.
 - `G9=COMPLETE`.
+- `G10=COMPLETE`.
 - `G2_SYNTHETIC_HOST_IMPLEMENTED=YES`.
 - `G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES`.
 - `CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES`.
@@ -87,9 +90,10 @@ runtime framework.
 - `PLANNED_ROTATION=IMPLEMENTED`.
 - `SUBSCRIBE_ORDER_BOOK=IMPLEMENTED`.
 - `SUBSCRIBE_EVENTS=IMPLEMENTED`.
+- `GET_GATEWAY_STATUS=IMPLEMENTED`.
 - `BOUNDED_PUBLICATION=IMPLEMENTED`.
 - `GRPC=IMPLEMENTED`.
-- `NEXT=G10`.
+- `NEXT=G11`.
 
 Gateway `main` currently has typed configuration, synchronous Foundation
 lifecycle, a daemon CLI that immediately starts and stops Foundation, Foundation
@@ -105,7 +109,8 @@ through that runtime. Reconnect/recovery is implemented in G5 and planned
 rotation is implemented in G6. G7 implements bounded order-book publication and
 `SubscribeOrderBook`; G8 integration acceptance is implemented as a focused
 acceptance/test composition and opt-in CMake wiring. G9 implements synchronous
-`SubscribeEvents`; `GetGatewayStatus` remains unimplemented.
+`SubscribeEvents`. G10 implements synchronous `GetGatewayStatus` for one Spot
+BTCUSDT market using existing runtime, recovery, and publication observations.
 
 ## G0 — Repository Foundation
 
@@ -483,12 +488,31 @@ Contracts nor Projection.
 
 ## G10 — Minimal GetGatewayStatus
 
-**STATUS=NOT_STARTED**
+**STATUS=COMPLETE**
 
 Implement only the existing useful operational status surface:
 `gateway_instance_id`, uptime, market runtime state, last event time,
 `connection_generation` when uniquely applicable, and active subscription count.
 Do not add a large metrics or telemetry framework here.
+
+Accepted implementation record: commit
+`14ebb9e335e0ff4e733671a3e0e120dcdefd1b52`, merged by PR #18 as
+`c57e689380e3b4e24a41863eb4f80a133daa2cb8`. Exact-head automatic PR CI run
+`33319504110` completed successfully. Independent technical review found
+`P0=0`, `P1=0`, `P2=1` nonblocking, and
+`G10_TECHNICAL_ACCEPTANCE=PASS`.
+
+G10's accepted boundary is the existing Contracts `GetGatewayStatus` wire
+surface: one-shot synchronous read-only status for BINANCE/SPOT/BTCUSDT, with
+the G3 runtime state mapped to `StreamLifecycleState`, the last successfully
+normalized WebSocket market-event receive time carried across recovery and
+rotation, and `connection_generation` present only with one active source.
+Active subscriptions combine G7 resident channels and G9 Event subscriptions;
+pending G7 admissions are excluded. At most one expensive status collection is
+allowed, with overload returning `RESOURCE_EXHAUSTED`. The unary status call
+does not enter the streaming TryCancel tracker, whose bound remains 24. G10
+adds no health/metrics/telemetry subsystem, Contracts code change, Projection
+code change, or real Binance acceptance requirement.
 
 ## G11 — USD-M and Multi-Market Runtime
 
