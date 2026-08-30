@@ -85,6 +85,7 @@ struct TransportObservation final {
   std::size_t depth_frame_count{0U};
   std::size_t agg_trade_frame_count{0U};
   std::size_t book_ticker_frame_count{0U};
+  std::optional<std::uint64_t> last_event_utc_ns;
   SpotTransportProfile profile{SpotTransportProfile::DepthOnly};
   std::string connection_id;
   std::uint64_t connection_generation{1U};

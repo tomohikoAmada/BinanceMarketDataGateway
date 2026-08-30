@@ -1216,8 +1216,13 @@ private:
         receive_protocol_failure(*failure);
         return false;
       }
-      return submit_depth_update(
-          std::get<market::DepthUpdate>(std::move(parsed)));
+      auto update = std::get<market::DepthUpdate>(std::move(parsed));
+      {
+        std::lock_guard lock{mutex_};
+        observation_.last_event_utc_ns = received_at.utc_ns;
+      }
+      condition_.notify_all();
+      return submit_depth_update(std::move(update));
     }
 
     auto parsed = parse_combined_event_frame(payload, received_at,
@@ -1230,6 +1235,11 @@ private:
       receive_protocol_failure(*failure);
       return false;
     }
+    {
+      std::lock_guard lock{mutex_};
+      observation_.last_event_utc_ns = received_at.utc_ns;
+    }
+    condition_.notify_all();
     std::shared_ptr<const NormalizedSpotEvent> event;
     try {
       event = std::make_shared<const NormalizedSpotEvent>(
