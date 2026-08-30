@@ -362,9 +362,8 @@ int main() {
       final_order_book_subscribers == 0U &&
       final_runtime.state == g3::RuntimeState::Stopped;
   if (!passed) {
-    std::cerr << "REAL_G9_ACCEPTANCE=FAIL"
-              << " depth=" << depth.valid << " trade=" << trade.valid
-              << " ticker=" << ticker.valid
+    std::cerr << "REAL_G9_ACCEPTANCE=FAIL" << " depth=" << depth.valid
+              << " trade=" << trade.valid << " ticker=" << ticker.valid
               << " controlled=" << controlled_requested << " old=" << old_valid
               << " generation_two=" << generation_two
               << " second_state=" << static_cast<unsigned>(second.state)
