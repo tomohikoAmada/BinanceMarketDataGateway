@@ -14,6 +14,7 @@ G6=COMPLETE
 G7=COMPLETE
 G8=COMPLETE
 G9=COMPLETE
+G10=COMPLETE
 G2_SYNTHETIC_HOST_IMPLEMENTED=YES
 G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES
 CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES
@@ -24,6 +25,7 @@ AUTOMATIC_RECOVERY=IMPLEMENTED
 PLANNED_ROTATION=IMPLEMENTED
 SUBSCRIBE_ORDER_BOOK=IMPLEMENTED
 SUBSCRIBE_EVENTS=IMPLEMENTED
+GET_GATEWAY_STATUS=IMPLEMENTED
 BOUNDED_PUBLICATION=IMPLEMENTED
 EVENT_PUBLICATION=IMPLEMENTED
 GRPC=IMPLEMENTED
@@ -40,7 +42,11 @@ GATEWAY_GRPC_BUSINESS_FLOW=SUBSCRIBE_ORDER_BOOK_AND_SUBSCRIBE_EVENTS_IMPLEMENTED
 RECORDER_DEPENDENCY=NO
 GW-PREQ-002=COMPLETE
 PROJECTION_M6_GATEWAY_INTEGRATION_ACCEPTANCE=COMPLETE
-NEXT=G10
+STATUS_MARKET_COUNT=1
+MAX_CONCURRENT_STATUS_RPCS=1
+STATUS_USES_STREAM_CONTEXT_TRACKER=NO
+STREAM_CONTEXT_LIMIT=24
+NEXT=G11
 FIRST_RUNNABLE=G2
 FIRST_REAL_NETWORK=G4
 FIRST_GRPC=G7
@@ -100,12 +106,19 @@ Gateway `main` currently contains:
   replacement and recovery/rotation use
   `CONNECTION_GENERATION_CHANGED`/`RESUBSCRIBE`. There is no second sequence
   classifier, generic event bus, or new publication thread.
+- the G10 synchronous unary `GetGatewayStatus` flow for one Binance Spot BTCUSDT
+  market. It reports the existing gateway instance identity, monotonic server
+  uptime, mapped runtime lifecycle state, optional last normalized WebSocket
+  market-event receive time, optional uniquely applicable connection generation,
+  and G7 resident plus G9 active subscription count. It permits one expensive
+  status collection at a time and adds no health, metrics, or telemetry subsystem.
 
 There is no make-before-break source stitching. G7 historically implemented only
 `SubscribeOrderBook`; the current Gateway also implements G9 `SubscribeEvents`.
-`GetGatewayStatus`, USD-M, and multi-market runtime remain unimplemented. G8 is
+USD-M and multi-market runtime remain unimplemented. G8 is
 an acceptance/test composition and opt-in CMake wiring; it does not add a
 production runtime layer. G4 remains independently usable as a one-shot transport.
+The next runtime milestone is G11 USD-M + Multi-Market Runtime.
 G5 recovers transport, snapshot, malformed-input, bounded-admission, bootstrap
 overflow, `serverShutdown`, and Projection `NeedsResync` failures through a new
 connection and the same conservative bootstrap path. Internal adapter,
