@@ -11,6 +11,7 @@ G3=COMPLETE
 G4=COMPLETE
 G5=COMPLETE
 G6=COMPLETE
+G7=COMPLETE
 G2_SYNTHETIC_HOST_IMPLEMENTED=YES
 G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES
 CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES
@@ -19,11 +20,19 @@ GATEWAY_NETWORK=SPOT_BTCUSDT_IMPLEMENTED
 RECONNECT=IMPLEMENTED
 AUTOMATIC_RECOVERY=IMPLEMENTED
 PLANNED_ROTATION=IMPLEMENTED
+SUBSCRIBE_ORDER_BOOK=IMPLEMENTED
+BOUNDED_PUBLICATION=IMPLEMENTED
+GRPC=IMPLEMENTED
+MAX_ACTIVE_SUBSCRIPTIONS=8
+ORDINARY_QUEUE_CAPACITY=64
+TERMINAL_CONTROL_CAPACITY=1
+PENDING_ADMISSION_CAPACITY=8
+IDLE_CLIENT_CANCELLATION_CHECK_INTERVAL=250ms
 MAKE_BEFORE_BREAK=NO
-GATEWAY_GRPC_BUSINESS_FLOW=NOT_IMPLEMENTED
+GATEWAY_GRPC_BUSINESS_FLOW=SUBSCRIBE_ORDER_BOOK_IMPLEMENTED
 RECORDER_DEPENDENCY=NO
 GW-PREQ-002=COMPLETE
-NEXT=G7
+NEXT=G8
 FIRST_RUNNABLE=G2
 FIRST_REAL_NETWORK=G4
 FIRST_GRPC=G7
@@ -62,11 +71,16 @@ Gateway `main` currently contains:
   which uses monotonic generation age, rotates at the project-defined 23h50m
   mark, quiesces and joins the old source before an owner-domain healthy reset,
   then conservatively re-enters the existing bootstrap path with a new
-  generation.
+  generation; and
+- the opt-in G7 bounded order-book publication runtime and synchronous
+  `SubscribeOrderBook` service. The existing `MarketRuntime` owner exclusively
+  owns subscriber admission, snapshot cuts, registry mutation, Applied-update
+  fanout, and recovery/rotation terminalization. Each accepted synchronous RPC
+  handler exclusively owns its stream writer.
 
-There is no make-before-break source stitching, gRPC server, publication queue,
-or subscription runtime. G4 remains independently usable as a one-shot
-transport.
+There is no make-before-break source stitching. G7 has no `SubscribeEvents`,
+`GetGatewayStatus`, Projection M6/G8 integration acceptance, USD-M, or
+multi-market runtime. G4 remains independently usable as a one-shot transport.
 G5 recovers transport, snapshot, malformed-input, bounded-admission, bootstrap
 overflow, `serverShutdown`, and Projection `NeedsResync` failures through a new
 connection and the same conservative bootstrap path. Internal adapter,
@@ -88,15 +102,19 @@ recovery.
 
 G0 acceptance and the frozen G1 candidate dependency proof do not establish a
 formal upstream release. G1 must not be continuously repinned. GW-PREQ-002 is
-complete and adds no runtime behavior: the normal G2–G6 lane uses the root
-`conanfile.py` with Contracts message/Protobuf and Projection Core/ProtoAdapter,
-without Contracts gRPC or `grpc`. The historical four-target proof uses
+complete and adds no runtime behavior: the normal G2–G6/G7-disabled lane uses
+the root `conanfile.py` with Contracts message/Protobuf and Projection
+Core/ProtoAdapter, without Contracts gRPC or `grpc`. G7 conditionally adds the
+current Contracts gRPC artifact and its `grpc` dependency while preserving one
+Contracts message lineage. The historical four-target proof uses
 `conanfile_g1.py` explicitly.
 
 Projection remains the owner of numeric semantics, order-book state, sequence and
 gap classification, lifecycle, reset/resync, ProtoAdapter, and snapshot
-construction. Gateway's future bounded publication and gRPC responsibilities
-are defined in the milestone authority.
+construction. G7 publishes only Projection `Applied` updates. Its limits are
+eight resident accepted channels, 64 ordinary records per channel, one separate
+terminal slot per channel, and eight pending admissions. Existing sessions
+terminate and resubscribe rather than cross G5/G6 full Projection rebootstrap.
 
 The [2026-08-23 handoff](HANDOFF_2026-08-23.md) is historical provenance, not
 current project status.

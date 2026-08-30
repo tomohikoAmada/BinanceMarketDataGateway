@@ -7,11 +7,12 @@ checked for this checkpoint is Contracts
 `518880bdfa60948c3b65b6b3525d024526995166` and Projection
 `01a66aa80c764d2600da2cc309c0fd69655b55c`.
 
-The current implementation is G0, G1, GW-PREQ-002, G2, G3, G4, G5, and G6
+The current implementation is G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, and G7
 complete.
 The deterministic synthetic host, serialized `MarketRuntime`, first real Binance
 Spot BTCUSDT network/bootstrap runtime, bounded reconnect/resync recovery, and
-planned connection rotation are implemented.
+planned connection rotation are implemented. G7 adds bounded order-book
+publication and the first synchronous `SubscribeOrderBook` gRPC flow.
 Historical G2/G3 attempts, including the deleted `feat/g2-deterministic-synthetic-host`
 branch and its recovery bundle, are not implementation authority. Historical PR #5 is
 retained only as a closed, not-merged, abandoned implementation attempt.
@@ -71,6 +72,7 @@ runtime framework.
 - `G4=COMPLETE`.
 - `G5=COMPLETE`.
 - `G6=COMPLETE`.
+- `G7=COMPLETE`.
 - `G2_SYNTHETIC_HOST_IMPLEMENTED=YES`.
 - `G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES`.
 - `CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES`.
@@ -79,7 +81,10 @@ runtime framework.
 - `RECONNECT=IMPLEMENTED`.
 - `AUTOMATIC_RECOVERY=IMPLEMENTED`.
 - `PLANNED_ROTATION=IMPLEMENTED`.
-- `NEXT=G7`.
+- `SUBSCRIBE_ORDER_BOOK=IMPLEMENTED`.
+- `BOUNDED_PUBLICATION=IMPLEMENTED`.
+- `GRPC=IMPLEMENTED`.
+- `NEXT=G8`.
 
 Gateway `main` currently has typed configuration, synchronous Foundation
 lifecycle, a daemon CLI that immediately starts and stops Foundation, Foundation
@@ -92,8 +97,9 @@ verified TLS Binance exchangeInfo/depth REST, raw Spot diff-depth WebSocket,
 strict transport JSON decoding, real receive timestamps, connection generation
 1 identity, authoritative NumericSpec derivation, and bounded real bootstrap
 through that runtime. Reconnect/recovery is implemented in G5 and planned
-rotation is implemented in G6; gRPC, publication, and subscriptions are not
-implemented.
+rotation is implemented in G6. G7 implements bounded order-book publication and
+`SubscribeOrderBook`; other gRPC methods and G8 integration acceptance remain
+unimplemented.
 
 ## G0 — Repository Foundation
 
@@ -129,14 +135,15 @@ not the normal G2–G6 runtime dependency lane.
 This is a prerequisite, not a new G-numbered product milestone. It establishes
 the normal current Gateway runtime development dependency lane.
 
-For G2–G6, the normal Gateway graph consumes the Contracts message/Protobuf
-artifact, Projection Core, and Projection ProtoAdapter. It must not require
+For G2–G6 and G7-disabled builds, the normal Gateway graph consumes the Contracts
+message/Protobuf artifact, Projection Core, and Projection ProtoAdapter. It must not require
 `BinanceMarketDataContracts::Grpc`, and G2–G6 development must not cold-build the
 complete gRPC dependency graph merely to prove runtime development.
 
-The historical G1 four-target proof remains explicit and opt-in. Contracts gRPC
-enters the normal runtime/server dependency graph when G7 implements gRPC
-publication. No runtime behavior is added in this prerequisite.
+The historical G1 four-target proof remains explicit and opt-in. G7 conditionally
+adds the current Contracts gRPC artifact and `grpc` to the normal runtime/server
+dependency graph while preserving one Contracts message lineage. No runtime
+behavior is added in this prerequisite.
 
 The normal root recipe is `conanfile.py`. The frozen historical proof recipe is
 `conanfile_g1.py`, and `scripts/g1-candidate-proof.sh` selects it explicitly.
@@ -144,7 +151,7 @@ The normal graph is verified by
 `scripts/gw-preq-002-verify-graph.py`; its invariant is one Contracts message
 lineage plus Projection, with no Contracts gRPC package and no `grpc` package.
 
-`NEXT=G7`.
+`NEXT=G8`.
 
 ## G2 — Deterministic Synthetic Host
 
@@ -278,7 +285,7 @@ recovery cut, distinct generation 2 transport identity, fresh verified TLS
 WebSocket and REST bootstrap, Synchronized/Live Projection, a later real update,
 and owner-domain snapshot capture.
 
-`NEXT=G7`.
+`NEXT=G8`.
 
 ## G6 — Planned Connection Rotation
 
@@ -313,19 +320,23 @@ completed, and distinct generation 2 freshly bootstrapped, reached Live, applied
 a later update, and produced an owner-domain snapshot with zero planned-rotation
 recovery attempts.
 
-`NEXT=G7`.
+`NEXT=G8`.
 
 ## G7 — Bounded Publication + SubscribeOrderBook + gRPC
 
-**STATUS=NOT_STARTED**
+**STATUS=COMPLETE**
 
 `FIRST_GRPC=G7`.
 
-Implement the Contracts-owned gRPC service for `SubscribeOrderBook`.
+G7 implements the Contracts-owned synchronous C++ gRPC service for
+`SubscribeOrderBook`. The first normal G7 dependency graph conditionally adds
+the current Contracts gRPC artifact and `grpc`; the G7-disabled G3–G6 graph
+remains message/Projection-only. Both graphs retain exactly one current
+Contracts message lineage.
 
 ### Publication cut
 
-The serialized Projection owner establishes the publication cut:
+The serialized Projection owner establishes the implemented publication cut:
 
 ```text
 Projection has accepted through update C
@@ -335,7 +346,8 @@ Projection has accepted through update C
   -> only subsequently applicable accepted updates may follow
 ```
 
-Do not modify Projection to add publication callbacks or mutex APIs.
+Projection is unchanged and remains the only order-book and sequence
+classification authority.
 
 Normal order-book fanout follows Projection `ApplyDisposition::Applied` only.
 `IgnoredStale` and `IgnoredDuplicate` are not republished as accepted book
@@ -343,16 +355,13 @@ mutations. `GapDetected` enters recovery/gap handling.
 
 ### Fully bounded subscriptions
 
-The runtime must have a finite active-subscription limit. A bounded queue per
-subscriber is insufficient if subscription count is unbounded. Requests above
-the configured or defined active-subscription limit are rejected before
-`SubscriptionAccepted`.
-
-Each subscriber has a bounded ordinary FIFO plus one guaranteed bounded
-terminal-control admission path, or a semantically equivalent bounded design.
-Subscription acceptance is serialized with the publication owner and occurs only
-if the mandatory initial `SubscriptionAccepted` and `LocalOrderBookSnapshot`
-outputs can be admitted under the bounded design.
+Production V1 permits eight resident accepted channels, 64 ordinary records per
+channel, one separate terminal descriptor per channel, and eight pending owner
+admissions. Closed channels are owner-swept; `TerminalGap` channels remain
+resident until writer closure. The mandatory `SubscriptionAccepted` sequence 1
+and `LocalOrderBookSnapshot` sequence 2 are staged privately and commit together
+at the owner target-ticket cut. A process-local owner counter assigns `ob-1`,
+`ob-2`, and so on only on successful commit.
 
 ### Slow-consumer overflow invariant
 
@@ -361,13 +370,17 @@ When ordinary enqueue first fails:
 - the failed ordinary item consumes no `session_sequence`;
 - atomically mark the subscription terminal;
 - stop later normal data admission;
-- guarantee exactly one `ConsumerGapNotice` through the reserved terminal path;
+- reserve exactly one server-side `ConsumerGapNotice` through the terminal path;
 - assign that emitted notice the next `session_sequence`;
 - emit prior admitted items in order, then the notice, then close the stream;
 - have the consumer recover by resubscribing according to Contracts semantics.
 
-gRPC writes must not execute on or block the Projection owner. A slow consumer
-must not stall Binance ingress, Projection mutation, or other subscribers.
+The reserved terminal record yields one terminal Write attempt if the writer
+reaches it; remote application receipt is not guaranteed. gRPC writes execute
+only on the subscriber's single synchronous RPC handler and never on the
+Projection owner. Peek/ack retains an in-flight record in its ring slot until a
+successful Write, so a slow consumer cannot expand memory or stall Binance
+ingress, Projection mutation, or other subscribers.
 
 ### Identity and sequencing
 
@@ -376,8 +389,23 @@ It is distinct from Binance `U/u/pu`, Projection `last_update_id`, and
 `connection_generation`. Control items that are actually emitted consume sequence
 values.
 
-Populate `connection_generation` only when one unique applicable upstream source
-generation exists, preserving Contracts optional-presence semantics.
+G4 carries immutable optional source generation with each snapshot/update into
+G3. Writers never query mutable G5/G6 lifecycle state. Accepted metadata has no
+generation; synchronized snapshots and Applied updates use their frozen unique
+generation; slow-consumer gaps omit it. Projection gap, other continuity-losing
+faults, and planned rotation terminalize current sessions before full reset with
+the required gap reason/action. Existing sessions never cross G5 recovery or G6
+planned rebootstrap.
+
+Service shutdown closes its gate, synchronously completes the reserved owner
+publication-shutdown control, snapshots and cancels at most 16 tracked contexts,
+then shuts down and waits for the synchronous server before acquisition/runtime
+shutdown. The real G7 acceptance proved generation 1 Live, exact sequences 1/2/3
+for Accepted/Snapshot/first post-snapshot real update, frozen generation 1 on the
+snapshot and update, client disconnect cleanup, subscriber removal, and joined
+gRPC/Gateway shutdown.
+
+`NEXT=G8`.
 
 ## G8 — Projection M6 Integration Acceptance
 
@@ -385,11 +413,10 @@ generation exists, preserving Contracts optional-presence semantics.
 
 `PROJECTION_M6_START_GATE=G8`.
 
-End-to-end acceptance is Binance Spot BTCUSDT → real Gateway → ProtoAdapter →
-Projection → Gateway publication → `SubscribeOrderBook` → real consumer.
-Acceptance covers bootstrap, the publication snapshot/update cut, contiguous
-post-snapshot updates, reconnect, resync, single writer, and bounded
-slow-consumer isolation.
+G7 already proves the first real Binance Spot BTCUSDT gRPC happy path. G8 owns
+the broader Projection M6 integration acceptance through reconnect, resync, and
+planned rotation as observed by a real consumer, plus the complete integration
+acceptance boundary; it does not move those behaviors into G7.
 
 Projection M6 implementation and acceptance begin here, not during G0–G7.
 

@@ -2,7 +2,7 @@
 
 The detailed, ordered development authority is
 [docs/MILESTONES.md](docs/MILESTONES.md). This document records only the
-responsibility split and the current foundation/G6 boundary.
+responsibility split and the current foundation/G7 boundary.
 
 ## Dependency direction
 
@@ -13,7 +13,7 @@ Binance public APIs
 BinanceMarketDataGateway
         +--> Contracts message-only package
         +--> Projection::ProtoAdapter --> Projection::Core
-        +--> Contracts separate gRPC package (G7 publication)
+        +--> Contracts separate gRPC package (conditionally for G7)
 ```
 
 There is no Gateway-to-Recorder dependency. Contracts owns Protobuf messages,
@@ -98,6 +98,26 @@ break-before-make, permits at most one active transport, and adds no sequence
 classifier, gRPC, publication, or subscriptions. The reviewed Boost 1.91
 reactor/scheduler shutdown barrier is unchanged and requires re-proof on upgrade.
 
+The opt-in G7 targets add the first normal gRPC/publication flow, exactly
+`SubscribeOrderBook` for Binance Spot BTCUSDT. Source snapshot and update inputs
+carry immutable optional connection-generation provenance from G4 into G3. The
+existing `MarketRuntime` Projection owner exclusively owns the bounded pending
+admission mailbox, target-ticket subscription cut, subscriber registry, and
+fanout after Projection returns `Applied`; stale and duplicate inputs are not
+published. Each accepted channel has 64 fixed ordinary slots plus one separate
+terminal descriptor slot, with at most eight resident accepted channels and
+eight pending admissions.
+
+One synchronous RPC handler is the sole writer for each accepted stream. It
+peeks without removing the front record, performs `ServerWriter::Write` off the
+Projection owner, and acknowledges the same record only after success. Ordinary
+overflow reserves one `SLOW_CONSUMER`/`RESUBSCRIBE` terminal notice without
+blocking the owner. Projection gap, other recovery, and planned rotation
+terminalize existing sessions before reset; sessions never cross a full
+rebootstrap. Service shutdown closes admission, executes a reserved owner
+publication-shutdown control, cancels a bounded snapshot of active contexts,
+then shuts down and waits for the synchronous server before G5/G6/runtime stop.
+
 ## MarketRuntime Projection boundary
 
 The G3 `MarketRuntime`, G4 transport, and G5/G6 lifecycle coordinator use, and
@@ -115,4 +135,7 @@ synthetic host remains the deterministic direct-Projection proof. G3 establishes
 serialized concurrency and bounded runtime ownership independently of transport.
 G4 is the first real network/bootstrap implementation. G5 adds bounded automatic
 recovery and G6 adds planned break-before-make rotation without changing
-Projection continuity ownership. Publication and gRPC remain G7 work.
+Projection continuity ownership. G7 adds bounded publication and the first
+synchronous gRPC business flow without adding a second classifier or order book.
+Projection M6 integration acceptance, `SubscribeEvents`, and
+`GetGatewayStatus` remain later work.

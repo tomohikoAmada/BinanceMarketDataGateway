@@ -1,5 +1,8 @@
 #pragma once
 
+#include "order_book_publication.hpp"
+#include "source_provenance.hpp"
+
 #include <binance_market_data/market/v1/market_events.pb.h>
 #include <binance_market_data/projection/v1/projection_state/book_projection.hpp>
 #include <binance_market_data/projection/v1/snapshots.pb.h>
@@ -13,6 +16,7 @@
 #include <optional>
 #include <stop_token>
 #include <thread>
+#include <utility>
 #include <variant>
 
 namespace binance_market_data::gateway::g3 {
@@ -22,8 +26,16 @@ namespace core = projection::v1;
 namespace market = ::binance_market_data::market::v1;
 
 struct RuntimeLimits final {
-  std::size_t ingress_capacity{64U};
-  std::size_t bootstrap_capacity{64U};
+  constexpr RuntimeLimits(std::size_t ingress_capacity_value = 64U,
+                          std::size_t bootstrap_capacity_value = 64U,
+                          g7::PublicationLimits publication_value = {}) noexcept
+      : ingress_capacity{ingress_capacity_value},
+        bootstrap_capacity{bootstrap_capacity_value},
+        publication{publication_value} {}
+
+  std::size_t ingress_capacity;
+  std::size_t bootstrap_capacity;
+  g7::PublicationLimits publication;
 };
 
 struct ClockSample final {
@@ -92,10 +104,16 @@ struct RuntimeObservation final {
   std::size_t bootstrap_occupancy{0U};
   std::size_t bootstrap_capacity{0U};
   std::thread::id owner_thread_id;
+  std::thread::id last_publication_thread_id;
   std::thread::id last_reset_thread_id;
   std::uint64_t reset_count{0U};
   std::uint64_t last_admitted_ticket{0U};
   std::uint64_t processed_ticket{0U};
+  std::optional<std::uint64_t> current_projection_generation;
+  std::size_t resident_subscription_count{0U};
+  std::size_t pending_admission_count{0U};
+  bool publication_admission_open{false};
+  bool publication_shutdown{false};
   bool owner_joined{false};
 };
 
@@ -145,8 +163,42 @@ struct CapturedSnapshot final {
 using SnapshotResult =
     std::variant<CapturedSnapshot, adapter::AdapterError, SnapshotRequestError>;
 
+enum class SubscriptionAdmissionError : std::uint8_t {
+  NotStarted,
+  NotLive,
+  PendingLimit,
+  ActiveLimit,
+  InvalidDepthLimit,
+  ShuttingDown,
+  ClockError,
+  IdExhausted,
+  InternalError,
+  Stopped,
+};
+
+struct AcceptedSubscription final {
+  std::shared_ptr<g7::SubscriberChannel> channel;
+  std::thread::id admitted_on_thread;
+};
+
+using SubscriptionAdmissionResult =
+    std::variant<AcceptedSubscription, SubscriptionAdmissionError>;
+
+enum class PublicationShutdownResult : std::uint8_t {
+  ShutDown,
+  AlreadyShutDown,
+  NotStarted,
+  Stopped,
+};
+
 struct RuntimeTestOptions final {
-  bool owner_starts_paused{false};
+  RuntimeTestOptions(bool owner_starts_paused_value = false,
+                     std::function<void()> admission_enqueued_value = {})
+      : owner_starts_paused{owner_starts_paused_value},
+        admission_enqueued{std::move(admission_enqueued_value)} {}
+
+  bool owner_starts_paused;
+  std::function<void()> admission_enqueued;
 };
 
 // Internal G3 runtime for exactly BINANCE + SPOT + BTCUSDT. This header is
@@ -172,7 +224,12 @@ public:
 
   [[nodiscard]] AdmissionResult submit_depth_update(market::DepthUpdate update);
   [[nodiscard]] AdmissionResult
+  submit_depth_update(market::DepthUpdate update, SourceProvenance provenance);
+  [[nodiscard]] AdmissionResult
   submit_snapshot(market::ExchangeDepthSnapshot snapshot);
+  [[nodiscard]] AdmissionResult
+  submit_snapshot(market::ExchangeDepthSnapshot snapshot,
+                  SourceProvenance provenance);
   [[nodiscard]] AdmissionResult submit_transport_failure();
   [[nodiscard]] AdmissionResult submit_snapshot_failure();
 
@@ -180,6 +237,17 @@ public:
   // source events. Returned Projection-derived state is an owning copy.
   [[nodiscard]] RuntimeObservation observe();
   [[nodiscard]] SnapshotResult capture_snapshot();
+
+  // G7 request admission is serialized onto the Projection owner through a
+  // distinct bounded target-ticket mailbox. The returned channel is owning.
+  [[nodiscard]] SubscriptionAdmissionResult admit_order_book_subscription(
+      g7::ValidatedOrderBookSubscription subscription);
+  void notify_subscriber_closed() noexcept;
+
+  // Closing the gate is nonblocking and shares the owner-commit mutex. The
+  // reserved shutdown control then runs on the owner and wakes all channels.
+  void close_publication_admission() noexcept;
+  [[nodiscard]] PublicationShutdownResult shutdown_publication() noexcept;
 
   // The caller must first establish a no-future-submission cut for the old
   // source generation. In G5 that means stopping and joining SpotTransport,
@@ -210,6 +278,7 @@ public:
   // A deterministic test seam: production construction leaves the owner
   // released. Stop always overrides this gate, including with a full ingress.
   void release_owner_for_testing() noexcept;
+  void pause_owner_for_testing() noexcept;
 
 private:
   class Impl;

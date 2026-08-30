@@ -1002,6 +1002,7 @@ public:
        std::uint64_t connection_generation,
        detail::TransportTestOptions test_options)
       : runtime_{runtime}, clock_{std::move(clock)},
+        connection_generation_{connection_generation},
         tls_context_{ssl::context::tls_client}, test_options_{test_options} {
     if (!clock_) {
       throw std::invalid_argument{"G4 transport clock must be injected"};
@@ -1211,7 +1212,8 @@ private:
     }
 
     const auto admitted = runtime_.submit_depth_update(
-        std::get<market::DepthUpdate>(std::move(parsed)));
+        std::get<market::DepthUpdate>(std::move(parsed)),
+        g3::SourceProvenance{connection_generation_});
     if (admitted != g3::AdmissionResult::Accepted) {
       terminal_failure(network_error(NetworkErrorCode::RuntimeAdmission,
                                      "websocket-runtime-admission",
@@ -1244,7 +1246,8 @@ private:
       return;
     }
     const auto admitted = runtime_.submit_snapshot(
-        std::get<market::ExchangeDepthSnapshot>(std::move(parsed)));
+        std::get<market::ExchangeDepthSnapshot>(std::move(parsed)),
+        g3::SourceProvenance{connection_generation_});
     if (admitted != g3::AdmissionResult::Accepted) {
       terminal_failure(
           network_error(NetworkErrorCode::RuntimeAdmission,
@@ -1325,6 +1328,7 @@ private:
 
   g3::MarketRuntime &runtime_;
   g3::RuntimeClock clock_;
+  const std::uint64_t connection_generation_;
   asio::io_context context_;
   ssl::context tls_context_;
   std::optional<asio::executor_work_guard<asio::io_context::executor_type>>

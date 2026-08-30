@@ -7,29 +7,32 @@ Read in this order before making Gateway changes:
 3. [ARCHITECTURE.md](ARCHITECTURE.md)
 4. milestone-specific evidence as needed
 
-G0, G1, GW-PREQ-002, G2, G3, G4, G5, and G6 are complete. The deterministic G2
+G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, and G7 are complete. The deterministic G2
 synthetic host, serialized G3 `MarketRuntime`, real G4 Binance Spot BTCUSDT
 transport/bootstrap, bounded G5 reconnect/resync recovery, and break-before-make
-G6 planned connection rotation are implemented.
+G6 planned connection rotation are implemented. G7 adds bounded owner-domain
+order-book publication and the first synchronous `SubscribeOrderBook` gRPC flow.
 Keep Phase A small and independently buildable.
 
 This repository contains the G0 foundation, frozen G1 proof, deterministic G2
 synthetic host, serialized G3 runtime, real G4 Spot transport, G5 recovery, and
-G6 rotation; future runtime work follows the milestone authority. Keep Phase A
-small and independently buildable.
+G6 rotation, and G7 publication/gRPC; future runtime work follows the milestone
+authority. Keep Phase A small and independently buildable.
 
 ## Boundaries
 
-- The normal G2–G6 runtime lane depends on the Contracts-owned message-only/
-  Protobuf artifact and Projection `ProtoAdapter`/`Core` surfaces.
+- The normal G2–G6 and G7-disabled runtime lane depends on the Contracts-owned
+  message-only/Protobuf artifact and Projection `ProtoAdapter`/`Core` surfaces.
 - The separate `BinanceMarketDataContractsGrpc` artifact remains explicit and
-  opt-in for the frozen G1 proof and enters the normal runtime graph at G7.
+  opt-in for the frozen G1 proof; G7 enables it conditionally in the normal
+  runtime graph.
 - Gateway consumes Projection through the existing `ProtoAdapter`/`Core` surfaces.
 - Gateway has no Recorder dependency.
-- G3 intentionally has one owner thread, bounded ingress/bootstrap queues, and
-  an injected clock. It still has no network clients, gRPC business flow,
-  Gateway-owned Projection business logic, order-book implementation, sequence
-  classifier, storage, event bus, DI, plugins, or generic runtime framework.
+- The G3 baseline has one owner thread, bounded ingress/bootstrap queues, and an
+  injected clock. G7 extends that same owner with bounded publication; it does
+  not add Gateway-owned Projection business logic, an order-book implementation,
+  a sequence classifier, storage, event bus, DI, plugins, or a generic runtime
+  framework.
 - G4 is exactly Binance Spot BTCUSDT, has one networking I/O thread and one
   connection generation, and drives Projection only through G3's bounded owner
   boundary. As an independently usable milestone it remains one-shot.
@@ -41,6 +44,10 @@ small and independently buildable.
   coordinator. It remains break-before-make, uses the distinct owner-domain
   healthy reset only after source quiescence and a Live/Synchronized barrier,
   and has no source stitching, gRPC, publication, or subscriptions.
+- G7 implements only synchronous `SubscribeOrderBook`. Publication and registry
+  mutation stay on the G3 owner; each accepted RPC handler is its sole writer.
+  Existing sessions terminate before G5 recovery or G6 planned reset and never
+  cross a full Projection rebootstrap.
 - Do not copy Contracts `.proto` files or introduce floating FetchContent dependencies.
 
 ## Phase A implementation rules
