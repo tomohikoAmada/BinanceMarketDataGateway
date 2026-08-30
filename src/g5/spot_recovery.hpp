@@ -78,6 +78,7 @@ struct RecoveryObservation final {
   RecoveryState state{RecoveryState::Starting};
   std::uint64_t connection_generation{0U};
   std::string connection_id;
+  std::optional<std::uint64_t> last_event_utc_ns;
   std::size_t consecutive_recovery_attempts{0U};
   std::uint64_t total_recovery_count{0U};
   std::uint64_t planned_rotation_count{0U};

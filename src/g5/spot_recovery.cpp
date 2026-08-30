@@ -287,6 +287,7 @@ public:
     }
     if (final_attempt) {
       final_attempt->stop();
+      persist_last_event(final_attempt->observe());
     }
     runtime_.stop();
     {
@@ -300,8 +301,28 @@ public:
   }
 
   [[nodiscard]] RecoveryObservation observe() const {
-    std::lock_guard lock{mutex_};
-    return observation_;
+    RecoveryObservation copy;
+    {
+      std::lock_guard lock{mutex_};
+      copy = observation_;
+    }
+
+    std::shared_ptr<detail::RecoveryAttempt> attempt;
+    {
+      std::lock_guard lock{attempt_mutex_};
+      attempt = active_attempt_;
+    }
+    if (attempt == nullptr || copy.active_transport_count != 1U ||
+        copy.connection_generation == 0U) {
+      return copy;
+    }
+
+    const auto transport = attempt->observe();
+    if (transport.connection_generation == copy.connection_generation &&
+        transport.last_event_utc_ns.has_value()) {
+      copy.last_event_utc_ns = transport.last_event_utc_ns;
+    }
+    return copy;
   }
 
   [[nodiscard]] RecoveryObservation
@@ -335,6 +356,8 @@ public:
   [[nodiscard]] std::optional<QuiescentAcceptanceCut> quiesce_for_acceptance() {
     std::shared_ptr<detail::RecoveryAttempt> retained_attempt;
     {
+      std::lock_guard attempt_lock{attempt_mutex_};
+      retained_attempt = active_attempt_;
       std::lock_guard lock{mutex_};
       if (!started_ || stopped_ || observation_.terminal ||
           observation_.state != RecoveryState::Live || shutdown_requested_) {
@@ -345,8 +368,6 @@ public:
       observation_.in_backoff = false;
       // Retain the Live source before the stop request can wake the
       // coordinator and let its concurrent quiescence clear active_attempt_.
-      std::lock_guard attempt_lock{attempt_mutex_};
-      retained_attempt = active_attempt_;
     }
     condition_.notify_all();
     coordinator_.request_stop();
@@ -376,6 +397,7 @@ public:
     }
     if (final_attempt && final_attempt != retained_attempt) {
       final_attempt->stop();
+      persist_last_event(final_attempt->observe());
       {
         std::lock_guard lock{mutex_};
         observation_.active_transport_count = 0U;
@@ -390,6 +412,7 @@ public:
     // The owning reference survives active-attempt clearing, so the final
     // stopped transport observation is retained for the acceptance proof.
     const auto transport = retained_attempt->observe();
+    persist_last_event(transport);
     {
       std::lock_guard lock{mutex_};
       observation_.active_transport_count = 0U;
@@ -752,6 +775,7 @@ private:
   quiesce_attempt(const std::shared_ptr<detail::RecoveryAttempt> &attempt) {
     attempt->stop();
     const auto transport = attempt->observe();
+    persist_last_event(transport);
     if (source_generation_open_.has_value() &&
         *source_generation_open_ == transport.connection_generation &&
         !source_generation_quiesced_) {
@@ -829,6 +853,14 @@ private:
       close_source_generation(SourceGenerationCloseOutcome::PermanentFailure);
     } catch (...) {
     }
+  }
+
+  void persist_last_event(const g4::TransportObservation &transport) noexcept {
+    if (!transport.last_event_utc_ns.has_value()) {
+      return;
+    }
+    std::lock_guard lock{mutex_};
+    observation_.last_event_utc_ns = transport.last_event_utc_ns;
   }
 
   [[nodiscard]] bool try_mark_live(const g3::RuntimeObservation &runtime,
@@ -913,7 +945,7 @@ private:
   bool stopped_{false};
   bool shutdown_requested_{false};
 
-  std::mutex attempt_mutex_;
+  mutable std::mutex attempt_mutex_;
   std::shared_ptr<detail::RecoveryAttempt> active_attempt_;
   std::mutex backoff_mutex_;
   std::condition_variable_any backoff_condition_;

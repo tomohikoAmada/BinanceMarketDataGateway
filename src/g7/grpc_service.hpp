@@ -5,6 +5,9 @@
 #if defined(BMD_GATEWAY_G9_ENABLED)
 #include "event_publication.hpp"
 #endif
+#if defined(BMD_GATEWAY_G10_ENABLED)
+#include "gateway_status.hpp"
+#endif
 
 #include <binance_market_data/gateway/v1/gateway_service.grpc.pb.h>
 #include <grpcpp/grpcpp.h>
@@ -35,6 +38,11 @@ using RequestValidationResult =
 #if defined(BMD_GATEWAY_G9_ENABLED)
 using EventRequestValidationResult =
     std::variant<g9::ValidatedEventSubscription, RequestValidationError>;
+#endif
+
+#if defined(BMD_GATEWAY_G10_ENABLED)
+[[nodiscard]] bool validate_gateway_status_request(
+    const gateway_wire::GatewayStatusRequest &request) noexcept;
 #endif
 
 [[nodiscard]] RequestValidationResult validate_order_book_request(
@@ -132,6 +140,22 @@ public:
       grpc::ServerWriter<gateway_wire::GatewayEventEnvelope> *writer) override;
 #endif
 
+#if defined(BMD_GATEWAY_G10_ENABLED)
+  OrderBookGrpcService(g3::MarketRuntime &runtime, g5::SpotRecovery &recovery,
+                       g9::EventPublication &event_publication,
+                       g3::RuntimeClock clock, std::string gateway_instance_id,
+                       GrpcServiceOptions options = {});
+
+  [[nodiscard]] grpc::Status
+  GetGatewayStatus(grpc::ServerContext *context,
+                   const gateway_wire::GatewayStatusRequest *request,
+                   gateway_wire::GatewayStatusSnapshot *response) override;
+
+  [[nodiscard]] bool prepare_status_start() noexcept;
+  void clear_status_start() noexcept;
+  [[nodiscard]] bool status_inflight() const noexcept;
+#endif
+
   [[nodiscard]] grpc::Status SubscribeOrderBook(
       grpc::ServerContext *context,
       const gateway_wire::OrderBookSubscriptionRequest *request,
@@ -158,6 +182,11 @@ private:
     bool selected_for_try_cancel{false};
   };
 
+#if defined(BMD_GATEWAY_G10_ENABLED)
+  class StatusSlotGuard;
+  void release_status_slot() noexcept;
+#endif
+
   [[nodiscard]] TrackResult track_context(grpc::ServerContext *context);
   [[nodiscard]] grpc::Status finalize_context(grpc::ServerContext *context,
                                               grpc::Status proposed_status);
@@ -177,6 +206,10 @@ private:
 #endif
   const std::string gateway_instance_id_;
   const GrpcServiceOptions options_;
+#if defined(BMD_GATEWAY_G10_ENABLED)
+  std::unique_ptr<g10::GatewayStatusAssembler> status_assembler_;
+  bool status_inflight_{false};
+#endif
 
   mutable std::mutex mutex_;
   std::condition_variable contexts_condition_;
@@ -197,6 +230,12 @@ public:
   OrderBookGrpcServer(g3::MarketRuntime &runtime,
                       g9::EventPublication &event_publication,
                       std::string gateway_instance_id,
+                      GrpcServiceOptions options = {});
+#endif
+#if defined(BMD_GATEWAY_G10_ENABLED)
+  OrderBookGrpcServer(g3::MarketRuntime &runtime, g5::SpotRecovery &recovery,
+                      g9::EventPublication &event_publication,
+                      g3::RuntimeClock clock, std::string gateway_instance_id,
                       GrpcServiceOptions options = {});
 #endif
   ~OrderBookGrpcServer();

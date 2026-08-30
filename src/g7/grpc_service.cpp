@@ -132,6 +132,14 @@ required_event_schema(common_wire::Stream stream) noexcept {
 
 } // namespace
 
+#if defined(BMD_GATEWAY_G10_ENABLED)
+bool validate_gateway_status_request(
+    const gateway_wire::GatewayStatusRequest &request) noexcept {
+  return identifier_safe(request.request_id()) &&
+         request.schema_version() == g10::kStatusRequestSchema;
+}
+#endif
+
 RequestValidationResult validate_order_book_request(
     const gateway_wire::OrderBookSubscriptionRequest &request,
     const std::string &gateway_instance_id) {
@@ -321,6 +329,107 @@ OrderBookGrpcService::OrderBookGrpcService(
         "G7/G9 gateway_instance_id values must be identical"};
   }
   event_publication_ = &event_publication;
+}
+#endif
+
+#if defined(BMD_GATEWAY_G10_ENABLED)
+class OrderBookGrpcService::StatusSlotGuard final {
+public:
+  explicit StatusSlotGuard(OrderBookGrpcService &service) noexcept
+      : service_{service} {}
+
+  ~StatusSlotGuard() { service_.release_status_slot(); }
+
+  StatusSlotGuard(const StatusSlotGuard &) = delete;
+  StatusSlotGuard &operator=(const StatusSlotGuard &) = delete;
+
+private:
+  OrderBookGrpcService &service_;
+};
+
+OrderBookGrpcService::OrderBookGrpcService(
+    g3::MarketRuntime &runtime, g5::SpotRecovery &recovery,
+    g9::EventPublication &event_publication, g3::RuntimeClock clock,
+    std::string gateway_instance_id, GrpcServiceOptions options)
+    : OrderBookGrpcService(runtime, event_publication,
+                           std::move(gateway_instance_id), std::move(options)) {
+  status_assembler_ = std::make_unique<g10::GatewayStatusAssembler>(
+      runtime, recovery, event_publication, std::move(clock),
+      gateway_instance_id_);
+}
+
+grpc::Status OrderBookGrpcService::GetGatewayStatus(
+    grpc::ServerContext *context,
+    const gateway_wire::GatewayStatusRequest *request,
+    gateway_wire::GatewayStatusSnapshot *response) {
+  if (context == nullptr || request == nullptr || response == nullptr) {
+    return {grpc::StatusCode::INVALID_ARGUMENT, "null RPC argument"};
+  }
+  if (!validate_gateway_status_request(*request)) {
+    return {grpc::StatusCode::INVALID_ARGUMENT,
+            "unsupported or malformed gateway status request"};
+  }
+
+  {
+    std::lock_guard lock{mutex_};
+    if (!admission_open_) {
+      return {grpc::StatusCode::UNAVAILABLE,
+              "gateway status admission is shutting down"};
+    }
+    if (status_assembler_ == nullptr) {
+      return {grpc::StatusCode::UNAVAILABLE,
+              "gateway status is not configured"};
+    }
+    if (status_inflight_) {
+      return {grpc::StatusCode::RESOURCE_EXHAUSTED,
+              "gateway status request is already in progress"};
+    }
+    status_inflight_ = true;
+  }
+  StatusSlotGuard slot{*this};
+
+  if (context->IsCancelled()) {
+    return {grpc::StatusCode::CANCELLED, "client cancelled"};
+  }
+
+  try {
+    const auto result = status_assembler_->collect();
+    if (context->IsCancelled()) {
+      return {grpc::StatusCode::CANCELLED, "client cancelled"};
+    }
+    if (const auto *snapshot =
+            std::get_if<g10::gateway_wire::GatewayStatusSnapshot>(&result)) {
+      *response = *snapshot;
+      return grpc::Status::OK;
+    }
+    return {grpc::StatusCode::INTERNAL,
+            "gateway status observation is invalid"};
+  } catch (...) {
+    return {grpc::StatusCode::INTERNAL, "gateway status assembly failed"};
+  }
+}
+
+bool OrderBookGrpcService::prepare_status_start() noexcept {
+  if (status_assembler_ == nullptr) {
+    return true;
+  }
+  return status_assembler_->prepare_start_baseline();
+}
+
+void OrderBookGrpcService::clear_status_start() noexcept {
+  if (status_assembler_ != nullptr) {
+    status_assembler_->clear_start_baseline();
+  }
+}
+
+bool OrderBookGrpcService::status_inflight() const noexcept {
+  std::lock_guard lock{mutex_};
+  return status_inflight_;
+}
+
+void OrderBookGrpcService::release_status_slot() noexcept {
+  std::lock_guard lock{mutex_};
+  status_inflight_ = false;
 }
 #endif
 
@@ -745,6 +854,19 @@ OrderBookGrpcServer::OrderBookGrpcServer(
                std::move(options)} {}
 #endif
 
+#if defined(BMD_GATEWAY_G10_ENABLED)
+OrderBookGrpcServer::OrderBookGrpcServer(
+    g3::MarketRuntime &runtime, g5::SpotRecovery &recovery,
+    g9::EventPublication &event_publication, g3::RuntimeClock clock,
+    std::string gateway_instance_id, GrpcServiceOptions options)
+    : service_{runtime,
+               recovery,
+               event_publication,
+               std::move(clock),
+               std::move(gateway_instance_id),
+               std::move(options)} {}
+#endif
+
 OrderBookGrpcServer::~OrderBookGrpcServer() { shutdown(); }
 
 bool OrderBookGrpcServer::start(const std::string &listen_address) {
@@ -755,8 +877,31 @@ bool OrderBookGrpcServer::start(const std::string &listen_address) {
   builder.AddListeningPort(listen_address, grpc::InsecureServerCredentials(),
                            &selected_port_);
   builder.RegisterService(&service_);
+#if defined(BMD_GATEWAY_G10_ENABLED)
+  if (!service_.prepare_status_start()) {
+    return false;
+  }
+  try {
+    server_ = builder.BuildAndStart();
+  } catch (...) {
+    service_.clear_status_start();
+    return false;
+  }
+  if (server_ != nullptr && selected_port_ > 0) {
+    return true;
+  }
+  if (server_ != nullptr) {
+    server_->Shutdown();
+    server_->Wait();
+    server_.reset();
+  }
+  selected_port_ = 0;
+  service_.clear_status_start();
+  return false;
+#else
   server_ = builder.BuildAndStart();
   return server_ != nullptr && selected_port_ > 0;
+#endif
 }
 
 void OrderBookGrpcServer::shutdown() noexcept {
@@ -771,6 +916,9 @@ void OrderBookGrpcServer::shutdown() noexcept {
     server_.reset();
   }
   assert(service_.tracked_context_count() == 0U);
+#if defined(BMD_GATEWAY_G10_ENABLED)
+  assert(!service_.status_inflight());
+#endif
 }
 
 int OrderBookGrpcServer::selected_port() const noexcept {
