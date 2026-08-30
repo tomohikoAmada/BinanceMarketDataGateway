@@ -7,13 +7,14 @@ checked for this checkpoint is Contracts
 `518880bdfa60948c3b65b6b3525d024526995166` and Projection
 `01a66aa80c764d2600da2cc309c0fd69655b55c`.
 
-The current implementation is G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, G7, and
-G8 complete.
+The current implementation is G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, G7, G8,
+and G9 complete.
 The deterministic synthetic host, serialized `MarketRuntime`, first real Binance
 Spot BTCUSDT network/bootstrap runtime, bounded reconnect/resync recovery, and
 planned connection rotation are implemented. G7 adds bounded order-book
 publication and the first synchronous `SubscribeOrderBook` gRPC flow. G8 adds
-the Projection M6 integration acceptance composition.
+the Projection M6 integration acceptance composition. G9 adds bounded synchronous
+`SubscribeEvents` for Spot BTCUSDT `DIFF_DEPTH`, `AGG_TRADE`, and `BOOK_TICKER`.
 Historical G2/G3 attempts, including the deleted `feat/g2-deterministic-synthetic-host`
 branch and its recovery bundle, are not implementation authority. Historical PR #5 is
 retained only as a closed, not-merged, abandoned implementation attempt.
@@ -75,6 +76,7 @@ runtime framework.
 - `G6=COMPLETE`.
 - `G7=COMPLETE`.
 - `G8=COMPLETE`.
+- `G9=COMPLETE`.
 - `G2_SYNTHETIC_HOST_IMPLEMENTED=YES`.
 - `G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES`.
 - `CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES`.
@@ -84,9 +86,10 @@ runtime framework.
 - `AUTOMATIC_RECOVERY=IMPLEMENTED`.
 - `PLANNED_ROTATION=IMPLEMENTED`.
 - `SUBSCRIBE_ORDER_BOOK=IMPLEMENTED`.
+- `SUBSCRIBE_EVENTS=IMPLEMENTED`.
 - `BOUNDED_PUBLICATION=IMPLEMENTED`.
 - `GRPC=IMPLEMENTED`.
-- `NEXT=G9`.
+- `NEXT=G10`.
 
 Gateway `main` currently has typed configuration, synchronous Foundation
 lifecycle, a daemon CLI that immediately starts and stops Foundation, Foundation
@@ -101,8 +104,8 @@ strict transport JSON decoding, real receive timestamps, connection generation
 through that runtime. Reconnect/recovery is implemented in G5 and planned
 rotation is implemented in G6. G7 implements bounded order-book publication and
 `SubscribeOrderBook`; G8 integration acceptance is implemented as a focused
-acceptance/test composition and opt-in CMake wiring. Other gRPC methods remain
-unimplemented.
+acceptance/test composition and opt-in CMake wiring. G9 implements synchronous
+`SubscribeEvents`; `GetGatewayStatus` remains unimplemented.
 
 ## G0 — Repository Foundation
 
@@ -445,11 +448,11 @@ G8 acceptance covers:
 G8 added acceptance/test composition and opt-in CMake wiring. It did not modify
 G3-G7 production source and did not implement G9, G10, or G11.
 
-`NEXT=G9`.
+`NEXT=G10`.
 
 ## G9 — SubscribeEvents
 
-**STATUS=NOT_STARTED**
+**STATUS=COMPLETE**
 
 Add contiguous event publication for `DepthUpdate`, `AggTrade`, and `BookTicker`,
 with no silent loss.
@@ -459,6 +462,24 @@ Initial V1 acceptance supports exactly one selector per accepted
 until a deliberate deterministic cross-selector merge-ordering contract exists.
 Do not create a generic event bus merely because the schema permits repeated
 selectors.
+
+The accepted implementation is semantic commit
+`aa821c5f76e0014c64a2f447dfe4bda07d9765e3` with format-only child
+`ba13d5a823d8cc1c7e122bf4465cbf1146e10d9e`, merged by PR #16 as
+`90a1e4019f57369a420d263fd298c5ad51ce8bdd`. Exact-head PR CI run
+`33312746318` completed successfully. Independent review found `P0=0`,
+`P1=0`, `G9_TECHNICAL_ACCEPTANCE=PASS`, and
+`FALSE_PASS_PATH_FOUND=NO`.
+
+G9's accepted boundary is one V1 selector for `DIFF_DEPTH`, `AGG_TRADE`, or
+`BOOK_TICKER` on Binance Spot BTCUSDT, carried by one combined Spot WebSocket.
+Depth events are `PRE_PROJECTION_NORMALIZED`; G7 OrderBook remains
+Projection-Applied-only, with no second sequence classifier. Event publication
+is bounded, sessions are generation-bounded, and recovery/rotation terminalize
+with `CONNECTION_GENERATION_CHANGED` / `RESUBSCRIBE`; permanent failures do not
+fabricate generation changes. G7 and G9 share the synchronous generated service
+and server with a mechanical tracked-context bound of 24. G9 changes neither
+Contracts nor Projection.
 
 ## G10 — Minimal GetGatewayStatus
 
