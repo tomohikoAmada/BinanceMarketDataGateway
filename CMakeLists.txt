@@ -853,6 +853,27 @@ if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
     bmd_gateway_apply_warnings(bmd_gateway_g7_grpc)
     bmd_gateway_apply_sanitizers(bmd_gateway_g7_grpc)
 
+    if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
+        add_executable(bmd-gateway-g11-multi-market-live
+            app/g11_multi_market_live/main.cpp
+        )
+        set_target_properties(
+            bmd-gateway-g11-multi-market-live
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd-gateway-g11-multi-market-live
+            PRIVATE
+                bmd_gateway_g7_grpc
+                bmd_gateway_g11_multi_market_runtime
+        )
+        bmd_gateway_apply_warnings(bmd-gateway-g11-multi-market-live)
+        bmd_gateway_apply_sanitizers(bmd-gateway-g11-multi-market-live)
+    endif()
+
     add_executable(bmd-gateway-g7-spot-grpc-live
         app/g7_spot_grpc_live/main.cpp
     )
