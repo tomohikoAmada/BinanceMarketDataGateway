@@ -20,8 +20,10 @@ G9 adds focused bounded synchronous `SubscribeEvents` for Spot BTCUSDT
 G10 adds minimal synchronous `GetGatewayStatus` for one Spot BTCUSDT market,
 assembled from existing runtime, recovery, and publication observations.
 G11 adds the fixed two-product USD-M and multi-market runtime boundary.
-`NEXT=POST_G11_PLANNING`; no G12 or further numbered Gateway milestone is
-currently frozen.
+POST_G11_RUNTIME_PRODUCTIZATION is complete: the ordinary `bmd-gatewayd` is
+the long-running fixed two-product production daemon.
+`NEXT=POST_G11_PERFORMANCE_BASELINE`; no G12 or further numbered Gateway
+milestone is currently frozen.
 Keep Phase A small and independently buildable.
 
 This repository contains the G0 foundation, frozen G1 proof, deterministic G2
@@ -29,9 +31,19 @@ synthetic host, serialized G3 runtime, real G4 Spot transport, G5 recovery, and
 G6 rotation, G7 publication/gRPC, G8 integration acceptance, G9
 `SubscribeEvents`, G10 `GetGatewayStatus`, and the G11 fixed two-product
 USD-M/multi-market runtime; future work follows the milestone authority.
-`NEXT=POST_G11_PLANNING`; no G12 or further numbered Gateway milestone is
-currently frozen.
+The post-G11 productization is complete and future work follows the milestone
+authority. `NEXT=POST_G11_PERFORMANCE_BASELINE`; no G12 or further numbered
+Gateway milestone is currently frozen.
 Keep Phase A small and independently buildable.
+
+The ordinary `bmd-gatewayd` is now the long-running production daemon for
+exactly Binance Spot BTCUSDT and Binance USD-M perpetual BTCUSDT. It requires
+both products to reach initial Live/Synchronized before serving, uses a
+configured gRPC endpoint, handles SIGINT/SIGTERM, rolls back startup
+completely, isolates a later single-market failure, and shuts down server
+handlers before destroying the product graph. The historical Foundation CLI
+remains a minimal Phase-A seam and is not the daemon's current production
+semantics.
 
 ## Boundaries
 
@@ -83,7 +95,23 @@ Keep Phase A small and independently buildable.
   both products, G9 exposes only USD-M `DIFF_DEPTH`, status has two rows, and
   the G11-enabled streaming bound is 48 (the G11-off legacy bound is 24).
   There is no generic multi-market, event, plugin, or runtime framework.
+- Post-G11 productization keeps exactly two production products, one runtime/
+  Projection owner/recovery instance per product, a fixed two-entry registry,
+  one transport per product and two total, and a 48-context streaming bound.
+  Projection remains the sole Spot/USD-M sequencing and USD-M `pu` authority.
+  Both products must be initial-Live before production readiness; a later
+  single-market failure does not globally stop service. Server handlers must
+  shut down before product graph destruction, the signal model must remain
+  async-safe, and production must not contain an acceptance-only hook.
 - Do not copy Contracts `.proto` files or introduce floating FetchContent dependencies.
+
+## Post-G11 performance phase
+
+The next phase is `POST_G11_PERFORMANCE_BASELINE`: measure before optimizing
+the actual merged production daemon. Do not authorize lock-free redesign, busy
+polling, CPU affinity, a custom allocator, a generic worker pool, or a combined
+multi-symbol transport without measured evidence and separate architecture
+authority.
 
 ## Phase A implementation rules
 
