@@ -683,8 +683,7 @@ int main() {
                       final_clean;
   if (!passed) {
     std::cerr
-        << "REAL_G11_ACCEPTANCE=FAIL"
-        << " initial_streams=" << initial_streams
+        << "REAL_G11_ACCEPTANCE=FAIL" << " initial_streams=" << initial_streams
         << " initial_status=" << initial_status
         << " recovery_requested=" << recovery_requested
         << " recovery_window=" << usdm_recovery_window_observed
