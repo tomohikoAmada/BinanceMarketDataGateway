@@ -7,7 +7,7 @@ Read in this order before making Gateway changes:
 3. [ARCHITECTURE.md](ARCHITECTURE.md)
 4. milestone-specific evidence as needed
 
-G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, G7, G8, G9, and G10 are complete. The deterministic G2
+G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, G7, G8, G9, G10, and G11 are complete. The deterministic G2
 synthetic host, serialized G3 `MarketRuntime`, real G4 Binance Spot BTCUSDT
 transport/bootstrap, bounded G5 reconnect/resync recovery, and break-before-make
 G6 planned connection rotation are implemented. G7 adds bounded owner-domain
@@ -19,14 +19,18 @@ G9 adds focused bounded synchronous `SubscribeEvents` for Spot BTCUSDT
 `DIFF_DEPTH`, `AGG_TRADE`, and `BOOK_TICKER`.
 G10 adds minimal synchronous `GetGatewayStatus` for one Spot BTCUSDT market,
 assembled from existing runtime, recovery, and publication observations.
-The next runtime milestone is G11 USD-M + Multi-Market Runtime.
+G11 adds the fixed two-product USD-M and multi-market runtime boundary.
+`NEXT=POST_G11_PLANNING`; no G12 or further numbered Gateway milestone is
+currently frozen.
 Keep Phase A small and independently buildable.
 
 This repository contains the G0 foundation, frozen G1 proof, deterministic G2
 synthetic host, serialized G3 runtime, real G4 Spot transport, G5 recovery, and
 G6 rotation, G7 publication/gRPC, G8 integration acceptance, G9
-`SubscribeEvents`, and G10 `GetGatewayStatus`; future runtime work follows the
-milestone authority. The next milestone is G11 USD-M + Multi-Market Runtime.
+`SubscribeEvents`, G10 `GetGatewayStatus`, and the G11 fixed two-product
+USD-M/multi-market runtime; future work follows the milestone authority.
+`NEXT=POST_G11_PLANNING`; no G12 or further numbered Gateway milestone is
+currently frozen.
 Keep Phase A small and independently buildable.
 
 ## Boundaries
@@ -70,6 +74,15 @@ Keep Phase A small and independently buildable.
   active Event subscriptions. Pending G7 admissions are excluded. The unary
   status RPC does not enter the 24-context streaming TryCancel tracker, and
   expensive status collection is limited to one concurrent RPC.
+- G11 implements exactly two products: Binance Spot BTCUSDT and Binance USD-M
+  perpetual BTCUSDT. Each has one `MarketRuntime`, private `BookProjection`,
+  serialized owner, and independent `RecoveryCoordinator` instance. A fixed
+  non-owning two-entry registry routes one shared synchronous gRPC service.
+  Projection exclusively owns USD-M `pu` continuity through
+  `DepthUpdate.previous_final_update_id`; Gateway adds no classifier. G7 routes
+  both products, G9 exposes only USD-M `DIFF_DEPTH`, status has two rows, and
+  the G11-enabled streaming bound is 48 (the G11-off legacy bound is 24).
+  There is no generic multi-market, event, plugin, or runtime framework.
 - Do not copy Contracts `.proto` files or introduce floating FetchContent dependencies.
 
 ## Phase A implementation rules

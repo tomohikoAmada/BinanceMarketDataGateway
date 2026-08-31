@@ -2,7 +2,7 @@
 
 The detailed, ordered development authority is
 [docs/MILESTONES.md](docs/MILESTONES.md). This document records only the
-responsibility split and the current foundation/G10 boundary.
+responsibility split and the current foundation/G11 boundary.
 
 ## Dependency direction
 
@@ -152,8 +152,10 @@ terminates unavailable without fabricating a future generation, and Projection
 `NeedsResync` alone is not the Event terminal event.
 
 G7 and G9 use the same generated Gateway service, synchronous server, and
-context tracking / TryCancel lifetime protocol. Their mechanical tracked-context
-maximum is 24; this is not a generic RPC framework.
+context tracking / TryCancel lifetime protocol. The historical G10
+single-market composition had a mechanical tracked-context maximum of 24. The
+G11 two-market composition has a maximum of 48; this is not a generic RPC
+framework.
 
 ## G10 Minimal GetGatewayStatus
 
@@ -164,7 +166,7 @@ Gateway service identity plus an injected runtime clock. The assembler does not
 own or schedule those runtime components and creates no thread, queue, cache,
 health state machine, metrics registry, or control path.
 
-The snapshot contains exactly one BINANCE/SPOT/BTCUSDT market. It maps G3
+The historical G10 snapshot contains exactly one BINANCE/SPOT/BTCUSDT market. It maps G3
 `RuntimeState` to Contracts `StreamLifecycleState`, reports monotonic Gateway
 server uptime, carries the optional receive UTC time of the most recently
 successfully normalized WebSocket `DepthUpdate`, `AggTrade`, or `BookTicker`,
@@ -180,9 +182,73 @@ interval. One expensive status RPC may collect at a time; additional concurrent
 requests return `RESOURCE_EXHAUSTED` instead of entering a waiting queue.
 
 `GetGatewayStatus` is unary and is not inserted into the G7/G9 streaming
-`ServerContext` tracker. That tracker remains mechanically bounded at 24, and
+`ServerContext` tracker. That tracker remains mechanically bounded at 24 for
+the historical G10 composition and 48 for G11, and
 normal synchronous `Server::Shutdown()` / `Server::Wait()` provides the unary
 handler lifetime barrier. The established G7/G9 TryCancel protocol is unchanged.
+
+## G11 USD-M and Multi-Market Runtime
+
+G11 is the current two-product runtime boundary. It implements exactly:
+
+- `BINANCE / SPOT / BTCUSDT`;
+- `BINANCE / USD_M_PERPETUAL / BTCUSDT`.
+
+It is not arbitrary multi-symbol support or generic dynamic market registration.
+The accepted composition has two isolated single-product `MarketRuntime`
+instances, two private `BookProjection` instances, two serialized Projection
+owner threads, two independent mutable `RecoveryCoordinator` instances, one
+fixed non-owning two-entry market registry, and one shared synchronous Gateway
+gRPC service.
+
+USD-M REST uses `fapi.binance.com` for `/fapi/v1/exchangeInfo` and
+`/fapi/v1/depth?symbol=BTCUSDT&limit=1000`. Its WebSocket is
+`wss://fstream.binance.com/public/ws/btcusdt@depth@100ms`. Gateway parses and
+forwards USD-M `pu` as `DepthUpdate.previous_final_update_id`; Projection's
+`SequencePolicyKind::UsdMPerpetual`, through `ProtoAdapter`, remains the sole
+authority for bootstrap bridge, stale, duplicate, missing previous-final,
+previous-final mismatch, gap, and `NeedsResync`. Gateway has no second `pu`
+classifier. The historical Spot route authority is unchanged.
+
+The shared `RecoveryCoordinator` code authority is instantiated independently
+for Spot and USD-M. Each product separately owns its generation, backoff,
+rotation deadline, active attempt, mutex/state, last-event observation, and
+terminal state. At most one transport is active per market,
+with a process total bounded at two; terminal failure of one market does not
+stop the other product or the gRPC server.
+
+G7 routes exactly one product per `SubscribeOrderBook` RPC. Its active and
+pending limits are eight per market, hence totals of 16 active and 16 pending.
+G7 controlled recovery remains `RESUME_NOT_AVAILABLE` /
+`REQUEST_NEW_SNAPSHOT`. G9 retains Spot `DIFF_DEPTH`, `AGG_TRADE`, and
+`BOOK_TICKER`, while USD-M exposes only `DIFF_DEPTH`; USD-M AggTrade and
+BookTicker are unsupported. Each market has an independent EventPublication,
+with eight active G9 sessions per market and 16 total. Generation replacement
+remains `CONNECTION_GENERATION_CHANGED` / `RESUBSCRIBE`.
+
+Identifiers are scoped as follows: `gateway_instance_id` is process-global;
+`connection_generation` is per market/source lifecycle; G7 `subscription_id`
+is per MarketRuntime/market namespace; G9 `subscription_id` is per
+EventPublication/market namespace; and `session_sequence` is per accepted
+RPC/session. Thus Spot `ob-1` and USD-M `ob-1`, or Spot `ev-1` and USD-M `ev-1`,
+may coexist.
+
+G11 status returns two deterministic rows in stable order: Spot BTCUSDT, then
+USD-M perpetual BTCUSDT. Per-market active subscription count is G7 resident
+plus G9 active; pending G7 admissions are excluded. Status remains a minimal
+one-shot read-only snapshot, permits one concurrent collection, and stays
+outside streaming context tracking. The G11 two-market bound is 48 contexts
+(16 G7 active + 16 G7 pending + 16 G9 active); the historical G10/G11-off
+composition remains 24. The top-level active subscription count is the sum of
+the two per-market counts.
+
+G11 is opt-in through `BMD_GATEWAY_BUILD_G11_MULTI_MARKET=ON`; it is OFF by
+default, and G11-off preserves the historical G0-G10 build behavior. Global
+shutdown closes admission, terminates product-local publications, snapshots at
+most 48 streaming contexts, TryCancels them, synchronously shuts down and waits
+for the server, then stops and joins both recovery/transport lifecycles and
+both `MarketRuntime` owners before destroying non-owning routing/service
+references. No new lifecycle framework is introduced.
 
 ## MarketRuntime Projection boundary
 
@@ -204,5 +270,5 @@ recovery and G6 adds planned break-before-make rotation without changing
 Projection continuity ownership. G7 adds bounded publication and the first
 synchronous gRPC business flow without adding a second classifier or order book.
 G8 closes the Projection M6 real-Gateway order-book integration acceptance.
-Future work after G10 is G11 USD-M / multi-market runtime. G11 is not a generic
-multi-market registry implemented by the current Gateway.
+G11 closes the accepted USD-M/two-market runtime boundary. `NEXT=POST_G11_PLANNING`;
+no additional numbered Gateway milestone is currently frozen.

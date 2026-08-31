@@ -8,7 +8,7 @@ checked for this checkpoint is Contracts
 `01a66aa80c764d2600da2cc309c0fd69655b55c`.
 
 The current implementation is G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, G7, G8,
-G9, and G10 complete.
+G9, G10, and G11 complete.
 The deterministic synthetic host, serialized `MarketRuntime`, first real Binance
 Spot BTCUSDT network/bootstrap runtime, bounded reconnect/resync recovery, and
 planned connection rotation are implemented. G7 adds bounded order-book
@@ -16,7 +16,8 @@ publication and the first synchronous `SubscribeOrderBook` gRPC flow. G8 adds
 the Projection M6 integration acceptance composition. G9 adds bounded synchronous
 `SubscribeEvents` for Spot BTCUSDT `DIFF_DEPTH`, `AGG_TRADE`, and `BOOK_TICKER`.
 G10 adds minimal synchronous `GetGatewayStatus` for one Binance Spot BTCUSDT
-market.
+market. G11 adds the fixed two-product USD-M and multi-market runtime for Spot
+BTCUSDT and USD-M perpetual BTCUSDT.
 Historical G2/G3 attempts, including the deleted `feat/g2-deterministic-synthetic-host`
 branch and its recovery bundle, are not implementation authority. Historical PR #5 is
 retained only as a closed, not-merged, abandoned implementation attempt.
@@ -80,11 +81,15 @@ runtime framework.
 - `G8=COMPLETE`.
 - `G9=COMPLETE`.
 - `G10=COMPLETE`.
+- `G11=COMPLETE`.
 - `G2_SYNTHETIC_HOST_IMPLEMENTED=YES`.
 - `G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES`.
 - `CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES`.
 - `REAL_GATEWAY_NETWORK_RUNTIME_IMPLEMENTED=YES`.
-- `GATEWAY_NETWORK=SPOT_BTCUSDT_IMPLEMENTED`.
+- `GATEWAY_NETWORK=SPOT_BTCUSDT_AND_USD_M_PERPETUAL_BTCUSDT_IMPLEMENTED`.
+- `USD_M_BTCUSDT=IMPLEMENTED`.
+- `MULTI_MARKET_RUNTIME=IMPLEMENTED`.
+- `G11_PRODUCT_COUNT=2`.
 - `RECONNECT=IMPLEMENTED`.
 - `AUTOMATIC_RECOVERY=IMPLEMENTED`.
 - `PLANNED_ROTATION=IMPLEMENTED`.
@@ -93,7 +98,21 @@ runtime framework.
 - `GET_GATEWAY_STATUS=IMPLEMENTED`.
 - `BOUNDED_PUBLICATION=IMPLEMENTED`.
 - `GRPC=IMPLEMENTED`.
-- `NEXT=G11`.
+- `STATUS_MARKET_COUNT=2`.
+- `MAX_CONCURRENT_STATUS_RPCS=1`.
+- `STATUS_USES_STREAM_CONTEXT_TRACKER=NO`.
+- `STREAM_CONTEXT_LIMIT=48`.
+- `STREAM_CONTEXT_LIMIT_G11_OFF=24`.
+- `G7_ACTIVE_LIMIT_PER_MARKET=8`.
+- `G7_PENDING_LIMIT_PER_MARKET=8`.
+- `G9_ACTIVE_LIMIT_PER_MARKET=8`.
+- `MAX_G7_ACTIVE_TOTAL=16`.
+- `MAX_G7_PENDING_TOTAL=16`.
+- `MAX_G9_ACTIVE_TOTAL=16`.
+- `MAX_ACTIVE_TRANSPORTS_PER_MARKET=1`.
+- `MAX_ACTIVE_TRANSPORTS_TOTAL=2`.
+- `FIRST_MULTI_MARKET=G11`.
+- `NEXT=POST_G11_PLANNING`.
 
 Gateway `main` currently has typed configuration, synchronous Foundation
 lifecycle, a daemon CLI that immediately starts and stops Foundation, Foundation
@@ -111,6 +130,12 @@ rotation is implemented in G6. G7 implements bounded order-book publication and
 acceptance/test composition and opt-in CMake wiring. G9 implements synchronous
 `SubscribeEvents`. G10 implements synchronous `GetGatewayStatus` for one Spot
 BTCUSDT market using existing runtime, recovery, and publication observations.
+G11 implements exactly two isolated products: Binance Spot BTCUSDT and Binance
+USD-M perpetual BTCUSDT, with one `MarketRuntime`/`BookProjection`/serialized
+owner and one independent `RecoveryCoordinator` per product. It adds USD-M
+REST/WS transport, routes G7 by exact market, exposes only USD-M `DIFF_DEPTH`
+through G9, and returns two deterministic status rows. Projection remains the
+sole USD-M `pu` continuity authority.
 
 ## G0 — Repository Foundation
 
@@ -516,17 +541,58 @@ code change, or real Binance acceptance requirement.
 
 ## G11 — USD-M and Multi-Market Runtime
 
-**STATUS=NOT_STARTED**
+**STATUS=COMPLETE**
 
-`FIRST_MULTI_MARKET=G11`.
+G11 is deliberately limited to exactly two products:
 
-Add USD-M BTCUSDT, correct USD-M transport routing, isolated Spot and USD-M
-`MarketRuntime` instances, USD-M inputs passed through Projection's existing
-USD-M sequence policy, and runtime failure isolation. Gateway must not implement
-its own `pu` classifier.
+1. `BINANCE / SPOT / BTCUSDT`;
+2. `BINANCE / USD_M_PERPETUAL / BTCUSDT`.
 
-After the Spot/USD-M two-product model is proven, multi-symbol expansion may
-reuse the `MarketRuntime` registry/design.
+It is not arbitrary multi-symbol support or generic dynamic market registration.
+The accepted architecture has two isolated single-product `MarketRuntime`
+instances, two private `BookProjection` instances, two serialized Projection
+owner threads, two independent mutable `RecoveryCoordinator` instances, one
+fixed non-owning two-entry registry, and one shared synchronous Gateway gRPC
+service. At most one transport is active per market, and terminal failure of
+one market does not stop the other product or the gRPC server.
+
+Gateway parses and forwards USD-M `pu` through
+`DepthUpdate.previous_final_update_id`. Projection's
+`SequencePolicyKind::UsdMPerpetual`, through `ProtoAdapter`, remains the sole
+authority for bootstrap bridge, stale, duplicate, missing previous-final,
+previous-final mismatch, gap, and `NeedsResync`. Gateway adds no second
+classifier. USD-M uses `fapi.binance.com` REST and
+`wss://fstream.binance.com/public/ws/btcusdt@depth@100ms`; the historical Spot
+route authority is unchanged.
+
+G7 routes one exact product per RPC, with eight active and eight pending limits
+per market (16 each in total). G7 controlled recovery remains
+`RESUME_NOT_AVAILABLE` / `REQUEST_NEW_SNAPSHOT`. Spot G9 supports
+`DIFF_DEPTH`, `AGG_TRADE`, and `BOOK_TICKER`; USD-M G9 supports only
+`DIFF_DEPTH`. Generation replacement remains
+`CONNECTION_GENERATION_CHANGED` / `RESUBSCRIBE`. Status returns two rows in
+stable order, Spot then USD-M, and permits one concurrent collection. The G11
+streaming bound is 48 contexts; the historical G10/G11-off composition remains
+24.
+
+The accepted implementation is semantic reviewed head
+`c5889db34099f515cd519db49da1dfe3d36d79f7`, with formatting-only child
+`c25f9ee782d7c428278d4e7e4fc7fdec60ccdd0e`, implemented by PR #20 and merged
+as `b2c1c140bb378eaf7edef6ffa554427f5c3f5aab`. Exact PR CI run
+`33351013834` completed successfully. Independent review found `P0=0`,
+`P1=0`, and `G11_TECHNICAL_ACCEPTANCE=PASS`. Accepted local evidence includes
+current Contracts main `d194b663827185feb773515aa63467290780c670` and current
+Projection main `8621499cbeba0e42c409572ee3f209c32691698b` as the upstream
+authorities for this implementation.
+G11-enabled regression and ASAN/UBSAN/TSAN passes, plus real simultaneous Spot
+and USD-M live/order-book acceptance, USD-M `DIFF_DEPTH`, two-market status,
+controlled USD-M recovery isolation, two-transport maximum, and clean joined
+shutdown. The first real-run false negative was an acceptance-harness
+expectation error for G7 controlled recovery, not a production G11 failure;
+production semantics did not change between runs.
+
+`NEXT=POST_G11_PLANNING`. No additional numbered Gateway milestone is
+currently frozen. The existing deferred product surface remains deferred.
 
 ## Deferred product surface
 
