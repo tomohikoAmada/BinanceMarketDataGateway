@@ -66,17 +66,23 @@ state_for_projection(core::ProjectionStatus status) noexcept {
 class MarketRuntime::Impl final {
 public:
   Impl(RuntimeLimits limits, RuntimeClock clock, core::NumericSpec numeric_spec,
+       adapter::ExpectedIdentity expected_identity,
        RuntimeTestOptions test_options)
       : limits_{limits}, clock_{std::move(clock)},
-        expected_identity_{make_expected_identity()},
-        projection_{numeric_spec, core::SequencePolicyKind::Spot},
+        expected_identity_{std::move(expected_identity)},
+        projection_{numeric_spec, expected_identity_.policy},
         admission_enqueued_{std::move(test_options.admission_enqueued)},
+        before_admission_processing_{
+            std::move(test_options.before_admission_processing)},
         owner_paused_{test_options.owner_starts_paused} {
     if (limits_.ingress_capacity == 0U || limits_.bootstrap_capacity == 0U) {
       throw std::invalid_argument{"G3 runtime capacities must be nonzero"};
     }
     if (!clock_) {
       throw std::invalid_argument{"G3 runtime clock must be injected"};
+    }
+    if (expected_identity_.symbol.empty()) {
+      throw std::invalid_argument{"MarketRuntime identity must have a symbol"};
     }
     if (limits_.publication.maximum_active_subscriptions == 0U ||
         limits_.publication.ordinary_queue_capacity == 0U ||
@@ -696,6 +702,13 @@ private:
 
   void perform_admission_request(
       const std::shared_ptr<AdmissionRequest> &request) noexcept {
+    if (before_admission_processing_) {
+      try {
+        before_admission_processing_();
+      } catch (...) {
+        // Test instrumentation must not affect owner-domain correctness.
+      }
+    }
     sweep_closed_subscribers();
     {
       std::lock_guard lock{mutex_};
@@ -1249,6 +1262,7 @@ private:
   std::uint64_t processed_ticket_{0U};
   std::size_t pending_admission_count_{0U};
   std::function<void()> admission_enqueued_;
+  std::function<void()> before_admission_processing_;
   bool started_{false};
   bool accepting_{false};
   bool publication_admission_open_{false};
@@ -1264,8 +1278,16 @@ private:
 MarketRuntime::MarketRuntime(RuntimeLimits limits, RuntimeClock clock,
                              core::NumericSpec numeric_spec,
                              RuntimeTestOptions test_options)
+    : MarketRuntime(limits, std::move(clock), numeric_spec,
+                    make_expected_identity(), std::move(test_options)) {}
+
+MarketRuntime::MarketRuntime(RuntimeLimits limits, RuntimeClock clock,
+                             core::NumericSpec numeric_spec,
+                             adapter::ExpectedIdentity expected_identity,
+                             RuntimeTestOptions test_options)
     : impl_{std::make_unique<Impl>(limits, std::move(clock), numeric_spec,
-                                   test_options)} {}
+                                   std::move(expected_identity),
+                                   std::move(test_options))} {}
 
 MarketRuntime::~MarketRuntime() = default;
 

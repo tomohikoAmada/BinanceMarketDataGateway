@@ -129,6 +129,21 @@ classify_failure(const g3::RuntimeObservation &runtime,
           std::nullopt, std::nullopt};
 }
 
+[[nodiscard]] RecoveryCoordinatorOptions
+spot_coordinator_options(RecoveryOptions options) {
+  RecoveryCoordinatorOptions coordinator;
+  coordinator.attempt_factory =
+      [transport_options = std::move(options.transport)](
+          g3::MarketRuntime &attempt_runtime,
+          const g3::RuntimeClock &attempt_clock, std::uint64_t generation) {
+        return std::make_unique<LiveSpotAttempt>(attempt_runtime, attempt_clock,
+                                                 generation, transport_options);
+      };
+  coordinator.source_generation_lifecycle =
+      std::move(options.source_generation_lifecycle);
+  return coordinator;
+}
+
 } // namespace
 
 std::optional<std::chrono::seconds>
@@ -160,14 +175,14 @@ detail::normal_backoff_delay(std::size_t recovery_attempt) {
   return delays[recovery_attempt - 1U];
 }
 
-class SpotRecovery::Impl final {
+class RecoveryCoordinator::Impl final {
 public:
   Impl(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
        std::optional<PlannedRotationPolicy> planned_rotation,
-       RecoveryOptions options, detail::RecoveryTestOptions test_options)
+       RecoveryCoordinatorOptions options,
+       detail::RecoveryTestOptions test_options)
       : runtime_{runtime}, clock_{std::move(clock)},
         planned_rotation_{planned_rotation},
-        transport_options_{std::move(options.transport)},
         source_generation_lifecycle_{
             std::move(options.source_generation_lifecycle)},
         attempt_factory_{std::move(test_options.attempt_factory)},
@@ -196,13 +211,11 @@ public:
           "G9 source generation lifecycle callbacks must be all-or-none"};
     }
     if (!attempt_factory_) {
-      attempt_factory_ = [transport_options = transport_options_](
-                             g3::MarketRuntime &attempt_runtime,
-                             const g3::RuntimeClock &attempt_clock,
-                             std::uint64_t generation) {
-        return std::make_unique<LiveSpotAttempt>(attempt_runtime, attempt_clock,
-                                                 generation, transport_options);
-      };
+      attempt_factory_ = std::move(options.attempt_factory);
+    }
+    if (!attempt_factory_) {
+      throw std::invalid_argument{
+          "G5 recovery attempt factory must be configured"};
     }
   }
 
@@ -926,7 +939,6 @@ private:
   g3::MarketRuntime &runtime_;
   g3::RuntimeClock clock_;
   std::optional<PlannedRotationPolicy> planned_rotation_;
-  g4::SpotTransportOptions transport_options_;
   SourceGenerationLifecycle source_generation_lifecycle_;
   std::optional<std::uint64_t> source_generation_open_;
   bool source_generation_quiesced_{false};
@@ -951,6 +963,50 @@ private:
   std::condition_variable_any backoff_condition_;
 };
 
+RecoveryCoordinator::RecoveryCoordinator(
+    g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+    RecoveryCoordinatorOptions options,
+    detail::RecoveryTestOptions test_options)
+    : impl_{std::make_unique<Impl>(runtime, std::move(clock), std::nullopt,
+                                   std::move(options),
+                                   std::move(test_options))} {}
+
+RecoveryCoordinator::RecoveryCoordinator(
+    g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+    PlannedRotationPolicy planned_rotation, RecoveryCoordinatorOptions options,
+    detail::RecoveryTestOptions test_options)
+    : impl_{std::make_unique<Impl>(runtime, std::move(clock), planned_rotation,
+                                   std::move(options),
+                                   std::move(test_options))} {}
+
+RecoveryCoordinator::~RecoveryCoordinator() = default;
+
+RecoveryStartResult RecoveryCoordinator::start() { return impl_->start(); }
+
+void RecoveryCoordinator::stop() noexcept { impl_->stop(); }
+
+RecoveryObservation RecoveryCoordinator::observe() const {
+  return impl_->observe();
+}
+
+RecoveryObservation
+RecoveryCoordinator::wait_for_generation_live(std::uint64_t generation) {
+  return impl_->wait_for_generation_live(generation);
+}
+
+RecoveryObservation RecoveryCoordinator::wait_until_terminal() {
+  return impl_->wait_until_terminal();
+}
+
+bool RecoveryCoordinator::request_controlled_recovery_for_acceptance() {
+  return impl_->request_controlled_recovery_for_acceptance();
+}
+
+std::optional<QuiescentAcceptanceCut>
+RecoveryCoordinator::quiesce_for_acceptance() {
+  return impl_->quiesce_for_acceptance();
+}
+
 SpotRecovery::SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                            detail::RecoveryTestOptions test_options)
     : SpotRecovery(runtime, std::move(clock), RecoveryOptions{},
@@ -959,9 +1015,10 @@ SpotRecovery::SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
 SpotRecovery::SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                            RecoveryOptions options,
                            detail::RecoveryTestOptions test_options)
-    : impl_{std::make_unique<Impl>(runtime, std::move(clock), std::nullopt,
-                                   std::move(options),
-                                   std::move(test_options))} {}
+    : coordinator_{std::make_unique<RecoveryCoordinator>(
+          runtime, std::move(clock),
+          spot_coordinator_options(std::move(options)),
+          std::move(test_options))} {}
 
 SpotRecovery::SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                            PlannedRotationPolicy planned_rotation,
@@ -973,33 +1030,36 @@ SpotRecovery::SpotRecovery(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                            PlannedRotationPolicy planned_rotation,
                            RecoveryOptions options,
                            detail::RecoveryTestOptions test_options)
-    : impl_{std::make_unique<Impl>(runtime, std::move(clock), planned_rotation,
-                                   std::move(options),
-                                   std::move(test_options))} {}
+    : coordinator_{std::make_unique<RecoveryCoordinator>(
+          runtime, std::move(clock), planned_rotation,
+          spot_coordinator_options(std::move(options)),
+          std::move(test_options))} {}
 
 SpotRecovery::~SpotRecovery() = default;
 
-RecoveryStartResult SpotRecovery::start() { return impl_->start(); }
+RecoveryStartResult SpotRecovery::start() { return coordinator_->start(); }
 
-void SpotRecovery::stop() noexcept { impl_->stop(); }
+void SpotRecovery::stop() noexcept { coordinator_->stop(); }
 
-RecoveryObservation SpotRecovery::observe() const { return impl_->observe(); }
+RecoveryObservation SpotRecovery::observe() const {
+  return coordinator_->observe();
+}
 
 RecoveryObservation
 SpotRecovery::wait_for_generation_live(std::uint64_t generation) {
-  return impl_->wait_for_generation_live(generation);
+  return coordinator_->wait_for_generation_live(generation);
 }
 
 RecoveryObservation SpotRecovery::wait_until_terminal() {
-  return impl_->wait_until_terminal();
+  return coordinator_->wait_until_terminal();
 }
 
 bool SpotRecovery::request_controlled_recovery_for_acceptance() {
-  return impl_->request_controlled_recovery_for_acceptance();
+  return coordinator_->request_controlled_recovery_for_acceptance();
 }
 
 std::optional<QuiescentAcceptanceCut> SpotRecovery::quiesce_for_acceptance() {
-  return impl_->quiesce_for_acceptance();
+  return coordinator_->quiesce_for_acceptance();
 }
 
 } // namespace binance_market_data::gateway::g5

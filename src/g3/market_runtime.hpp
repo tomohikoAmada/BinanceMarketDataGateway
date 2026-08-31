@@ -192,17 +192,22 @@ enum class PublicationShutdownResult : std::uint8_t {
 };
 
 struct RuntimeTestOptions final {
-  RuntimeTestOptions(bool owner_starts_paused_value = false,
-                     std::function<void()> admission_enqueued_value = {})
+  RuntimeTestOptions(
+      bool owner_starts_paused_value = false,
+      std::function<void()> admission_enqueued_value = {},
+      std::function<void()> before_admission_processing_value = {})
       : owner_starts_paused{owner_starts_paused_value},
-        admission_enqueued{std::move(admission_enqueued_value)} {}
+        admission_enqueued{std::move(admission_enqueued_value)},
+        before_admission_processing{
+            std::move(before_admission_processing_value)} {}
 
   bool owner_starts_paused;
   std::function<void()> admission_enqueued;
+  std::function<void()> before_admission_processing;
 };
 
-// Internal G3 runtime for exactly BINANCE + SPOT + BTCUSDT. This header is
-// exposed only by the opt-in G3 build target; it is not an installed API.
+// Internal single-product runtime. This header is exposed only by the opt-in
+// G3 build target; it is not an installed API.
 // start(), stop(), and destruction must be coordinated by one external
 // lifecycle owner. Concurrent lifecycle operations are not supported.
 // RuntimeClock runs on the serialized owner thread and must not call or
@@ -212,6 +217,10 @@ public:
   explicit MarketRuntime(RuntimeLimits limits, RuntimeClock clock,
                          core::NumericSpec numeric_spec,
                          RuntimeTestOptions test_options = {});
+  MarketRuntime(RuntimeLimits limits, RuntimeClock clock,
+                core::NumericSpec numeric_spec,
+                adapter::ExpectedIdentity expected_identity,
+                RuntimeTestOptions test_options = {});
   ~MarketRuntime();
 
   MarketRuntime(const MarketRuntime &) = delete;

@@ -3,6 +3,9 @@
 #include "event_publication.hpp"
 #include "market_runtime.hpp"
 #include "spot_recovery.hpp"
+#if defined(BMD_GATEWAY_G11_ENABLED)
+#include "market_registry.hpp"
+#endif
 
 #include <binance_market_data/common/v1/enums.pb.h>
 #include <binance_market_data/gateway/v1/gateway_messages.pb.h>
@@ -43,6 +46,11 @@ public:
                          g9::EventPublication &event_publication,
                          g3::RuntimeClock clock,
                          const std::string &gateway_instance_id);
+#if defined(BMD_GATEWAY_G11_ENABLED)
+  GatewayStatusAssembler(const g11::MarketRuntimeRegistry &registry,
+                         g3::RuntimeClock clock,
+                         const std::string &gateway_instance_id);
+#endif
 
   GatewayStatusAssembler(const GatewayStatusAssembler &) = delete;
   GatewayStatusAssembler &operator=(const GatewayStatusAssembler &) = delete;
@@ -55,9 +63,12 @@ public:
   [[nodiscard]] StatusSnapshotResult collect() const;
 
 private:
-  g3::MarketRuntime &runtime_;
-  g5::SpotRecovery &recovery_;
-  g9::EventPublication &event_publication_;
+  g3::MarketRuntime *runtime_{nullptr};
+  g5::SpotRecovery *recovery_{nullptr};
+  g9::EventPublication *event_publication_{nullptr};
+#if defined(BMD_GATEWAY_G11_ENABLED)
+  const g11::MarketRuntimeRegistry *registry_{nullptr};
+#endif
   g3::RuntimeClock clock_;
   const std::string gateway_instance_id_;
 

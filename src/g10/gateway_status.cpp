@@ -1,5 +1,6 @@
 #include "gateway_status.hpp"
 
+#include <array>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -14,6 +15,15 @@ namespace {
          (observation.active_transport_count == 0U ||
           observation.connection_generation != 0U);
 }
+
+struct CollectedMarket final {
+  common_wire::Venue venue{common_wire::VENUE_UNSPECIFIED};
+  common_wire::Market market{common_wire::MARKET_UNSPECIFIED};
+  std::string symbol;
+  g3::RuntimeObservation runtime;
+  g5::RecoveryObservation recovery;
+  g9::EventPublicationObservation event_publication;
+};
 
 } // namespace
 
@@ -43,14 +53,33 @@ GatewayStatusAssembler::GatewayStatusAssembler(
     g3::MarketRuntime &runtime, g5::SpotRecovery &recovery,
     g9::EventPublication &event_publication, g3::RuntimeClock clock,
     const std::string &gateway_instance_id)
-    : runtime_{runtime}, recovery_{recovery},
-      event_publication_{event_publication}, clock_{std::move(clock)},
+    : runtime_{&runtime}, recovery_{&recovery},
+      event_publication_{&event_publication}, clock_{std::move(clock)},
       gateway_instance_id_{gateway_instance_id} {
   if (!clock_ ||
-      event_publication_.gateway_instance_id() != gateway_instance_id_) {
+      event_publication_->gateway_instance_id() != gateway_instance_id_) {
     throw std::invalid_argument{"invalid G10 status assembler configuration"};
   }
 }
+
+#if defined(BMD_GATEWAY_G11_ENABLED)
+GatewayStatusAssembler::GatewayStatusAssembler(
+    const g11::MarketRuntimeRegistry &registry, g3::RuntimeClock clock,
+    const std::string &gateway_instance_id)
+    : registry_{&registry}, clock_{std::move(clock)},
+      gateway_instance_id_{gateway_instance_id} {
+  if (!clock_) {
+    throw std::invalid_argument{"invalid G11 status assembler clock"};
+  }
+  for (const auto &entry : registry_->entries()) {
+    if (entry.event_publication->gateway_instance_id() !=
+        gateway_instance_id_) {
+      throw std::invalid_argument{
+          "G11 status services must share the gateway_instance_id"};
+    }
+  }
+}
+#endif
 
 bool GatewayStatusAssembler::prepare_start_baseline() noexcept {
   try {
@@ -70,23 +99,41 @@ void GatewayStatusAssembler::clear_start_baseline() noexcept {
 }
 
 StatusSnapshotResult GatewayStatusAssembler::collect() const {
-  const auto runtime = runtime_.observe();
-  const auto recovery = recovery_.observe();
-  const auto event_publication = event_publication_.observe();
-
-  const auto mapped_state = map_runtime_state(runtime.state);
-  if (!mapped_state.has_value() || !valid_recovery_observation(recovery) ||
-      runtime.resident_subscription_count > g7::kMaximumActiveSubscriptions ||
-      event_publication.active_subscriptions >
-          g9::kMaximumActiveEventSubscriptions) {
-    return StatusSnapshotError::InvalidObservation;
+  std::array<CollectedMarket, 2U> markets;
+  std::size_t market_count = 0U;
+#if defined(BMD_GATEWAY_G11_ENABLED)
+  if (registry_ != nullptr) {
+    for (const auto &entry : registry_->entries()) {
+      markets[market_count++] = CollectedMarket{
+          entry.key.venue,           entry.key.market,
+          entry.key.symbol,          entry.runtime->observe(),
+          entry.recovery->observe(), entry.event_publication->observe()};
+    }
+  } else
+#endif
+  {
+    if (runtime_ == nullptr || recovery_ == nullptr ||
+        event_publication_ == nullptr) {
+      return StatusSnapshotError::InvalidObservation;
+    }
+    markets[market_count++] = CollectedMarket{common_wire::VENUE_BINANCE,
+                                              common_wire::MARKET_SPOT,
+                                              "BTCUSDT",
+                                              runtime_->observe(),
+                                              recovery_->observe(),
+                                              event_publication_->observe()};
   }
 
-  const auto active_subscriptions = runtime.resident_subscription_count +
-                                    event_publication.active_subscriptions;
-  if (active_subscriptions >
-      static_cast<std::size_t>(std::numeric_limits<std::uint64_t>::max())) {
-    return StatusSnapshotError::InvalidObservation;
+  for (std::size_t index = 0U; index < market_count; ++index) {
+    const auto &market = markets[index];
+    if (!map_runtime_state(market.runtime.state).has_value() ||
+        !valid_recovery_observation(market.recovery) ||
+        market.runtime.resident_subscription_count >
+            g7::kMaximumActiveSubscriptions ||
+        market.event_publication.active_subscriptions >
+            g9::kMaximumActiveEventSubscriptions) {
+      return StatusSnapshotError::InvalidObservation;
+    }
   }
 
   std::uint64_t baseline_monotonic_ns = 0U;
@@ -114,21 +161,31 @@ StatusSnapshotResult GatewayStatusAssembler::collect() const {
   snapshot.set_observed_time_utc_ns(observed_at.utc_ns);
   snapshot.set_uptime_seconds(
       (observed_at.monotonic_ns - baseline_monotonic_ns) / 1'000'000'000U);
-  auto *market = snapshot.add_markets();
-  market->set_venue(common_wire::VENUE_BINANCE);
-  market->set_market(common_wire::MARKET_SPOT);
-  market->set_symbol("BTCUSDT");
-  market->set_state(*mapped_state);
-  if (recovery.last_event_utc_ns.has_value()) {
-    market->set_last_event_utc_ns(*recovery.last_event_utc_ns);
+  std::uint64_t total_active_subscriptions = 0U;
+  for (std::size_t index = 0U; index < market_count; ++index) {
+    const auto &observation = markets[index];
+    const auto mapped_state = map_runtime_state(observation.runtime.state);
+    const auto active_subscriptions =
+        observation.runtime.resident_subscription_count +
+        observation.event_publication.active_subscriptions;
+    auto *market = snapshot.add_markets();
+    market->set_venue(observation.venue);
+    market->set_market(observation.market);
+    market->set_symbol(observation.symbol);
+    market->set_state(*mapped_state);
+    if (observation.recovery.last_event_utc_ns.has_value()) {
+      market->set_last_event_utc_ns(*observation.recovery.last_event_utc_ns);
+    }
+    if (observation.recovery.active_transport_count == 1U) {
+      market->set_connection_generation(
+          observation.recovery.connection_generation);
+    }
+    market->set_active_subscription_count(
+        static_cast<std::uint64_t>(active_subscriptions));
+    total_active_subscriptions +=
+        static_cast<std::uint64_t>(active_subscriptions);
   }
-  if (recovery.active_transport_count == 1U) {
-    market->set_connection_generation(recovery.connection_generation);
-  }
-  market->set_active_subscription_count(
-      static_cast<std::uint64_t>(active_subscriptions));
-  snapshot.set_total_active_subscriptions(
-      static_cast<std::uint64_t>(active_subscriptions));
+  snapshot.set_total_active_subscriptions(total_active_subscriptions);
   return snapshot;
 }
 

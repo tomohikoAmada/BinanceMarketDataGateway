@@ -27,6 +27,8 @@ option(BMD_GATEWAY_BUILD_G9_EVENTS
        "Build G9 contiguous event publication and SubscribeEvents" OFF)
 option(BMD_GATEWAY_BUILD_G10_STATUS
        "Build G10 minimal GetGatewayStatus" OFF)
+option(BMD_GATEWAY_BUILD_G11_MULTI_MARKET
+       "Build G11 fixed Spot/USD-M BTCUSDT multi-market runtime" OFF)
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
        "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
 option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
@@ -45,6 +47,10 @@ endif()
 
 if(BMD_GATEWAY_BUILD_G9_EVENTS)
     set(BMD_GATEWAY_BUILD_G7_PUBLICATION ON)
+endif()
+
+if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
+    set(BMD_GATEWAY_BUILD_G10_STATUS ON)
 endif()
 
 if(BMD_GATEWAY_BUILD_G10_STATUS)
@@ -390,6 +396,97 @@ if(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT)
     endif()
 endif()
 
+if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
+    add_library(bmd_gateway_g11_usdm_protocol
+        src/g11/usdm_protocol.cpp
+    )
+    set_target_properties(
+        bmd_gateway_g11_usdm_protocol
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_g11_usdm_protocol
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g11
+    )
+    target_link_libraries(
+        bmd_gateway_g11_usdm_protocol
+        PUBLIC
+            bmd_gateway_g4_spot_protocol
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g11_usdm_protocol)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g11_usdm_protocol)
+
+    add_library(bmd_gateway_g11_usdm_transport
+        src/g11/usdm_transport.cpp
+    )
+    set_target_properties(
+        bmd_gateway_g11_usdm_transport
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_g11_usdm_transport
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g11
+    )
+    target_link_libraries(
+        bmd_gateway_g11_usdm_transport
+        PUBLIC
+            bmd_gateway_g11_usdm_protocol
+            bmd_gateway_g4_spot_transport
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g11_usdm_transport)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g11_usdm_transport)
+
+    if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_g11_usdm_protocol_tests
+            tests/g11_usdm_protocol_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_g11_usdm_protocol_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g11_usdm_protocol_tests
+            PRIVATE
+                bmd_gateway_g11_usdm_protocol
+        )
+        bmd_gateway_apply_warnings(bmd_gateway_g11_usdm_protocol_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_g11_usdm_protocol_tests)
+        add_test(NAME gateway_g11_usdm_protocol_tests
+                 COMMAND bmd_gateway_g11_usdm_protocol_tests)
+
+        add_executable(bmd_gateway_g11_usdm_transport_tests
+            tests/g11_usdm_transport_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_g11_usdm_transport_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g11_usdm_transport_tests
+            PRIVATE
+                bmd_gateway_g11_usdm_transport
+        )
+        bmd_gateway_apply_warnings(bmd_gateway_g11_usdm_transport_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_g11_usdm_transport_tests)
+        add_test(NAME gateway_g11_usdm_transport_tests
+                 COMMAND bmd_gateway_g11_usdm_transport_tests)
+    endif()
+endif()
+
 if(BMD_GATEWAY_BUILD_G5_RECOVERY)
     add_library(bmd_gateway_g5_recovery
         src/g5/spot_recovery.cpp
@@ -606,6 +703,93 @@ if(BMD_GATEWAY_BUILD_G10_STATUS)
     endif()
 endif()
 
+if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
+    add_library(bmd_gateway_g11_registry
+        src/g11/market_registry.cpp
+    )
+    set_target_properties(
+        bmd_gateway_g11_registry
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_g11_registry
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g11
+    )
+    target_link_libraries(
+        bmd_gateway_g11_registry
+        PUBLIC
+            bmd_gateway_g5_recovery
+            bmd_gateway_g9_events
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g11_registry)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g11_registry)
+
+    add_library(bmd_gateway_g11_multi_market_runtime
+        src/g11/multi_market_runtime.cpp
+    )
+    set_target_properties(
+        bmd_gateway_g11_multi_market_runtime
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_g11_multi_market_runtime
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g11
+    )
+    target_link_libraries(
+        bmd_gateway_g11_multi_market_runtime
+        PUBLIC
+            bmd_gateway_g11_registry
+            bmd_gateway_g11_usdm_transport
+            bmd_gateway_g6_rotation
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g11_multi_market_runtime)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g11_multi_market_runtime)
+
+    target_compile_definitions(
+        bmd_gateway_g10_status
+        PUBLIC
+            BMD_GATEWAY_G11_ENABLED=1
+    )
+    target_link_libraries(
+        bmd_gateway_g10_status
+        PUBLIC
+            bmd_gateway_g11_registry
+    )
+
+    if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_g11_multi_market_runtime_tests
+            tests/g11_multi_market_runtime_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_g11_multi_market_runtime_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g11_multi_market_runtime_tests
+            PRIVATE
+                bmd_gateway_g11_multi_market_runtime
+        )
+        bmd_gateway_apply_warnings(
+            bmd_gateway_g11_multi_market_runtime_tests)
+        bmd_gateway_apply_sanitizers(
+            bmd_gateway_g11_multi_market_runtime_tests)
+        add_test(NAME gateway_g11_multi_market_runtime_tests
+                 COMMAND bmd_gateway_g11_multi_market_runtime_tests)
+
+    endif()
+endif()
+
 if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
     find_package(BinanceMarketDataContractsGrpc 0.1.0 EXACT CONFIG REQUIRED)
 
@@ -654,8 +838,41 @@ if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
                 bmd_gateway_g10_status
         )
     endif()
+    if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
+        target_compile_definitions(
+            bmd_gateway_g7_grpc
+            PUBLIC
+                BMD_GATEWAY_G11_ENABLED=1
+        )
+        target_link_libraries(
+            bmd_gateway_g7_grpc
+            PUBLIC
+                bmd_gateway_g11_registry
+        )
+    endif()
     bmd_gateway_apply_warnings(bmd_gateway_g7_grpc)
     bmd_gateway_apply_sanitizers(bmd_gateway_g7_grpc)
+
+    if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
+        add_executable(bmd-gateway-g11-multi-market-live
+            app/g11_multi_market_live/main.cpp
+        )
+        set_target_properties(
+            bmd-gateway-g11-multi-market-live
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd-gateway-g11-multi-market-live
+            PRIVATE
+                bmd_gateway_g7_grpc
+                bmd_gateway_g11_multi_market_runtime
+        )
+        bmd_gateway_apply_warnings(bmd-gateway-g11-multi-market-live)
+        bmd_gateway_apply_sanitizers(bmd-gateway-g11-multi-market-live)
+    endif()
 
     add_executable(bmd-gateway-g7-spot-grpc-live
         app/g7_spot_grpc_live/main.cpp
@@ -761,6 +978,28 @@ if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
             bmd_gateway_apply_sanitizers(bmd_gateway_g10_grpc_service_tests)
             add_test(NAME gateway_g10_grpc_service_tests
                      COMMAND bmd_gateway_g10_grpc_service_tests)
+        endif()
+        if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
+            add_executable(bmd_gateway_g11_grpc_routing_tests
+                tests/g11_grpc_routing_tests.cpp
+            )
+            set_target_properties(
+                bmd_gateway_g11_grpc_routing_tests
+                PROPERTIES
+                    CXX_STANDARD 20
+                    CXX_STANDARD_REQUIRED YES
+                    CXX_EXTENSIONS NO
+            )
+            target_link_libraries(
+                bmd_gateway_g11_grpc_routing_tests
+                PRIVATE
+                    bmd_gateway_g7_grpc
+                    bmd_gateway_g11_multi_market_runtime
+            )
+            bmd_gateway_apply_warnings(bmd_gateway_g11_grpc_routing_tests)
+            bmd_gateway_apply_sanitizers(bmd_gateway_g11_grpc_routing_tests)
+            add_test(NAME gateway_g11_grpc_routing_tests
+                     COMMAND bmd_gateway_g11_grpc_routing_tests)
         endif()
     endif()
 endif()

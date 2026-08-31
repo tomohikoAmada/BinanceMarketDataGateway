@@ -130,26 +130,18 @@ required_event_schema(common_wire::Stream stream) noexcept {
 }
 #endif
 
-} // namespace
-
-#if defined(BMD_GATEWAY_G10_ENABLED)
-bool validate_gateway_status_request(
-    const gateway_wire::GatewayStatusRequest &request) noexcept {
-  return identifier_safe(request.request_id()) &&
-         request.schema_version() == g10::kStatusRequestSchema;
-}
-#endif
-
-RequestValidationResult validate_order_book_request(
+[[nodiscard]] RequestValidationResult validate_order_book_request_impl(
     const gateway_wire::OrderBookSubscriptionRequest &request,
-    const std::string &gateway_instance_id) {
+    const std::string &gateway_instance_id, bool allow_usdm) {
+  const auto supported_market =
+      request.market() == common_wire::MARKET_SPOT ||
+      (allow_usdm && request.market() == common_wire::MARKET_USD_M_PERPETUAL);
   if (!identifier_safe(gateway_instance_id)) {
     return RequestValidationError::InvalidArgument;
   }
   if (!identifier_safe(request.request_id()) ||
       request.schema_version() != kOrderBookRequestSchema ||
-      request.venue() != common_wire::VENUE_BINANCE ||
-      request.market() != common_wire::MARKET_SPOT ||
+      request.venue() != common_wire::VENUE_BINANCE || !supported_market ||
       request.symbol() != "BTCUSDT" ||
       request.initial_snapshot_mode() !=
           common_wire::INITIAL_SNAPSHOT_MODE_REQUIRED ||
@@ -171,9 +163,70 @@ RequestValidationResult validate_order_book_request(
           : std::nullopt};
 }
 
-gateway_wire::OrderBookStreamItem
-materialize_stream_item(const SubscriberChannel &channel,
-                        const PeekedPublication &publication) {
+#if defined(BMD_GATEWAY_G9_ENABLED)
+[[nodiscard]] EventRequestValidationResult validate_event_request_impl(
+    const gateway_wire::EventSubscriptionRequest &request,
+    const std::string &gateway_instance_id, bool allow_usdm) {
+  if (!identifier_safe(gateway_instance_id) ||
+      !identifier_safe(request.request_id()) ||
+      request.schema_version() != g9::kEventRequestSchema ||
+      request.delivery_mode() != common_wire::DELIVERY_MODE_CONTIGUOUS_EVENTS ||
+      request.selectors_size() != 1 ||
+      request.supported_payload_schema_versions().empty() ||
+      !valid_version_list(request.supported_payload_schema_versions())) {
+    return RequestValidationError::InvalidArgument;
+  }
+  const auto &selector = request.selectors(0);
+  const auto required_schema = required_event_schema(selector.stream());
+  const auto spot = selector.market() == common_wire::MARKET_SPOT;
+  const auto usdm =
+      allow_usdm && selector.market() == common_wire::MARKET_USD_M_PERPETUAL;
+  const auto supported_stream =
+      (spot && required_schema.has_value()) ||
+      (usdm && selector.stream() == common_wire::STREAM_DIFF_DEPTH);
+  if (selector.venue() != common_wire::VENUE_BINANCE ||
+      selector.symbol() != "BTCUSDT" || !supported_stream ||
+      !required_schema.has_value()) {
+    return RequestValidationError::InvalidArgument;
+  }
+  if (!contains_version(request.supported_payload_schema_versions(),
+                        *required_schema)) {
+    return RequestValidationError::FailedPrecondition;
+  }
+  return g9::ValidatedEventSubscription{request.request_id(), selector.stream(),
+                                        std::string{*required_schema}};
+}
+#endif
+
+} // namespace
+
+#if defined(BMD_GATEWAY_G10_ENABLED)
+bool validate_gateway_status_request(
+    const gateway_wire::GatewayStatusRequest &request) noexcept {
+  return identifier_safe(request.request_id()) &&
+         request.schema_version() == g10::kStatusRequestSchema;
+}
+#endif
+
+RequestValidationResult validate_order_book_request(
+    const gateway_wire::OrderBookSubscriptionRequest &request,
+    const std::string &gateway_instance_id) {
+  return validate_order_book_request_impl(request, gateway_instance_id, false);
+}
+
+#if defined(BMD_GATEWAY_G11_ENABLED)
+RequestValidationResult validate_g11_order_book_request(
+    const gateway_wire::OrderBookSubscriptionRequest &request,
+    const std::string &gateway_instance_id) {
+  return validate_order_book_request_impl(request, gateway_instance_id, true);
+}
+#endif
+
+namespace {
+
+[[nodiscard]] gateway_wire::OrderBookStreamItem materialize_stream_item_for(
+    const SubscriberChannel &channel, const PeekedPublication &publication,
+    common_wire::Market market, std::string_view symbol) {
   if (!publication.has_value()) {
     throw std::invalid_argument{"cannot materialize an empty publication"};
   }
@@ -212,43 +265,53 @@ materialize_stream_item(const SubscriberChannel &channel,
   gap->set_detected_time_utc_ns(terminal.published_at.utc_ns);
   gap->set_reason(terminal.reason);
   gap->set_recovery_action(terminal.recovery_action);
-  gap->set_market(common_wire::MARKET_SPOT);
-  gap->set_symbol("BTCUSDT");
+  gap->set_market(market);
+  gap->set_symbol(symbol);
   gap->set_stream(common_wire::STREAM_DIFF_DEPTH);
   return item;
 }
+
+} // namespace
+
+gateway_wire::OrderBookStreamItem
+materialize_stream_item(const SubscriberChannel &channel,
+                        const PeekedPublication &publication) {
+  return materialize_stream_item_for(channel, publication,
+                                     common_wire::MARKET_SPOT, "BTCUSDT");
+}
+
+#if defined(BMD_GATEWAY_G11_ENABLED)
+gateway_wire::OrderBookStreamItem
+materialize_stream_item(const SubscriberChannel &channel,
+                        const PeekedPublication &publication,
+                        const g11::MarketKey &market_key) {
+  return materialize_stream_item_for(channel, publication, market_key.market,
+                                     market_key.symbol);
+}
+#endif
 
 #if defined(BMD_GATEWAY_G9_ENABLED)
 EventRequestValidationResult
 validate_event_request(const gateway_wire::EventSubscriptionRequest &request,
                        const std::string &gateway_instance_id) {
-  if (!identifier_safe(gateway_instance_id) ||
-      !identifier_safe(request.request_id()) ||
-      request.schema_version() != g9::kEventRequestSchema ||
-      request.delivery_mode() != common_wire::DELIVERY_MODE_CONTIGUOUS_EVENTS ||
-      request.selectors_size() != 1 ||
-      request.supported_payload_schema_versions().empty() ||
-      !valid_version_list(request.supported_payload_schema_versions())) {
-    return RequestValidationError::InvalidArgument;
-  }
-  const auto &selector = request.selectors(0);
-  const auto required_schema = required_event_schema(selector.stream());
-  if (selector.venue() != common_wire::VENUE_BINANCE ||
-      selector.market() != common_wire::MARKET_SPOT ||
-      selector.symbol() != "BTCUSDT" || !required_schema.has_value()) {
-    return RequestValidationError::InvalidArgument;
-  }
-  if (!contains_version(request.supported_payload_schema_versions(),
-                        *required_schema)) {
-    return RequestValidationError::FailedPrecondition;
-  }
-  return g9::ValidatedEventSubscription{request.request_id(), selector.stream(),
-                                        std::string{*required_schema}};
+  return validate_event_request_impl(request, gateway_instance_id, false);
 }
 
-gateway_wire::GatewayEventEnvelope
-materialize_event_envelope(const g9::EventSubscriberChannel &channel,
-                           const g9::PeekedEventPublication &publication) {
+#if defined(BMD_GATEWAY_G11_ENABLED)
+EventRequestValidationResult validate_g11_event_request(
+    const gateway_wire::EventSubscriptionRequest &request,
+    const std::string &gateway_instance_id) {
+  return validate_event_request_impl(request, gateway_instance_id, true);
+}
+#endif
+
+namespace {
+
+[[nodiscard]] gateway_wire::GatewayEventEnvelope
+materialize_event_envelope_for(const g9::EventSubscriberChannel &channel,
+                               const g9::PeekedEventPublication &publication,
+                               common_wire::Market market,
+                               std::string_view symbol) {
   if (!publication.has_value()) {
     throw std::invalid_argument{
         "cannot materialize an empty event publication"};
@@ -265,7 +328,7 @@ materialize_event_envelope(const g9::EventSubscriberChannel &channel,
       return item;
     }
     const auto &event =
-        std::get<std::shared_ptr<const g4::NormalizedSpotEvent>>(
+        std::get<std::shared_ptr<const g4::NormalizedMarketEvent>>(
             record.payload);
     if (event == nullptr ||
         g9::normalized_event_stream(*event) != channel.stream()) {
@@ -292,17 +355,36 @@ materialize_event_envelope(const g9::EventSubscriberChannel &channel,
   gap->set_detected_time_utc_ns(terminal.published_at.utc_ns);
   gap->set_reason(terminal.reason);
   gap->set_recovery_action(terminal.recovery_action);
-  gap->set_market(common_wire::MARKET_SPOT);
-  gap->set_symbol("BTCUSDT");
+  gap->set_market(market);
+  gap->set_symbol(symbol);
   gap->set_stream(channel.stream());
   return item;
 }
+
+} // namespace
+
+gateway_wire::GatewayEventEnvelope
+materialize_event_envelope(const g9::EventSubscriberChannel &channel,
+                           const g9::PeekedEventPublication &publication) {
+  return materialize_event_envelope_for(channel, publication,
+                                        common_wire::MARKET_SPOT, "BTCUSDT");
+}
+
+#if defined(BMD_GATEWAY_G11_ENABLED)
+gateway_wire::GatewayEventEnvelope
+materialize_event_envelope(const g9::EventSubscriberChannel &channel,
+                           const g9::PeekedEventPublication &publication,
+                           const g11::MarketKey &market_key) {
+  return materialize_event_envelope_for(channel, publication, market_key.market,
+                                        market_key.symbol);
+}
+#endif
 #endif
 
 OrderBookGrpcService::OrderBookGrpcService(g3::MarketRuntime &runtime,
                                            std::string gateway_instance_id,
                                            GrpcServiceOptions options)
-    : runtime_{runtime}, gateway_instance_id_{std::move(gateway_instance_id)},
+    : runtime_{&runtime}, gateway_instance_id_{std::move(gateway_instance_id)},
       options_{options} {
   if (!identifier_safe(gateway_instance_id_)) {
     throw std::invalid_argument{"invalid G7 gateway_instance_id"};
@@ -317,6 +399,34 @@ OrderBookGrpcService::OrderBookGrpcService(g3::MarketRuntime &runtime,
   }
   contexts_.reserve(options_.maximum_tracked_contexts);
 }
+
+#if defined(BMD_GATEWAY_G11_ENABLED)
+OrderBookGrpcService::OrderBookGrpcService(
+    const g11::MarketRuntimeRegistry &registry, g3::RuntimeClock clock,
+    std::string gateway_instance_id, GrpcServiceOptions options)
+    : market_registry_{&registry},
+      gateway_instance_id_{std::move(gateway_instance_id)}, options_{options} {
+  if (!identifier_safe(gateway_instance_id_)) {
+    throw std::invalid_argument{"invalid G11 gateway_instance_id"};
+  }
+  if (options_.idle_cancellation_check_interval <=
+          std::chrono::milliseconds::zero() ||
+      options_.maximum_tracked_contexts == 0U ||
+      options_.maximum_tracked_contexts > kMaximumGrpcTrackedContexts) {
+    throw std::invalid_argument{"invalid G11 gRPC service limits"};
+  }
+  for (const auto &entry : market_registry_->entries()) {
+    if (entry.event_publication->gateway_instance_id() !=
+        gateway_instance_id_) {
+      throw std::invalid_argument{
+          "G11 services must share the gateway_instance_id"};
+    }
+  }
+  status_assembler_ = std::make_unique<g10::GatewayStatusAssembler>(
+      registry, std::move(clock), gateway_instance_id_);
+  contexts_.reserve(options_.maximum_tracked_contexts);
+}
+#endif
 
 #if defined(BMD_GATEWAY_G9_ENABLED)
 OrderBookGrpcService::OrderBookGrpcService(
@@ -468,7 +578,13 @@ grpc::Status OrderBookGrpcService::SubscribeOrderBook(
   };
 
   const auto validated =
+#if defined(BMD_GATEWAY_G11_ENABLED)
+      market_registry_ != nullptr
+          ? validate_g11_order_book_request(*request, gateway_instance_id_)
+          : validate_order_book_request(*request, gateway_instance_id_);
+#else
       validate_order_book_request(*request, gateway_instance_id_);
+#endif
   if (const auto *failure = std::get_if<RequestValidationError>(&validated)) {
     return finalize(
         *failure == RequestValidationError::InvalidArgument
@@ -478,7 +594,25 @@ grpc::Status OrderBookGrpcService::SubscribeOrderBook(
                            "required payload schema negotiation unavailable"});
   }
 
-  auto admission = runtime_.admit_order_book_subscription(
+  auto *selected_runtime = runtime_;
+#if defined(BMD_GATEWAY_G11_ENABLED)
+  const g11::MarketServices *selected_services = nullptr;
+  if (market_registry_ != nullptr) {
+    selected_services = market_registry_->find(
+        {request->venue(), request->market(), request->symbol()});
+    if (selected_services == nullptr) {
+      return finalize({grpc::StatusCode::INVALID_ARGUMENT,
+                       "unsupported order-book market"});
+    }
+    selected_runtime = selected_services->runtime;
+  }
+#endif
+  if (selected_runtime == nullptr) {
+    return finalize(
+        {grpc::StatusCode::UNAVAILABLE, "order-book runtime is unavailable"});
+  }
+
+  auto admission = selected_runtime->admit_order_book_subscription(
       std::get<ValidatedOrderBookSubscription>(validated));
   if (const auto *failure =
           std::get_if<g3::SubscriptionAdmissionError>(&admission)) {
@@ -490,16 +624,22 @@ grpc::Status OrderBookGrpcService::SubscribeOrderBook(
     return finalize(
         {grpc::StatusCode::INTERNAL, "accepted channel is missing"});
   }
+  struct CloseSubscription final {
+    g3::MarketRuntime *runtime;
+    std::shared_ptr<SubscriberChannel> channel;
+    ~CloseSubscription() {
+      channel->close_from_writer();
+      runtime->notify_subscriber_closed();
+    }
+  } close_subscription{selected_runtime, channel};
 
   for (;;) {
     if (context->IsCancelled()) {
-      close_channel(channel);
       return finalize({grpc::StatusCode::CANCELLED, "client cancelled"});
     }
     auto publication = channel->peek();
     if (!publication.has_value()) {
       if (channel->state() == SubscriberState::Closed) {
-        close_channel(channel);
         return finalize(grpc::Status::OK);
       }
       channel->wait_for_change(options_.idle_cancellation_check_interval);
@@ -508,9 +648,15 @@ grpc::Status OrderBookGrpcService::SubscribeOrderBook(
 
     gateway_wire::OrderBookStreamItem item;
     try {
+#if defined(BMD_GATEWAY_G11_ENABLED)
+      item = selected_services != nullptr
+                 ? materialize_stream_item(*channel, publication,
+                                           selected_services->key)
+                 : materialize_stream_item(*channel, publication);
+#else
       item = materialize_stream_item(*channel, publication);
+#endif
     } catch (...) {
-      close_channel(channel);
       return finalize({grpc::StatusCode::INTERNAL,
                        "failed to materialize order-book stream item"});
     }
@@ -520,12 +666,10 @@ grpc::Status OrderBookGrpcService::SubscribeOrderBook(
                             ? options_.write_override(*writer, item)
                             : writer->Write(item);
     } catch (...) {
-      close_channel(channel);
       return finalize(
           {grpc::StatusCode::INTERNAL, "subscriber writer test seam failed"});
     }
     if (context->IsCancelled() || !write_succeeded) {
-      close_channel(channel);
       return finalize(
           context->IsCancelled()
               ? grpc::Status{grpc::StatusCode::CANCELLED, "client cancelled"}
@@ -533,16 +677,13 @@ grpc::Status OrderBookGrpcService::SubscribeOrderBook(
     }
     const auto acknowledged = channel->acknowledge(publication);
     if (acknowledged == AcknowledgeResult::Mismatch) {
-      close_channel(channel);
       return finalize(
           {grpc::StatusCode::INTERNAL, "subscriber peek/ack invariant failed"});
     }
     if (acknowledged == AcknowledgeResult::Closed) {
-      close_channel(channel);
       return finalize(grpc::Status::OK);
     }
     if (publication.is_terminal()) {
-      runtime_.notify_subscriber_closed();
       return finalize(grpc::Status::OK);
     }
   }
@@ -583,11 +724,14 @@ grpc::Status OrderBookGrpcService::SubscribeEvents(
     return final_status;
   };
 
-  if (event_publication_ == nullptr) {
-    return finalize({grpc::StatusCode::UNAVAILABLE,
-                     "G9 event publication is not configured"});
-  }
-  const auto validated = validate_event_request(*request, gateway_instance_id_);
+  const auto validated =
+#if defined(BMD_GATEWAY_G11_ENABLED)
+      market_registry_ != nullptr
+          ? validate_g11_event_request(*request, gateway_instance_id_)
+          : validate_event_request(*request, gateway_instance_id_);
+#else
+      validate_event_request(*request, gateway_instance_id_);
+#endif
   if (const auto *failure = std::get_if<RequestValidationError>(&validated)) {
     return finalize(
         *failure == RequestValidationError::InvalidArgument
@@ -597,7 +741,26 @@ grpc::Status OrderBookGrpcService::SubscribeEvents(
                            "required event payload schema unavailable"});
   }
 
-  auto admission = event_publication_->admit(
+  auto *selected_event_publication = event_publication_;
+#if defined(BMD_GATEWAY_G11_ENABLED)
+  const g11::MarketServices *selected_services = nullptr;
+  const auto &selector = request->selectors(0);
+  if (market_registry_ != nullptr) {
+    selected_services = market_registry_->find(
+        {selector.venue(), selector.market(), selector.symbol()});
+    if (selected_services == nullptr) {
+      return finalize(
+          {grpc::StatusCode::INVALID_ARGUMENT, "unsupported event market"});
+    }
+    selected_event_publication = selected_services->event_publication;
+  }
+#endif
+  if (selected_event_publication == nullptr) {
+    return finalize({grpc::StatusCode::UNAVAILABLE,
+                     "G9 event publication is not configured"});
+  }
+
+  auto admission = selected_event_publication->admit(
       std::get<g9::ValidatedEventSubscription>(validated));
   if (const auto *failure =
           std::get_if<g9::EventSubscriptionAdmissionError>(&admission)) {
@@ -622,22 +785,27 @@ grpc::Status OrderBookGrpcService::SubscribeEvents(
     return finalize(
         {grpc::StatusCode::INTERNAL, "accepted event channel is missing"});
   }
+  struct CloseEventSubscription final {
+    g9::EventPublication *publication;
+    std::shared_ptr<g9::EventSubscriberChannel> channel;
+    ~CloseEventSubscription() {
+      channel->close_from_writer();
+      publication->remove(channel);
+    }
+  } close_subscription{selected_event_publication, channel};
 
   for (;;) {
     if (context->IsCancelled()) {
-      close_event_channel(channel);
       return finalize({grpc::StatusCode::CANCELLED, "client cancelled"});
     }
     auto publication = channel->peek();
     if (!publication.has_value()) {
       const auto state = channel->state();
       if (state == g9::EventChannelState::TerminalUnavailable) {
-        close_event_channel(channel);
         return finalize({grpc::StatusCode::UNAVAILABLE,
                          "event source terminated permanently"});
       }
       if (state == g9::EventChannelState::Closed) {
-        close_event_channel(channel);
         return finalize(grpc::Status::OK);
       }
       channel->wait_for_change(options_.idle_cancellation_check_interval);
@@ -646,9 +814,15 @@ grpc::Status OrderBookGrpcService::SubscribeEvents(
 
     gateway_wire::GatewayEventEnvelope item;
     try {
+#if defined(BMD_GATEWAY_G11_ENABLED)
+      item = selected_services != nullptr
+                 ? materialize_event_envelope(*channel, publication,
+                                              selected_services->key)
+                 : materialize_event_envelope(*channel, publication);
+#else
       item = materialize_event_envelope(*channel, publication);
+#endif
     } catch (...) {
-      close_event_channel(channel);
       return finalize({grpc::StatusCode::INTERNAL,
                        "failed to materialize event stream item"});
     }
@@ -658,12 +832,10 @@ grpc::Status OrderBookGrpcService::SubscribeEvents(
                             ? options_.event_write_override(*writer, item)
                             : writer->Write(item);
     } catch (...) {
-      close_event_channel(channel);
       return finalize({grpc::StatusCode::INTERNAL,
                        "event subscriber writer test seam failed"});
     }
     if (context->IsCancelled() || !write_succeeded) {
-      close_event_channel(channel);
       return finalize(
           context->IsCancelled()
               ? grpc::Status{grpc::StatusCode::CANCELLED, "client cancelled"}
@@ -671,12 +843,10 @@ grpc::Status OrderBookGrpcService::SubscribeEvents(
     }
     const auto acknowledged = channel->acknowledge(publication);
     if (acknowledged == g9::EventAcknowledgeResult::Mismatch) {
-      close_event_channel(channel);
       return finalize({grpc::StatusCode::INTERNAL,
                        "event subscriber peek/ack invariant failed"});
     }
     if (acknowledged == g9::EventAcknowledgeResult::Closed) {
-      event_publication_->remove(channel);
       return finalize(grpc::Status::OK);
     }
   }
@@ -692,13 +862,31 @@ void OrderBookGrpcService::begin_shutdown() noexcept {
     shutdown_started_ = true;
     admission_open_ = false;
   }
-  runtime_.close_publication_admission();
-  static_cast<void>(runtime_.shutdown_publication());
-#if defined(BMD_GATEWAY_G9_ENABLED)
-  if (event_publication_ != nullptr) {
-    event_publication_->shutdown();
-  }
+
+#if defined(BMD_GATEWAY_G11_ENABLED)
+  if (market_registry_ != nullptr) {
+    for (const auto &entry : market_registry_->entries()) {
+      entry.runtime->close_publication_admission();
+    }
+    for (const auto &entry : market_registry_->entries()) {
+      static_cast<void>(entry.runtime->shutdown_publication());
+    }
+    for (const auto &entry : market_registry_->entries()) {
+      entry.event_publication->shutdown();
+    }
+  } else
 #endif
+  {
+    if (runtime_ != nullptr) {
+      runtime_->close_publication_admission();
+      static_cast<void>(runtime_->shutdown_publication());
+    }
+#if defined(BMD_GATEWAY_G9_ENABLED)
+    if (event_publication_ != nullptr) {
+      event_publication_->shutdown();
+    }
+#endif
+  }
 
   std::array<grpc::ServerContext *, kMaximumGrpcTrackedContexts> contexts{};
   std::size_t context_count = 0U;
@@ -798,22 +986,6 @@ void OrderBookGrpcService::untrack_context(
   }
 }
 
-void OrderBookGrpcService::close_channel(
-    const std::shared_ptr<SubscriberChannel> &channel) noexcept {
-  channel->close_from_writer();
-  runtime_.notify_subscriber_closed();
-}
-
-#if defined(BMD_GATEWAY_G9_ENABLED)
-void OrderBookGrpcService::close_event_channel(
-    const std::shared_ptr<g9::EventSubscriberChannel> &channel) noexcept {
-  channel->close_from_writer();
-  if (event_publication_ != nullptr) {
-    event_publication_->remove(channel);
-  }
-}
-#endif
-
 grpc::Status OrderBookGrpcService::map_admission_error(
     g3::SubscriptionAdmissionError error) const {
   switch (error) {
@@ -864,6 +1036,14 @@ OrderBookGrpcServer::OrderBookGrpcServer(
                event_publication,
                std::move(clock),
                std::move(gateway_instance_id),
+               std::move(options)} {}
+#endif
+
+#if defined(BMD_GATEWAY_G11_ENABLED)
+OrderBookGrpcServer::OrderBookGrpcServer(
+    const g11::MarketRuntimeRegistry &registry, g3::RuntimeClock clock,
+    std::string gateway_instance_id, GrpcServiceOptions options)
+    : service_{registry, std::move(clock), std::move(gateway_instance_id),
                std::move(options)} {}
 #endif
 

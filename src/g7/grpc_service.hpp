@@ -8,6 +8,9 @@
 #if defined(BMD_GATEWAY_G10_ENABLED)
 #include "gateway_status.hpp"
 #endif
+#if defined(BMD_GATEWAY_G11_ENABLED)
+#include "market_registry.hpp"
+#endif
 
 #include <binance_market_data/gateway/v1/gateway_service.grpc.pb.h>
 #include <grpcpp/grpcpp.h>
@@ -48,22 +51,48 @@ using EventRequestValidationResult =
 [[nodiscard]] RequestValidationResult validate_order_book_request(
     const gateway_wire::OrderBookSubscriptionRequest &request,
     const std::string &gateway_instance_id);
+#if defined(BMD_GATEWAY_G11_ENABLED)
+[[nodiscard]] RequestValidationResult validate_g11_order_book_request(
+    const gateway_wire::OrderBookSubscriptionRequest &request,
+    const std::string &gateway_instance_id);
+#endif
 
 [[nodiscard]] gateway_wire::OrderBookStreamItem
 materialize_stream_item(const SubscriberChannel &channel,
                         const PeekedPublication &publication);
+#if defined(BMD_GATEWAY_G11_ENABLED)
+[[nodiscard]] gateway_wire::OrderBookStreamItem
+materialize_stream_item(const SubscriberChannel &channel,
+                        const PeekedPublication &publication,
+                        const g11::MarketKey &market_key);
+#endif
 
 #if defined(BMD_GATEWAY_G9_ENABLED)
 [[nodiscard]] EventRequestValidationResult
 validate_event_request(const gateway_wire::EventSubscriptionRequest &request,
                        const std::string &gateway_instance_id);
+#if defined(BMD_GATEWAY_G11_ENABLED)
+[[nodiscard]] EventRequestValidationResult validate_g11_event_request(
+    const gateway_wire::EventSubscriptionRequest &request,
+    const std::string &gateway_instance_id);
+#endif
 
 [[nodiscard]] gateway_wire::GatewayEventEnvelope
 materialize_event_envelope(const g9::EventSubscriberChannel &channel,
                            const g9::PeekedEventPublication &publication);
+#if defined(BMD_GATEWAY_G11_ENABLED)
+[[nodiscard]] gateway_wire::GatewayEventEnvelope
+materialize_event_envelope(const g9::EventSubscriberChannel &channel,
+                           const g9::PeekedEventPublication &publication,
+                           const g11::MarketKey &market_key);
+#endif
 #endif
 
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMD_GATEWAY_G11_ENABLED)
+inline constexpr std::size_t kMaximumGrpcTrackedContexts =
+    2U * (kMaximumActiveSubscriptions + kPendingAdmissionCapacity +
+          g9::kMaximumActiveEventSubscriptions);
+#elif defined(BMD_GATEWAY_G9_ENABLED)
 inline constexpr std::size_t kMaximumGrpcTrackedContexts =
     kMaximumActiveSubscriptions + kPendingAdmissionCapacity +
     g9::kMaximumActiveEventSubscriptions;
@@ -155,6 +184,11 @@ public:
   void clear_status_start() noexcept;
   [[nodiscard]] bool status_inflight() const noexcept;
 #endif
+#if defined(BMD_GATEWAY_G11_ENABLED)
+  OrderBookGrpcService(const g11::MarketRuntimeRegistry &registry,
+                       g3::RuntimeClock clock, std::string gateway_instance_id,
+                       GrpcServiceOptions options = {});
+#endif
 
   [[nodiscard]] grpc::Status SubscribeOrderBook(
       grpc::ServerContext *context,
@@ -191,18 +225,15 @@ private:
   [[nodiscard]] grpc::Status finalize_context(grpc::ServerContext *context,
                                               grpc::Status proposed_status);
   void untrack_context(grpc::ServerContext *context) noexcept;
-  void
-  close_channel(const std::shared_ptr<SubscriberChannel> &channel) noexcept;
-#if defined(BMD_GATEWAY_G9_ENABLED)
-  void close_event_channel(
-      const std::shared_ptr<g9::EventSubscriberChannel> &channel) noexcept;
-#endif
   [[nodiscard]] grpc::Status
   map_admission_error(g3::SubscriptionAdmissionError error) const;
 
-  g3::MarketRuntime &runtime_;
+  g3::MarketRuntime *runtime_{nullptr};
 #if defined(BMD_GATEWAY_G9_ENABLED)
   g9::EventPublication *event_publication_{nullptr};
+#endif
+#if defined(BMD_GATEWAY_G11_ENABLED)
+  const g11::MarketRuntimeRegistry *market_registry_{nullptr};
 #endif
   const std::string gateway_instance_id_;
   const GrpcServiceOptions options_;
@@ -235,6 +266,11 @@ public:
 #if defined(BMD_GATEWAY_G10_ENABLED)
   OrderBookGrpcServer(g3::MarketRuntime &runtime, g5::SpotRecovery &recovery,
                       g9::EventPublication &event_publication,
+                      g3::RuntimeClock clock, std::string gateway_instance_id,
+                      GrpcServiceOptions options = {});
+#endif
+#if defined(BMD_GATEWAY_G11_ENABLED)
+  OrderBookGrpcServer(const g11::MarketRuntimeRegistry &registry,
                       g3::RuntimeClock clock, std::string gateway_instance_id,
                       GrpcServiceOptions options = {});
 #endif
