@@ -15,11 +15,15 @@ G7=COMPLETE
 G8=COMPLETE
 G9=COMPLETE
 G10=COMPLETE
+G11=COMPLETE
 G2_SYNTHETIC_HOST_IMPLEMENTED=YES
 G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES
 CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES
 REAL_GATEWAY_NETWORK_RUNTIME_IMPLEMENTED=YES
-GATEWAY_NETWORK=SPOT_BTCUSDT_IMPLEMENTED
+GATEWAY_NETWORK=SPOT_BTCUSDT_AND_USD_M_PERPETUAL_BTCUSDT_IMPLEMENTED
+USD_M_BTCUSDT=IMPLEMENTED
+MULTI_MARKET_RUNTIME=IMPLEMENTED
+G11_PRODUCT_COUNT=2
 RECONNECT=IMPLEMENTED
 AUTOMATIC_RECOVERY=IMPLEMENTED
 PLANNED_ROTATION=IMPLEMENTED
@@ -42,11 +46,20 @@ GATEWAY_GRPC_BUSINESS_FLOW=SUBSCRIBE_ORDER_BOOK_AND_SUBSCRIBE_EVENTS_IMPLEMENTED
 RECORDER_DEPENDENCY=NO
 GW-PREQ-002=COMPLETE
 PROJECTION_M6_GATEWAY_INTEGRATION_ACCEPTANCE=COMPLETE
-STATUS_MARKET_COUNT=1
 MAX_CONCURRENT_STATUS_RPCS=1
 STATUS_USES_STREAM_CONTEXT_TRACKER=NO
-STREAM_CONTEXT_LIMIT=24
-NEXT=G11
+STREAM_CONTEXT_LIMIT=48
+STREAM_CONTEXT_LIMIT_G11_OFF=24
+G7_ACTIVE_LIMIT_PER_MARKET=8
+G7_PENDING_LIMIT_PER_MARKET=8
+G9_ACTIVE_LIMIT_PER_MARKET=8
+MAX_G7_ACTIVE_TOTAL=16
+MAX_G7_PENDING_TOTAL=16
+MAX_G9_ACTIVE_TOTAL=16
+MAX_ACTIVE_TRANSPORTS_PER_MARKET=1
+MAX_ACTIVE_TRANSPORTS_TOTAL=2
+STATUS_MARKET_COUNT=2
+NEXT=POST_G11_PLANNING
 FIRST_RUNNABLE=G2
 FIRST_REAL_NETWORK=G4
 FIRST_GRPC=G7
@@ -112,13 +125,24 @@ Gateway `main` currently contains:
   market-event receive time, optional uniquely applicable connection generation,
   and G7 resident plus G9 active subscription count. It permits one expensive
   status collection at a time and adds no health, metrics, or telemetry subsystem.
+- the G11 fixed two-product runtime for Binance Spot BTCUSDT and Binance USD-M
+  perpetual BTCUSDT. It uses one isolated `MarketRuntime`, private
+  `BookProjection`, serialized owner, and `RecoveryCoordinator` per product,
+  with independent transports and one fixed non-owning two-entry registry.
+  Gateway parses and forwards USD-M `pu` through
+  `DepthUpdate.previous_final_update_id`; Projection's
+  `SequencePolicyKind::UsdMPerpetual` remains the sole continuity authority.
+  G7 routes both products, G9 exposes only USD-M `DIFF_DEPTH`, and status returns
+  two deterministic market rows.
 
 There is no make-before-break source stitching. G7 historically implemented only
 `SubscribeOrderBook`; the current Gateway also implements G9 `SubscribeEvents`.
-USD-M and multi-market runtime remain unimplemented. G8 is
+G11 implements exactly the two accepted products and is not arbitrary
+multi-symbol support. G8 is
 an acceptance/test composition and opt-in CMake wiring; it does not add a
 production runtime layer. G4 remains independently usable as a one-shot transport.
-The next runtime milestone is G11 USD-M + Multi-Market Runtime.
+`NEXT=POST_G11_PLANNING`; no G12 or further numbered Gateway milestone is
+currently frozen.
 G5 recovers transport, snapshot, malformed-input, bounded-admission, bootstrap
 overflow, `serverShutdown`, and Projection `NeedsResync` failures through a new
 connection and the same conservative bootstrap path. Internal adapter,
