@@ -29,7 +29,7 @@ make_accepted_record(const ValidatedEventSubscription &subscription,
 } // namespace
 
 common_wire::Stream
-normalized_event_stream(const g4::NormalizedSpotEvent &event) noexcept {
+normalized_event_stream(const g4::NormalizedMarketEvent &event) noexcept {
   if (std::holds_alternative<g4::market::DepthUpdate>(event)) {
     return common_wire::STREAM_DIFF_DEPTH;
   }
@@ -73,7 +73,7 @@ bool EventSubscriberChannel::stage_accepted(
 }
 
 EventAdmissionResult EventSubscriberChannel::admit_event(
-    const std::shared_ptr<const g4::NormalizedSpotEvent> &event,
+    const std::shared_ptr<const g4::NormalizedMarketEvent> &event,
     EventPublicationTime published_at) noexcept {
   std::lock_guard lock{mutex_};
   if (state_ != EventChannelState::Active) {
@@ -376,7 +376,7 @@ EventPublication::admit(const ValidatedEventSubscription &subscription) {
 }
 
 EventPublishResult EventPublication::publish(
-    const std::shared_ptr<const g4::NormalizedSpotEvent> &event,
+    const std::shared_ptr<const g4::NormalizedMarketEvent> &event,
     std::uint64_t generation) noexcept {
   if (event == nullptr) {
     return EventPublishResult::InvariantFailure;

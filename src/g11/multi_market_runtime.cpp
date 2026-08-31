@@ -138,7 +138,8 @@ ProductRuntime::ProductRuntime(ProductKind kind, core::NumericSpec numeric_spec,
                                std::string gateway_instance_id,
                                ProductRuntimeOptions options)
     : kind_{kind},
-      runtime_{options.runtime_limits, clock, numeric_spec, identity_for(kind)},
+      runtime_{options.runtime_limits, clock, numeric_spec, identity_for(kind),
+               std::move(options.runtime_test)},
       event_publication_{std::move(gateway_instance_id), clock,
                          options.event_limits},
       recovery_{runtime_, std::move(clock), options.planned_rotation,
@@ -180,7 +181,11 @@ TwoProductRuntime::TwoProductRuntime(core::NumericSpec spot_numeric_spec,
     : spot_{ProductKind::Spot, spot_numeric_spec, clock, gateway_instance_id,
             std::move(options.spot)},
       usdm_{ProductKind::UsdMPerpetual, usdm_numeric_spec, std::move(clock),
-            std::move(gateway_instance_id), std::move(options.usdm)} {}
+            std::move(gateway_instance_id), std::move(options.usdm)},
+      registry_{{spot_btcusdt_key(), &spot_.runtime(), &spot_.recovery(),
+                 &spot_.event_publication()},
+                {usdm_btcusdt_key(), &usdm_.runtime(), &usdm_.recovery(),
+                 &usdm_.event_publication()}} {}
 
 TwoProductRuntime::~TwoProductRuntime() { stop(); }
 
@@ -191,8 +196,12 @@ TwoProductStartResult TwoProductRuntime::start() {
 }
 
 void TwoProductRuntime::shutdown_publications() noexcept {
-  spot_.shutdown_publications();
-  usdm_.shutdown_publications();
+  spot_.runtime().close_publication_admission();
+  usdm_.runtime().close_publication_admission();
+  static_cast<void>(spot_.runtime().shutdown_publication());
+  static_cast<void>(usdm_.runtime().shutdown_publication());
+  spot_.event_publication().shutdown();
+  usdm_.event_publication().shutdown();
 }
 
 void TwoProductRuntime::stop() noexcept {
@@ -204,5 +213,9 @@ void TwoProductRuntime::stop() noexcept {
 ProductRuntime &TwoProductRuntime::spot() noexcept { return spot_; }
 
 ProductRuntime &TwoProductRuntime::usdm() noexcept { return usdm_; }
+
+const MarketRuntimeRegistry &TwoProductRuntime::registry() const noexcept {
+  return registry_;
+}
 
 } // namespace binance_market_data::gateway::g11

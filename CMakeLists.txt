@@ -704,6 +704,30 @@ if(BMD_GATEWAY_BUILD_G10_STATUS)
 endif()
 
 if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
+    add_library(bmd_gateway_g11_registry
+        src/g11/market_registry.cpp
+    )
+    set_target_properties(
+        bmd_gateway_g11_registry
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_g11_registry
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g11
+    )
+    target_link_libraries(
+        bmd_gateway_g11_registry
+        PUBLIC
+            bmd_gateway_g5_recovery
+            bmd_gateway_g9_events
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g11_registry)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g11_registry)
+
     add_library(bmd_gateway_g11_multi_market_runtime
         src/g11/multi_market_runtime.cpp
     )
@@ -722,12 +746,23 @@ if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
     target_link_libraries(
         bmd_gateway_g11_multi_market_runtime
         PUBLIC
+            bmd_gateway_g11_registry
             bmd_gateway_g11_usdm_transport
             bmd_gateway_g6_rotation
-            bmd_gateway_g9_events
     )
     bmd_gateway_apply_warnings(bmd_gateway_g11_multi_market_runtime)
     bmd_gateway_apply_sanitizers(bmd_gateway_g11_multi_market_runtime)
+
+    target_compile_definitions(
+        bmd_gateway_g10_status
+        PUBLIC
+            BMD_GATEWAY_G11_ENABLED=1
+    )
+    target_link_libraries(
+        bmd_gateway_g10_status
+        PUBLIC
+            bmd_gateway_g11_registry
+    )
 
     if(BMD_GATEWAY_BUILD_TESTS)
         add_executable(bmd_gateway_g11_multi_market_runtime_tests
@@ -751,6 +786,7 @@ if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
             bmd_gateway_g11_multi_market_runtime_tests)
         add_test(NAME gateway_g11_multi_market_runtime_tests
                  COMMAND bmd_gateway_g11_multi_market_runtime_tests)
+
     endif()
 endif()
 
@@ -800,6 +836,18 @@ if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
             bmd_gateway_g7_grpc
             PUBLIC
                 bmd_gateway_g10_status
+        )
+    endif()
+    if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
+        target_compile_definitions(
+            bmd_gateway_g7_grpc
+            PUBLIC
+                BMD_GATEWAY_G11_ENABLED=1
+        )
+        target_link_libraries(
+            bmd_gateway_g7_grpc
+            PUBLIC
+                bmd_gateway_g11_registry
         )
     endif()
     bmd_gateway_apply_warnings(bmd_gateway_g7_grpc)
@@ -909,6 +957,28 @@ if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
             bmd_gateway_apply_sanitizers(bmd_gateway_g10_grpc_service_tests)
             add_test(NAME gateway_g10_grpc_service_tests
                      COMMAND bmd_gateway_g10_grpc_service_tests)
+        endif()
+        if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
+            add_executable(bmd_gateway_g11_grpc_routing_tests
+                tests/g11_grpc_routing_tests.cpp
+            )
+            set_target_properties(
+                bmd_gateway_g11_grpc_routing_tests
+                PROPERTIES
+                    CXX_STANDARD 20
+                    CXX_STANDARD_REQUIRED YES
+                    CXX_EXTENSIONS NO
+            )
+            target_link_libraries(
+                bmd_gateway_g11_grpc_routing_tests
+                PRIVATE
+                    bmd_gateway_g7_grpc
+                    bmd_gateway_g11_multi_market_runtime
+            )
+            bmd_gateway_apply_warnings(bmd_gateway_g11_grpc_routing_tests)
+            bmd_gateway_apply_sanitizers(bmd_gateway_g11_grpc_routing_tests)
+            add_test(NAME gateway_g11_grpc_routing_tests
+                     COMMAND bmd_gateway_g11_grpc_routing_tests)
         endif()
     endif()
 endif()

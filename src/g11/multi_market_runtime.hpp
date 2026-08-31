@@ -1,6 +1,7 @@
 #pragma once
 
 #include "event_publication.hpp"
+#include "market_registry.hpp"
 #include "market_runtime.hpp"
 #include "planned_rotation.hpp"
 #include "recovery_coordinator.hpp"
@@ -18,6 +19,7 @@ enum class ProductKind : std::uint8_t {
 
 struct ProductRuntimeOptions final {
   g3::RuntimeLimits runtime_limits{};
+  g3::RuntimeTestOptions runtime_test;
   g9::EventPublicationLimits event_limits{};
   g5::PlannedRotationPolicy planned_rotation{g6::production_policy()};
   g5::detail::RecoveryTestOptions recovery_test;
@@ -82,10 +84,12 @@ public:
 
   [[nodiscard]] ProductRuntime &spot() noexcept;
   [[nodiscard]] ProductRuntime &usdm() noexcept;
+  [[nodiscard]] const MarketRuntimeRegistry &registry() const noexcept;
 
 private:
   ProductRuntime spot_;
   ProductRuntime usdm_;
+  MarketRuntimeRegistry registry_;
 };
 
 } // namespace binance_market_data::gateway::g11

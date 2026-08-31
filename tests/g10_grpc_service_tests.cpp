@@ -24,6 +24,10 @@ namespace g10 = binance_market_data::gateway::g10;
 namespace market = binance_market_data::market::v1;
 namespace wire = binance_market_data::gateway::v1;
 
+#if !defined(BMD_GATEWAY_G11_ENABLED)
+static_assert(g7::kMaximumGrpcTrackedContexts == 24U);
+#endif
+
 class TestFailure final : public std::exception {
 public:
   explicit TestFailure(std::string message) : message_{std::move(message)} {}

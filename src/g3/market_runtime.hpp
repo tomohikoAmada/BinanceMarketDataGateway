@@ -192,13 +192,18 @@ enum class PublicationShutdownResult : std::uint8_t {
 };
 
 struct RuntimeTestOptions final {
-  RuntimeTestOptions(bool owner_starts_paused_value = false,
-                     std::function<void()> admission_enqueued_value = {})
+  RuntimeTestOptions(
+      bool owner_starts_paused_value = false,
+      std::function<void()> admission_enqueued_value = {},
+      std::function<void()> before_admission_processing_value = {})
       : owner_starts_paused{owner_starts_paused_value},
-        admission_enqueued{std::move(admission_enqueued_value)} {}
+        admission_enqueued{std::move(admission_enqueued_value)},
+        before_admission_processing{
+            std::move(before_admission_processing_value)} {}
 
   bool owner_starts_paused;
   std::function<void()> admission_enqueued;
+  std::function<void()> before_admission_processing;
 };
 
 // Internal single-product runtime. This header is exposed only by the opt-in

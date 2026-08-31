@@ -72,6 +72,8 @@ public:
         expected_identity_{std::move(expected_identity)},
         projection_{numeric_spec, expected_identity_.policy},
         admission_enqueued_{std::move(test_options.admission_enqueued)},
+        before_admission_processing_{
+            std::move(test_options.before_admission_processing)},
         owner_paused_{test_options.owner_starts_paused} {
     if (limits_.ingress_capacity == 0U || limits_.bootstrap_capacity == 0U) {
       throw std::invalid_argument{"G3 runtime capacities must be nonzero"};
@@ -700,6 +702,13 @@ private:
 
   void perform_admission_request(
       const std::shared_ptr<AdmissionRequest> &request) noexcept {
+    if (before_admission_processing_) {
+      try {
+        before_admission_processing_();
+      } catch (...) {
+        // Test instrumentation must not affect owner-domain correctness.
+      }
+    }
     sweep_closed_subscribers();
     {
       std::lock_guard lock{mutex_};
@@ -1253,6 +1262,7 @@ private:
   std::uint64_t processed_ticket_{0U};
   std::size_t pending_admission_count_{0U};
   std::function<void()> admission_enqueued_;
+  std::function<void()> before_admission_processing_;
   bool started_{false};
   bool accepting_{false};
   bool publication_admission_open_{false};

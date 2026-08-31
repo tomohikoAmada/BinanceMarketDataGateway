@@ -52,7 +52,7 @@ struct EventPublicationTime final {
 
 using EventOrdinaryPayload =
     std::variant<gateway_wire::SubscriptionAccepted,
-                 std::shared_ptr<const g4::NormalizedSpotEvent>>;
+                 std::shared_ptr<const g4::NormalizedMarketEvent>>;
 
 struct EventPublicationRecord final {
   std::uint64_t session_sequence{0U};
@@ -121,7 +121,7 @@ public:
   [[nodiscard]] bool stage_accepted(
       std::shared_ptr<const EventPublicationRecord> accepted) noexcept;
   [[nodiscard]] EventAdmissionResult
-  admit_event(const std::shared_ptr<const g4::NormalizedSpotEvent> &event,
+  admit_event(const std::shared_ptr<const g4::NormalizedMarketEvent> &event,
               EventPublicationTime published_at) noexcept;
   [[nodiscard]] bool
   terminalize_replacement(EventPublicationTime published_at) noexcept;
@@ -219,7 +219,7 @@ public:
   [[nodiscard]] EventSubscriptionAdmission
   admit(const ValidatedEventSubscription &subscription);
   [[nodiscard]] EventPublishResult
-  publish(const std::shared_ptr<const g4::NormalizedSpotEvent> &event,
+  publish(const std::shared_ptr<const g4::NormalizedMarketEvent> &event,
           std::uint64_t generation) noexcept;
   void remove(const std::shared_ptr<EventSubscriberChannel> &channel) noexcept;
   void shutdown() noexcept;
@@ -245,6 +245,6 @@ private:
 };
 
 [[nodiscard]] common_wire::Stream
-normalized_event_stream(const g4::NormalizedSpotEvent &event) noexcept;
+normalized_event_stream(const g4::NormalizedMarketEvent &event) noexcept;
 
 } // namespace binance_market_data::gateway::g9
