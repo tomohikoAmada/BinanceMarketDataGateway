@@ -48,10 +48,11 @@ using DecimalScaleResult = std::variant<core::DecimalScale, ProtocolError>;
 using SpotMetadataResult = std::variant<SpotMetadata, ProtocolError>;
 using DepthFrameResult =
     std::variant<market::DepthUpdate, ServerShutdown, ProtocolError>;
-using NormalizedSpotEvent =
+using NormalizedMarketEvent =
     std::variant<market::DepthUpdate, market::AggTrade, market::BookTicker>;
+using NormalizedSpotEvent = NormalizedMarketEvent;
 using CombinedFrameResult =
-    std::variant<NormalizedSpotEvent, ServerShutdown, ProtocolError>;
+    std::variant<NormalizedMarketEvent, ServerShutdown, ProtocolError>;
 using DepthSnapshotResult =
     std::variant<market::ExchangeDepthSnapshot, ProtocolError>;
 

@@ -27,6 +27,8 @@ option(BMD_GATEWAY_BUILD_G9_EVENTS
        "Build G9 contiguous event publication and SubscribeEvents" OFF)
 option(BMD_GATEWAY_BUILD_G10_STATUS
        "Build G10 minimal GetGatewayStatus" OFF)
+option(BMD_GATEWAY_BUILD_G11_MULTI_MARKET
+       "Build G11 fixed Spot/USD-M BTCUSDT multi-market runtime" OFF)
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
        "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
 option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
@@ -45,6 +47,10 @@ endif()
 
 if(BMD_GATEWAY_BUILD_G9_EVENTS)
     set(BMD_GATEWAY_BUILD_G7_PUBLICATION ON)
+endif()
+
+if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
+    set(BMD_GATEWAY_BUILD_G10_STATUS ON)
 endif()
 
 if(BMD_GATEWAY_BUILD_G10_STATUS)
@@ -387,6 +393,97 @@ if(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT)
         bmd_gateway_apply_sanitizers(bmd_gateway_g4_spot_transport_tests)
         add_test(NAME gateway_g4_spot_transport_tests
                  COMMAND bmd_gateway_g4_spot_transport_tests)
+    endif()
+endif()
+
+if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
+    add_library(bmd_gateway_g11_usdm_protocol
+        src/g11/usdm_protocol.cpp
+    )
+    set_target_properties(
+        bmd_gateway_g11_usdm_protocol
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_g11_usdm_protocol
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g11
+    )
+    target_link_libraries(
+        bmd_gateway_g11_usdm_protocol
+        PUBLIC
+            bmd_gateway_g4_spot_protocol
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g11_usdm_protocol)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g11_usdm_protocol)
+
+    add_library(bmd_gateway_g11_usdm_transport
+        src/g11/usdm_transport.cpp
+    )
+    set_target_properties(
+        bmd_gateway_g11_usdm_transport
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_g11_usdm_transport
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g11
+    )
+    target_link_libraries(
+        bmd_gateway_g11_usdm_transport
+        PUBLIC
+            bmd_gateway_g11_usdm_protocol
+            bmd_gateway_g4_spot_transport
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g11_usdm_transport)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g11_usdm_transport)
+
+    if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_g11_usdm_protocol_tests
+            tests/g11_usdm_protocol_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_g11_usdm_protocol_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g11_usdm_protocol_tests
+            PRIVATE
+                bmd_gateway_g11_usdm_protocol
+        )
+        bmd_gateway_apply_warnings(bmd_gateway_g11_usdm_protocol_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_g11_usdm_protocol_tests)
+        add_test(NAME gateway_g11_usdm_protocol_tests
+                 COMMAND bmd_gateway_g11_usdm_protocol_tests)
+
+        add_executable(bmd_gateway_g11_usdm_transport_tests
+            tests/g11_usdm_transport_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_g11_usdm_transport_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g11_usdm_transport_tests
+            PRIVATE
+                bmd_gateway_g11_usdm_transport
+        )
+        bmd_gateway_apply_warnings(bmd_gateway_g11_usdm_transport_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_g11_usdm_transport_tests)
+        add_test(NAME gateway_g11_usdm_transport_tests
+                 COMMAND bmd_gateway_g11_usdm_transport_tests)
     endif()
 endif()
 

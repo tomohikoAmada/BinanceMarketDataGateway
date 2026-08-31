@@ -54,6 +54,29 @@ constexpr std::string_view kCombinedWebSocketTarget =
     "btcusdt@bookTicker";
 constexpr auto kStageTimeout = std::chrono::seconds{10};
 
+[[nodiscard]] detail::BinanceTransportConfig
+spot_transport_config(SpotTransportOptions options) {
+  const auto combined =
+      options.profile == SpotTransportProfile::G9CombinedEvents;
+  detail::BinanceTransportConfig config;
+  config.rest_host = kRestHost;
+  config.rest_port = kRestPort;
+  config.depth_target = kDepthTarget;
+  config.websocket_host = kWebSocketHost;
+  config.websocket_port = kWebSocketPort;
+  config.websocket_target = combined ? std::string{kCombinedWebSocketTarget}
+                                     : std::string{kWebSocketTarget};
+  config.connection_id_prefix = "binance-spot-btcusdt-g";
+  config.snapshot_request_id = "g4-depth-request-1";
+  config.user_agent = "bmd-gateway-g4/1.0.0";
+  config.profile = options.profile;
+  config.normalized_event_sink = std::move(options.normalized_event_sink);
+  config.depth_frame_parser = parse_depth_frame;
+  config.combined_frame_parser = parse_combined_event_frame;
+  config.depth_snapshot_parser = parse_depth_snapshot;
+  return config;
+}
+
 [[nodiscard]] NetworkError
 network_error(NetworkErrorCode code, std::string stage, std::string message,
               std::optional<unsigned> status = std::nullopt,
@@ -288,31 +311,33 @@ public:
   using Completion = std::function<void(Result)>;
 
   AsyncHttpsGet(asio::io_context &context, ssl::context &tls_context,
-                g3::RuntimeClock clock, Completion completion)
+                g3::RuntimeClock clock, std::string host, std::string port,
+                std::string target, std::string user_agent,
+                Completion completion)
       : resolver_{context}, stream_{context, tls_context}, timer_{context},
-        clock_{std::move(clock)}, completion_{std::move(completion)} {
+        clock_{std::move(clock)}, host_{std::move(host)},
+        port_{std::move(port)}, completion_{std::move(completion)} {
     request_.method(http::verb::get);
-    request_.target(kDepthTarget);
+    request_.target(std::move(target));
     request_.version(11);
-    request_.set(http::field::host, kRestHost);
-    request_.set(http::field::user_agent, "bmd-gateway-g4/1.0.0");
+    request_.set(http::field::host, host_);
+    request_.set(http::field::user_agent, std::move(user_agent));
     request_.set(http::field::accept, "application/json");
     request_.set(http::field::connection, "close");
     parser_.body_limit(16U * 1024U * 1024U);
   }
 
   void start() {
-    stream_.set_verify_callback(
-        ssl::host_name_verification(std::string{kRestHost}));
+    stream_.set_verify_callback(ssl::host_name_verification(host_));
     if (const auto failure =
-            configure_tls_stream(stream_.native_handle(), kRestHost)) {
+            configure_tls_stream(stream_.native_handle(), host_)) {
       finish(*failure);
       return;
     }
     arm_timeout("depth-dns");
     io_pending_ = true;
     resolver_.async_resolve(
-        std::string{kRestHost}, std::string{kRestPort},
+        host_, port_,
         [self = shared_from_this()](const ErrorCode &error_code,
                                     tcp::resolver::results_type results) {
           self->io_pending_ = false;
@@ -580,6 +605,8 @@ private:
   http::request<http::empty_body> request_;
   http::response_parser<http::string_body> parser_;
   g3::RuntimeClock clock_;
+  std::string host_;
+  std::string port_;
   Completion completion_;
   std::optional<Result> cancelled_result_;
   std::uint64_t timeout_generation_{0U};
@@ -602,24 +629,26 @@ class AsyncWebSocket final
     : public std::enable_shared_from_this<AsyncWebSocket> {
 public:
   AsyncWebSocket(asio::io_context &context, ssl::context &tls_context,
-                 g3::RuntimeClock clock, std::string target,
+                 g3::RuntimeClock clock, std::string host, std::string port,
+                 std::string target, std::string user_agent,
                  WebSocketCallbacks callbacks)
       : resolver_{context}, stream_{context, tls_context}, timer_{context},
-        clock_{std::move(clock)}, target_{std::move(target)},
-        callbacks_{std::move(callbacks)} {}
+        clock_{std::move(clock)}, host_{std::move(host)},
+        port_{std::move(port)}, target_{std::move(target)},
+        user_agent_{std::move(user_agent)}, callbacks_{std::move(callbacks)} {}
 
   void start() {
     stream_.next_layer().set_verify_callback(
-        ssl::host_name_verification(std::string{kWebSocketHost}));
-    if (const auto failure = configure_tls_stream(
-            stream_.next_layer().native_handle(), kWebSocketHost)) {
+        ssl::host_name_verification(host_));
+    if (const auto failure =
+            configure_tls_stream(stream_.next_layer().native_handle(), host_)) {
       fail(*failure);
       return;
     }
     arm_timeout("websocket-dns");
     io_pending_ = true;
     resolver_.async_resolve(
-        std::string{kWebSocketHost}, std::string{kWebSocketPort},
+        host_, port_,
         [self = shared_from_this()](const ErrorCode &error_code,
                                     tcp::resolver::results_type results) {
           self->io_pending_ = false;
@@ -717,14 +746,14 @@ private:
     timeouts.idle_timeout = detail::kWebSocketIdleTimeout;
     timeouts.keep_alive_pings = detail::kWebSocketKeepAlivePings;
     stream_.set_option(timeouts);
-    stream_.set_option(
-        websocket::stream_base::decorator([](websocket::request_type &request) {
-          request.set(http::field::user_agent, "bmd-gateway-g4/1.0.0");
+    stream_.set_option(websocket::stream_base::decorator(
+        [user_agent = user_agent_](websocket::request_type &request) {
+          request.set(http::field::user_agent, user_agent);
         }));
     arm_timeout("websocket-handshake");
     io_pending_ = true;
     stream_.async_handshake(
-        std::string{kWebSocketHost}, target_,
+        host_, target_,
         [self = shared_from_this()](const ErrorCode &error_code) {
           self->io_pending_ = false;
           if (self->done_) {
@@ -910,7 +939,10 @@ private:
   asio::steady_timer timer_;
   beast::flat_buffer buffer_;
   g3::RuntimeClock clock_;
+  std::string host_;
+  std::string port_;
   std::string target_;
+  std::string user_agent_;
   WebSocketCallbacks callbacks_;
   asio::cancellation_signal read_cancellation_;
   std::uint64_t timeout_generation_{0U};
@@ -1002,14 +1034,15 @@ bool detail::live_acceptance_ready(
          !runtime.fault_reason.has_value();
 }
 
-class SpotTransport::Impl final {
+class detail::BinanceTransport::Impl final {
 public:
   Impl(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
-       std::uint64_t connection_generation, SpotTransportOptions options,
+       std::uint64_t connection_generation,
+       detail::BinanceTransportConfig config,
        detail::TransportTestOptions test_options)
       : runtime_{runtime}, clock_{std::move(clock)},
         connection_generation_{connection_generation},
-        tls_context_{ssl::context::tls_client}, options_{std::move(options)},
+        tls_context_{ssl::context::tls_client}, config_{std::move(config)},
         test_options_{test_options} {
     if (!clock_) {
       throw std::invalid_argument{"G4 transport clock must be injected"};
@@ -1017,16 +1050,30 @@ public:
     if (connection_generation == 0U) {
       throw std::invalid_argument{"G4 connection generation must be nonzero"};
     }
-    if (options_.profile == SpotTransportProfile::G9CombinedEvents &&
-        !options_.normalized_event_sink) {
+    if (config_.rest_host.empty() || config_.rest_port.empty() ||
+        config_.depth_target.empty() || config_.websocket_host.empty() ||
+        config_.websocket_port.empty() || config_.websocket_target.empty() ||
+        config_.connection_id_prefix.empty() ||
+        config_.snapshot_request_id.empty() || config_.user_agent.empty() ||
+        !config_.depth_frame_parser || !config_.depth_snapshot_parser) {
       throw std::invalid_argument{
-          "G9 combined transport requires an event sink"};
+          "Binance transport routes and depth parsers must be configured"};
+    }
+    if (config_.profile == BinanceTransportProfile::SpotCombinedEvents &&
+        !config_.combined_frame_parser) {
+      throw std::invalid_argument{
+          "Spot combined transport requires a combined parser"};
+    }
+    if (config_.profile != BinanceTransportProfile::DepthOnly &&
+        !config_.normalized_event_sink) {
+      throw std::invalid_argument{
+          "event-publishing transport requires an event sink"};
     }
     configure_ssl_context(tls_context_);
     const auto opened_at = clock_();
     observation_.connection_generation = connection_generation;
-    observation_.profile = options_.profile;
-    observation_.connection_id = "binance-spot-btcusdt-g" +
+    observation_.profile = config_.profile;
+    observation_.connection_id = config_.connection_id_prefix +
                                  std::to_string(connection_generation) + "-" +
                                  std::to_string(opened_at.utc_ns);
   }
@@ -1180,9 +1227,10 @@ private:
     callbacks.failure = [this](NetworkError failure) {
       terminal_failure(std::move(failure), false);
     };
-    websocket_ = std::make_shared<AsyncWebSocket>(context_, tls_context_,
-                                                  clock_, websocket_target(),
-                                                  std::move(callbacks));
+    websocket_ = std::make_shared<AsyncWebSocket>(
+        context_, tls_context_, clock_, config_.websocket_host,
+        config_.websocket_port, config_.websocket_target, config_.user_agent,
+        std::move(callbacks));
     websocket_->start();
   }
 
@@ -1197,7 +1245,9 @@ private:
     }
     condition_.notify_all();
     depth_request_ = std::make_shared<AsyncHttpsGet>(
-        context_, tls_context_, clock_, [this](AsyncHttpsGet::Result result) {
+        context_, tls_context_, clock_, config_.rest_host, config_.rest_port,
+        config_.depth_target, config_.user_agent,
+        [this](AsyncHttpsGet::Result result) {
           receive_depth_response(std::move(result));
         });
     depth_request_->start();
@@ -1205,9 +1255,9 @@ private:
 
   [[nodiscard]] bool receive_websocket_message(std::string payload,
                                                g3::ClockSample received_at) {
-    if (options_.profile == SpotTransportProfile::DepthOnly) {
-      auto parsed =
-          parse_depth_frame(payload, received_at, observe().connection_id);
+    if (config_.profile != BinanceTransportProfile::SpotCombinedEvents) {
+      auto parsed = config_.depth_frame_parser(payload, received_at,
+                                               observe().connection_id);
       if (std::holds_alternative<ServerShutdown>(parsed)) {
         receive_server_shutdown();
         return false;
@@ -1222,11 +1272,26 @@ private:
         observation_.last_event_utc_ns = received_at.utc_ns;
       }
       condition_.notify_all();
+      if (config_.profile == BinanceTransportProfile::DepthWithEvents) {
+        std::shared_ptr<const NormalizedMarketEvent> event;
+        try {
+          event = std::make_shared<const NormalizedMarketEvent>(update);
+        } catch (...) {
+          terminal_failure(network_error(NetworkErrorCode::Internal,
+                                         "websocket-event-allocation",
+                                         "normalized event allocation failed"),
+                           false);
+          return false;
+        }
+        if (!publish_normalized_event(event)) {
+          return false;
+        }
+      }
       return submit_depth_update(std::move(update));
     }
 
-    auto parsed = parse_combined_event_frame(payload, received_at,
-                                             observe().connection_id);
+    auto parsed = config_.combined_frame_parser(payload, received_at,
+                                                observe().connection_id);
     if (std::holds_alternative<ServerShutdown>(parsed)) {
       receive_server_shutdown();
       return false;
@@ -1240,10 +1305,10 @@ private:
       observation_.last_event_utc_ns = received_at.utc_ns;
     }
     condition_.notify_all();
-    std::shared_ptr<const NormalizedSpotEvent> event;
+    std::shared_ptr<const NormalizedMarketEvent> event;
     try {
-      event = std::make_shared<const NormalizedSpotEvent>(
-          std::get<NormalizedSpotEvent>(std::move(parsed)));
+      event = std::make_shared<const NormalizedMarketEvent>(
+          std::get<NormalizedMarketEvent>(std::move(parsed)));
     } catch (...) {
       terminal_failure(network_error(NetworkErrorCode::Internal,
                                      "websocket-event-allocation",
@@ -1251,18 +1316,7 @@ private:
                        false);
       return false;
     }
-    NormalizedEventSinkResult sink_result{};
-    try {
-      sink_result =
-          options_.normalized_event_sink(event, connection_generation_);
-    } catch (...) {
-      sink_result = NormalizedEventSinkResult::InvariantFailure;
-    }
-    if (sink_result == NormalizedEventSinkResult::InvariantFailure) {
-      terminal_failure(network_error(NetworkErrorCode::Internal,
-                                     "websocket-event-publication",
-                                     "normalized event sink failed closed"),
-                       false);
+    if (!publish_normalized_event(event)) {
       return false;
     }
     if (const auto *depth = std::get_if<market::DepthUpdate>(event.get())) {
@@ -1278,6 +1332,25 @@ private:
     }
     condition_.notify_all();
     return true;
+  }
+
+  [[nodiscard]] bool publish_normalized_event(
+      const std::shared_ptr<const NormalizedMarketEvent> &event) {
+    NormalizedEventSinkResult sink_result{};
+    try {
+      sink_result =
+          config_.normalized_event_sink(event, connection_generation_);
+    } catch (...) {
+      sink_result = NormalizedEventSinkResult::InvariantFailure;
+    }
+    if (sink_result != NormalizedEventSinkResult::InvariantFailure) {
+      return true;
+    }
+    terminal_failure(network_error(NetworkErrorCode::Internal,
+                                   "websocket-event-publication",
+                                   "normalized event sink failed closed"),
+                     false);
+    return false;
   }
 
   void receive_server_shutdown() {
@@ -1315,12 +1388,6 @@ private:
     return true;
   }
 
-  [[nodiscard]] std::string websocket_target() const {
-    return std::string{options_.profile == SpotTransportProfile::DepthOnly
-                           ? kWebSocketTarget
-                           : kCombinedWebSocketTarget};
-  }
-
   void receive_depth_response(AsyncHttpsGet::Result result) {
     if (const auto *failure = std::get_if<NetworkError>(&result)) {
       terminal_failure(*failure, true);
@@ -1329,8 +1396,8 @@ private:
     auto [response, received_at] =
         std::get<std::pair<http::response<http::string_body>, g3::ClockSample>>(
             std::move(result));
-    auto parsed = parse_depth_snapshot(response.body(), received_at,
-                                       "g4-depth-request-1");
+    auto parsed = config_.depth_snapshot_parser(response.body(), received_at,
+                                                config_.snapshot_request_id);
     if (const auto *failure = std::get_if<ProtocolError>(&parsed)) {
       terminal_failure(network_error(NetworkErrorCode::Protocol,
                                      "depth-snapshot-json", failure->message),
@@ -1423,7 +1490,7 @@ private:
   const std::uint64_t connection_generation_;
   asio::io_context context_;
   ssl::context tls_context_;
-  SpotTransportOptions options_;
+  detail::BinanceTransportConfig config_;
   std::optional<asio::executor_work_guard<asio::io_context::executor_type>>
       work_guard_;
   std::shared_ptr<AsyncWebSocket> websocket_;
@@ -1441,6 +1508,27 @@ private:
   bool network_clean_cancel_requested_{false};
 };
 
+detail::BinanceTransport::BinanceTransport(g3::MarketRuntime &runtime,
+                                           g3::RuntimeClock clock,
+                                           std::uint64_t connection_generation,
+                                           BinanceTransportConfig config,
+                                           TransportTestOptions test_options)
+    : impl_{std::make_unique<Impl>(runtime, std::move(clock),
+                                   connection_generation, std::move(config),
+                                   std::move(test_options))} {}
+
+detail::BinanceTransport::~BinanceTransport() = default;
+
+TransportStartResult detail::BinanceTransport::start() {
+  return impl_->start();
+}
+
+void detail::BinanceTransport::stop() noexcept { impl_->stop(); }
+
+TransportObservation detail::BinanceTransport::observe() const {
+  return impl_->observe();
+}
+
 SpotTransport::SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                              detail::TransportTestOptions test_options)
     : SpotTransport(runtime, std::move(clock), 1U, SpotTransportOptions{},
@@ -1456,16 +1544,19 @@ SpotTransport::SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                              std::uint64_t connection_generation,
                              SpotTransportOptions options,
                              detail::TransportTestOptions test_options)
-    : impl_{std::make_unique<Impl>(runtime, std::move(clock),
-                                   connection_generation, std::move(options),
-                                   test_options)} {}
+    : transport_{std::make_unique<detail::BinanceTransport>(
+          runtime, std::move(clock), connection_generation,
+          spot_transport_config(std::move(options)), std::move(test_options))} {
+}
 
 SpotTransport::~SpotTransport() = default;
 
-TransportStartResult SpotTransport::start() { return impl_->start(); }
+TransportStartResult SpotTransport::start() { return transport_->start(); }
 
-void SpotTransport::stop() noexcept { impl_->stop(); }
+void SpotTransport::stop() noexcept { transport_->stop(); }
 
-TransportObservation SpotTransport::observe() const { return impl_->observe(); }
+TransportObservation SpotTransport::observe() const {
+  return transport_->observe();
+}
 
 } // namespace binance_market_data::gateway::g4

@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 
 namespace binance_market_data::gateway::g4 {
@@ -55,10 +56,14 @@ enum class TransportStartResult : std::uint8_t {
   Stopped,
 };
 
-enum class SpotTransportProfile : std::uint8_t {
+enum class BinanceTransportProfile : std::uint8_t {
   DepthOnly,
   G9CombinedEvents,
+  SpotCombinedEvents = G9CombinedEvents,
+  DepthWithEvents,
 };
+
+using SpotTransportProfile = BinanceTransportProfile;
 
 enum class NormalizedEventSinkResult : std::uint8_t {
   Continue,
@@ -66,7 +71,7 @@ enum class NormalizedEventSinkResult : std::uint8_t {
 };
 
 using NormalizedEventSink = std::function<NormalizedEventSinkResult(
-    std::shared_ptr<const NormalizedSpotEvent>, std::uint64_t)>;
+    std::shared_ptr<const NormalizedMarketEvent>, std::uint64_t)>;
 
 struct SpotTransportOptions final {
   SpotTransportProfile profile{SpotTransportProfile::DepthOnly};
@@ -123,6 +128,54 @@ struct ExchangeInfoEndpoint final {
 [[nodiscard]] ExchangeInfoResult
 fetch_exchange_info_https(const ExchangeInfoEndpoint &endpoint);
 
+using DepthFrameParser = std::function<DepthFrameResult(
+    std::string_view, g3::ClockSample, std::string_view)>;
+using CombinedFrameParser = std::function<CombinedFrameResult(
+    std::string_view, g3::ClockSample, std::string_view)>;
+using DepthSnapshotParser = std::function<DepthSnapshotResult(
+    std::string_view, g3::ClockSample, std::string_view)>;
+
+// Product-specific routes and parsers supplied to the shared Binance network
+// mechanism. It contains no sequence or Projection policy.
+struct BinanceTransportConfig final {
+  std::string rest_host;
+  std::string rest_port;
+  std::string depth_target;
+  std::string websocket_host;
+  std::string websocket_port;
+  std::string websocket_target;
+  std::string connection_id_prefix;
+  std::string snapshot_request_id;
+  std::string user_agent;
+  BinanceTransportProfile profile{BinanceTransportProfile::DepthOnly};
+  NormalizedEventSink normalized_event_sink;
+  DepthFrameParser depth_frame_parser;
+  CombinedFrameParser combined_frame_parser;
+  DepthSnapshotParser depth_snapshot_parser;
+};
+
+class BinanceTransport final {
+public:
+  BinanceTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                   std::uint64_t connection_generation,
+                   BinanceTransportConfig config,
+                   TransportTestOptions test_options = {});
+  ~BinanceTransport();
+
+  BinanceTransport(const BinanceTransport &) = delete;
+  BinanceTransport &operator=(const BinanceTransport &) = delete;
+  BinanceTransport(BinanceTransport &&) = delete;
+  BinanceTransport &operator=(BinanceTransport &&) = delete;
+
+  [[nodiscard]] TransportStartResult start();
+  void stop() noexcept;
+  [[nodiscard]] TransportObservation observe() const;
+
+private:
+  class Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
 [[nodiscard]] bool
 live_acceptance_ready(const TransportObservation &transport,
                       const g3::RuntimeObservation &runtime) noexcept;
@@ -154,8 +207,7 @@ public:
   [[nodiscard]] TransportObservation observe() const;
 
 private:
-  class Impl;
-  std::unique_ptr<Impl> impl_;
+  std::unique_ptr<detail::BinanceTransport> transport_;
 };
 
 } // namespace binance_market_data::gateway::g4
