@@ -29,6 +29,8 @@ option(BMD_GATEWAY_BUILD_G10_STATUS
        "Build G10 minimal GetGatewayStatus" OFF)
 option(BMD_GATEWAY_BUILD_G11_MULTI_MARKET
        "Build G11 fixed Spot/USD-M BTCUSDT multi-market runtime" OFF)
+option(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON
+       "Build the post-G11 long-running fixed two-product bmd-gatewayd" OFF)
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
        "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
 option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
@@ -47,6 +49,10 @@ endif()
 
 if(BMD_GATEWAY_BUILD_G9_EVENTS)
     set(BMD_GATEWAY_BUILD_G7_PUBLICATION ON)
+endif()
+
+if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
+    set(BMD_GATEWAY_BUILD_G11_MULTI_MARKET ON)
 endif()
 
 if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
@@ -148,18 +154,6 @@ target_include_directories(
 )
 bmd_gateway_apply_warnings(bmd_gateway_foundation)
 bmd_gateway_apply_sanitizers(bmd_gateway_foundation)
-
-add_executable(bmd-gatewayd app/gatewayd/main.cpp)
-set_target_properties(
-    bmd-gatewayd
-    PROPERTIES
-        CXX_STANDARD 20
-        CXX_STANDARD_REQUIRED YES
-        CXX_EXTENSIONS NO
-)
-target_link_libraries(bmd-gatewayd PRIVATE BinanceMarketDataGateway::Foundation)
-bmd_gateway_apply_warnings(bmd-gatewayd)
-bmd_gateway_apply_sanitizers(bmd-gatewayd)
 
 if(BMD_GATEWAY_BUILD_TESTS)
     enable_testing()
@@ -1065,6 +1059,150 @@ if(BMD_GATEWAY_BUILD_G8_INTEGRATION_ACCEPTANCE)
             bmd_gateway_g8_projection_m6_integration_tests)
         add_test(NAME gateway_g8_projection_m6_integration_tests
                  COMMAND bmd_gateway_g8_projection_m6_integration_tests)
+    endif()
+endif()
+
+if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
+    find_package(Threads REQUIRED)
+
+    add_library(bmd_gateway_production
+        src/production/daemon_config.cpp
+        src/production/daemon_runtime.cpp
+        src/production/production_gateway.cpp
+        src/production/production_metadata.cpp
+        src/production/termination_signals.cpp
+    )
+    set_target_properties(
+        bmd_gateway_production
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_production
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/production
+    )
+    target_link_libraries(
+        bmd_gateway_production
+        PUBLIC
+            BinanceMarketDataGateway::Foundation
+            bmd_gateway_g7_grpc
+            bmd_gateway_g11_multi_market_runtime
+            Threads::Threads
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_production)
+    bmd_gateway_apply_sanitizers(bmd_gateway_production)
+
+    add_executable(bmd-gatewayd app/gatewayd/main.cpp)
+    set_target_properties(
+        bmd-gatewayd
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_link_libraries(bmd-gatewayd PRIVATE bmd_gateway_production)
+    bmd_gateway_apply_warnings(bmd-gatewayd)
+    bmd_gateway_apply_sanitizers(bmd-gatewayd)
+
+    add_executable(bmd-gateway-production-acceptance-client
+        app/production_daemon_acceptance/main.cpp
+    )
+    set_target_properties(
+        bmd-gateway-production-acceptance-client
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_link_libraries(
+        bmd-gateway-production-acceptance-client
+        PRIVATE
+            bmd_gateway_g7_grpc
+    )
+    bmd_gateway_apply_warnings(
+        bmd-gateway-production-acceptance-client)
+    bmd_gateway_apply_sanitizers(
+        bmd-gateway-production-acceptance-client)
+
+    install(TARGETS bmd-gatewayd RUNTIME DESTINATION bin)
+
+    if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_production_tests
+            tests/production_gateway_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_production_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_include_directories(
+            bmd_gateway_production_tests
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        )
+        target_link_libraries(
+            bmd_gateway_production_tests
+            PRIVATE
+                bmd_gateway_production
+        )
+        bmd_gateway_apply_warnings(bmd_gateway_production_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_production_tests)
+        add_test(NAME gateway_production_tests
+                 COMMAND bmd_gateway_production_tests)
+        set_tests_properties(gateway_production_tests PROPERTIES TIMEOUT 30)
+
+        add_executable(bmd_gateway_production_daemon_fixture
+            tests/production_daemon_fixture.cpp
+        )
+        set_target_properties(
+            bmd_gateway_production_daemon_fixture
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_include_directories(
+            bmd_gateway_production_daemon_fixture
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        )
+        target_link_libraries(
+            bmd_gateway_production_daemon_fixture
+            PRIVATE
+                bmd_gateway_production
+        )
+        bmd_gateway_apply_warnings(bmd_gateway_production_daemon_fixture)
+        bmd_gateway_apply_sanitizers(bmd_gateway_production_daemon_fixture)
+
+        add_executable(bmd_gateway_production_daemon_process_tests
+            tests/production_daemon_process_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_production_daemon_process_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        bmd_gateway_apply_warnings(
+            bmd_gateway_production_daemon_process_tests)
+        bmd_gateway_apply_sanitizers(
+            bmd_gateway_production_daemon_process_tests)
+        add_test(
+            NAME gateway_production_daemon_process_tests
+            COMMAND bmd_gateway_production_daemon_process_tests
+                    $<TARGET_FILE:bmd-gatewayd>
+                    $<TARGET_FILE:bmd_gateway_production_daemon_fixture>
+        )
+        set_tests_properties(
+            gateway_production_daemon_process_tests
+            PROPERTIES TIMEOUT 45
+        )
     endif()
 endif()
 
