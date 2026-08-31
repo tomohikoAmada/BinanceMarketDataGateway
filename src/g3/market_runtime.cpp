@@ -66,10 +66,11 @@ state_for_projection(core::ProjectionStatus status) noexcept {
 class MarketRuntime::Impl final {
 public:
   Impl(RuntimeLimits limits, RuntimeClock clock, core::NumericSpec numeric_spec,
+       adapter::ExpectedIdentity expected_identity,
        RuntimeTestOptions test_options)
       : limits_{limits}, clock_{std::move(clock)},
-        expected_identity_{make_expected_identity()},
-        projection_{numeric_spec, core::SequencePolicyKind::Spot},
+        expected_identity_{std::move(expected_identity)},
+        projection_{numeric_spec, expected_identity_.policy},
         admission_enqueued_{std::move(test_options.admission_enqueued)},
         owner_paused_{test_options.owner_starts_paused} {
     if (limits_.ingress_capacity == 0U || limits_.bootstrap_capacity == 0U) {
@@ -77,6 +78,9 @@ public:
     }
     if (!clock_) {
       throw std::invalid_argument{"G3 runtime clock must be injected"};
+    }
+    if (expected_identity_.symbol.empty()) {
+      throw std::invalid_argument{"MarketRuntime identity must have a symbol"};
     }
     if (limits_.publication.maximum_active_subscriptions == 0U ||
         limits_.publication.ordinary_queue_capacity == 0U ||
@@ -1264,8 +1268,16 @@ private:
 MarketRuntime::MarketRuntime(RuntimeLimits limits, RuntimeClock clock,
                              core::NumericSpec numeric_spec,
                              RuntimeTestOptions test_options)
+    : MarketRuntime(limits, std::move(clock), numeric_spec,
+                    make_expected_identity(), std::move(test_options)) {}
+
+MarketRuntime::MarketRuntime(RuntimeLimits limits, RuntimeClock clock,
+                             core::NumericSpec numeric_spec,
+                             adapter::ExpectedIdentity expected_identity,
+                             RuntimeTestOptions test_options)
     : impl_{std::make_unique<Impl>(limits, std::move(clock), numeric_spec,
-                                   test_options)} {}
+                                   std::move(expected_identity),
+                                   std::move(test_options))} {}
 
 MarketRuntime::~MarketRuntime() = default;
 

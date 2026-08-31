@@ -703,6 +703,57 @@ if(BMD_GATEWAY_BUILD_G10_STATUS)
     endif()
 endif()
 
+if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
+    add_library(bmd_gateway_g11_multi_market_runtime
+        src/g11/multi_market_runtime.cpp
+    )
+    set_target_properties(
+        bmd_gateway_g11_multi_market_runtime
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_include_directories(
+        bmd_gateway_g11_multi_market_runtime
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/g11
+    )
+    target_link_libraries(
+        bmd_gateway_g11_multi_market_runtime
+        PUBLIC
+            bmd_gateway_g11_usdm_transport
+            bmd_gateway_g6_rotation
+            bmd_gateway_g9_events
+    )
+    bmd_gateway_apply_warnings(bmd_gateway_g11_multi_market_runtime)
+    bmd_gateway_apply_sanitizers(bmd_gateway_g11_multi_market_runtime)
+
+    if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_g11_multi_market_runtime_tests
+            tests/g11_multi_market_runtime_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_g11_multi_market_runtime_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_g11_multi_market_runtime_tests
+            PRIVATE
+                bmd_gateway_g11_multi_market_runtime
+        )
+        bmd_gateway_apply_warnings(
+            bmd_gateway_g11_multi_market_runtime_tests)
+        bmd_gateway_apply_sanitizers(
+            bmd_gateway_g11_multi_market_runtime_tests)
+        add_test(NAME gateway_g11_multi_market_runtime_tests
+                 COMMAND bmd_gateway_g11_multi_market_runtime_tests)
+    endif()
+endif()
+
 if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
     find_package(BinanceMarketDataContractsGrpc 0.1.0 EXACT CONFIG REQUIRED)
 

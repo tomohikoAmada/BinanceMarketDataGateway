@@ -201,8 +201,8 @@ struct RuntimeTestOptions final {
   std::function<void()> admission_enqueued;
 };
 
-// Internal G3 runtime for exactly BINANCE + SPOT + BTCUSDT. This header is
-// exposed only by the opt-in G3 build target; it is not an installed API.
+// Internal single-product runtime. This header is exposed only by the opt-in
+// G3 build target; it is not an installed API.
 // start(), stop(), and destruction must be coordinated by one external
 // lifecycle owner. Concurrent lifecycle operations are not supported.
 // RuntimeClock runs on the serialized owner thread and must not call or
@@ -212,6 +212,10 @@ public:
   explicit MarketRuntime(RuntimeLimits limits, RuntimeClock clock,
                          core::NumericSpec numeric_spec,
                          RuntimeTestOptions test_options = {});
+  MarketRuntime(RuntimeLimits limits, RuntimeClock clock,
+                core::NumericSpec numeric_spec,
+                adapter::ExpectedIdentity expected_identity,
+                RuntimeTestOptions test_options = {});
   ~MarketRuntime();
 
   MarketRuntime(const MarketRuntime &) = delete;
