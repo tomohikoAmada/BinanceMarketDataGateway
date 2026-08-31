@@ -1,11 +1,11 @@
 # Gateway milestones
 
-This is the authoritative development plan for the Gateway. The G3
-implementation baseline is Gateway `main` at
-`d99ab4512c251316cc71d4ba1a5ec390e4224d48`; the related upstream authority
-checked for this checkpoint is Contracts
-`518880bdfa60948c3b65b6b3525d024526995166` and Projection
-`01a66aa80c764d2600da2cc309c0fd69655b55c`.
+This is the authoritative development plan for the Gateway. The current
+implementation authority is Gateway `main` at
+`04505b69529e33db8a94b48cd7a216678721cf33`; the related upstream authorities
+for the current productization closure are Contracts
+`d194b663827185feb773515aa63467290780c670` and Projection
+`8621499cbeba0e42c409572ee3f209c32691698b`.
 
 The current implementation is G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, G7, G8,
 G9, G10, and G11 complete.
@@ -112,11 +112,22 @@ runtime framework.
 - `MAX_ACTIVE_TRANSPORTS_PER_MARKET=1`.
 - `MAX_ACTIVE_TRANSPORTS_TOTAL=2`.
 - `FIRST_MULTI_MARKET=G11`.
-- `NEXT=POST_G11_PLANNING`.
+- `POST_G11_RUNTIME_PRODUCTIZATION=COMPLETE`.
+- `PRODUCTION_DAEMON=bmd-gatewayd`.
+- `PRODUCTION_PRODUCT_COUNT=2`.
+- `PRODUCTION_GRPC_CONFIGURABLE=YES`.
+- `PRODUCTION_REQUIRES_BOTH_INITIAL_LIVE=YES`.
+- `PRODUCTION_SERVES_BEFORE_BOTH_INITIAL_LIVE=NO`.
+- `SIGINT_SUPPORTED=YES`.
+- `SIGTERM_SUPPORTED=YES`.
+- `STARTUP_ROLLBACK=IMPLEMENTED`.
+- `POST_START_SINGLE_MARKET_FAILURE_ISOLATION=IMPLEMENTED`.
+- `INSTALLABLE_PRODUCTION_DAEMON=YES`.
+- `NEXT=POST_G11_PERFORMANCE_BASELINE`.
 
 Gateway `main` currently has typed configuration, synchronous Foundation
-lifecycle, a daemon CLI that immediately starts and stops Foundation, Foundation
-tests, build/CI/sanitizers, the explicit G1 dependency proof, and the deterministic
+lifecycle, the historical/minimal Foundation CLI seam, Foundation tests,
+build/CI/sanitizers, the explicit G1 dependency proof, and the deterministic
 in-memory G2 synthetic Spot BTCUSDT host. G3 adds one fixed Spot BTCUSDT
 `MarketRuntime` with one private `BookProjection`, one owner thread, bounded
 ingress and bootstrap buffers, injected clock/input/faults, copied owner-domain
@@ -136,6 +147,15 @@ owner and one independent `RecoveryCoordinator` per product. It adds USD-M
 REST/WS transport, routes G7 by exact market, exposes only USD-M `DIFF_DEPTH`
 through G9, and returns two deterministic status rows. Projection remains the
 sole USD-M `pu` continuity authority.
+
+The ordinary `bmd-gatewayd` now acquires authoritative metadata, constructs the
+two accepted product runtimes, waits for both initial Live/Synchronized, starts
+the configured synchronous gRPC listener only after that readiness cut, and
+serves until SIGINT/SIGTERM. Startup failure rolls back the partial graph;
+after startup, one market may fail without globally stopping the other market
+or the gRPC server. Shutdown drains/cancels server handlers before product
+owner destruction. This productization preserves the accepted G11 semantics
+and adds no new market-data semantics.
 
 ## G0 — Repository Foundation
 
@@ -591,8 +611,84 @@ shutdown. The first real-run false negative was an acceptance-harness
 expectation error for G7 controlled recovery, not a production G11 failure;
 production semantics did not change between runs.
 
-`NEXT=POST_G11_PLANNING`. No additional numbered Gateway milestone is
-currently frozen. The existing deferred product surface remains deferred.
+`NEXT=POST_G11_PERFORMANCE_BASELINE`. No additional numbered Gateway milestone
+is currently frozen. The existing deferred product surface remains deferred.
+
+## POST_G11_RUNTIME_PRODUCTIZATION
+
+**STATUS=COMPLETE**
+
+Purpose: turn the accepted G11 fixed two-product graph into the ordinary
+deployable long-running `bmd-gatewayd`.
+
+Exact implementation evidence:
+
+- production semantic head:
+  `61fbc8f021e8c7dabde6ef02bfb1b26d90658765`;
+- CI-only child:
+  `fd69d943a7330abf119eae80154204fdaa24a257`;
+- acceptance correction:
+  `248faa8277291de01a323c35fed827145eb760f7`;
+- implementation PR: #22;
+- implementation merge:
+  `04505b69529e33db8a94b48cd7a216678721cf33`;
+- exact PR CI: `33378772518` SUCCESS.
+
+Final independent review found P0=0, P1=0, and known P2=3.
+`TARGETED_P1_CLOSED=YES` and `TECHNICAL_ACCEPTANCE=PASS`.
+
+Accepted semantics are narrowly:
+
+- exactly two products: Spot BTCUSDT and USD-M perpetual BTCUSDT;
+- operational gRPC listen configuration only;
+- both markets initial-Live before serving;
+- SIGINT/SIGTERM process lifecycle;
+- complete startup rollback;
+- serving-time single-market failure isolation;
+- unchanged G11 context and transport bounds; and
+- an installable daemon target with no new market-data semantics.
+
+The final real production-daemon acceptance launches and owns the exact
+`bmd-gatewayd` child, authenticates its `gateway_instance_id`, proves the child
+alive before signaling, sends SIGTERM, waits for normal exit, and requires final
+`contexts=0`, `transports=0`, `subscriptions=0`, `owners_joined=yes`. Spot Live,
+USD-M Live, both order books, USD-M `DIFF_DEPTH`, two-market status,
+status/child-instance matching, SIGTERM lifecycle, and clean final shutdown
+all passed.
+
+Acceptance history: the initial reported real production acceptance was not
+valid final lifecycle proof because an external-only client could structurally
+false-pass. This was an acceptance-harness evidence defect, not a production
+source correctness defect. Correction `248faa8277291de01a323c35fed827145eb760f7`
+made acceptance own, authenticate, signal, and reap the exact daemon process;
+exactly one replacement real acceptance passed.
+
+Known nonblocking findings remain:
+
+- P2-1: the deterministic productionization test matrix is not exhaustive;
+  some explicit start-result, exception, and combined-backpressure paths are
+  not individually tested, with no corresponding production source defect
+  found;
+- P2-2: GitHub default sanitizer jobs do not enable the production-daemon
+  graph, and local productization-enabled sanitizer evidence was not
+  independently authenticated; and
+- P2-3: SIGINT/SIGTERM cannot immediately cancel synchronous metadata HTTPS
+  acquisition, although network stage deadlines make the delay bounded.
+
+## POST_G11_PERFORMANCE_BASELINE
+
+**STATUS=NOT_STARTED**
+
+Purpose: measure before optimizing the actual merged production daemon.
+
+Scope is high-level only: measure T0 complete WebSocket frame received, T1
+parsing/adaptation, T2 owner dequeue, T3 Projection Apply, T4 subscriber
+enqueue, and T5 gRPC delivery completion observation; report p50/p95/p99/max,
+queue occupancy, CPU, RSS, and Spot versus USD-M contention.
+
+No optimization is authorized merely by adding this future section. After the
+baseline, `POST_G11_PRODUCTION_QUALIFICATION` remains future/planned and not
+started. No numbered G12 is currently frozen.
 
 ## Deferred product surface
 

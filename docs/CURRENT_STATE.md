@@ -16,6 +16,7 @@ G8=COMPLETE
 G9=COMPLETE
 G10=COMPLETE
 G11=COMPLETE
+POST_G11_RUNTIME_PRODUCTIZATION=COMPLETE
 G2_SYNTHETIC_HOST_IMPLEMENTED=YES
 G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES
 CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES
@@ -24,6 +25,18 @@ GATEWAY_NETWORK=SPOT_BTCUSDT_AND_USD_M_PERPETUAL_BTCUSDT_IMPLEMENTED
 USD_M_BTCUSDT=IMPLEMENTED
 MULTI_MARKET_RUNTIME=IMPLEMENTED
 G11_PRODUCT_COUNT=2
+PRODUCTION_DAEMON=IMPLEMENTED
+PRODUCTION_DAEMON_BINARY=bmd-gatewayd
+PRODUCTION_PRODUCT_COUNT=2
+PRODUCTION_GRPC_CONFIGURABLE=YES
+PRODUCTION_REQUIRES_BOTH_INITIAL_LIVE=YES
+PRODUCTION_SERVES_BEFORE_BOTH_INITIAL_LIVE=NO
+SIGINT_SUPPORTED=YES
+SIGTERM_SUPPORTED=YES
+STARTUP_ROLLBACK=IMPLEMENTED
+POST_START_SINGLE_MARKET_FAILURE_ISOLATION=IMPLEMENTED
+INSTALLABLE_PRODUCTION_DAEMON=YES
+REAL_PRODUCTION_DAEMON_ACCEPTANCE=PASS
 RECONNECT=IMPLEMENTED
 AUTOMATIC_RECOVERY=IMPLEMENTED
 PLANNED_ROTATION=IMPLEMENTED
@@ -59,7 +72,7 @@ MAX_G9_ACTIVE_TOTAL=16
 MAX_ACTIVE_TRANSPORTS_PER_MARKET=1
 MAX_ACTIVE_TRANSPORTS_TOTAL=2
 STATUS_MARKET_COUNT=2
-NEXT=POST_G11_PLANNING
+NEXT=POST_G11_PERFORMANCE_BASELINE
 FIRST_RUNNABLE=G2
 FIRST_REAL_NETWORK=G4
 FIRST_GRPC=G7
@@ -67,13 +80,24 @@ PROJECTION_M6_START_GATE=G8
 FIRST_MULTI_MARKET=G11
 ```
 
+## Post-G11 production daemon
+
+The current `bmd-gatewayd` is the ordinary long-running production host for
+fixed Spot BTCUSDT and USD-M perpetual BTCUSDT. It acquires authoritative
+metadata, constructs the two accepted product runtimes, waits for both to reach
+initial Live/Synchronized, and only then starts the configured synchronous gRPC
+listener. It serves until SIGINT/SIGTERM. A startup failure rolls back the
+partial graph; after startup, a failure of one market remains isolated. During
+shutdown, server handlers are drained/cancelled before product owner
+destruction. Production contains no acceptance-only controlled-recovery hook.
+
 ## What is implemented
 
 Gateway `main` currently contains:
 
 - typed, finite configuration;
 - synchronous Foundation lifecycle;
-- a daemon CLI that immediately starts and stops Foundation;
+- the historical/minimal Foundation CLI seam;
 - deterministic Foundation tests;
 - build/CI/sanitizer support;
 - the explicit, opt-in G1 dependency proof;
@@ -141,8 +165,9 @@ G11 implements exactly the two accepted products and is not arbitrary
 multi-symbol support. G8 is
 an acceptance/test composition and opt-in CMake wiring; it does not add a
 production runtime layer. G4 remains independently usable as a one-shot transport.
-`NEXT=POST_G11_PLANNING`; no G12 or further numbered Gateway milestone is
-currently frozen.
+Post-G11 runtime productization is complete: the ordinary `bmd-gatewayd` is
+the installed long-running two-product daemon. `NEXT=POST_G11_PERFORMANCE_BASELINE`;
+no G12 or further numbered Gateway milestone is currently frozen.
 G5 recovers transport, snapshot, malformed-input, bounded-admission, bootstrap
 overflow, `serverShutdown`, and Projection `NeedsResync` failures through a new
 connection and the same conservative bootstrap path. Internal adapter,
@@ -179,6 +204,19 @@ terminal slot per channel, and eight pending admissions. Existing sessions
 terminate and resubscribe rather than cross G5/G6 full Projection rebootstrap.
 G9 event subscribers are separately bounded at eight active sessions, 64 ordinary
 records, and one terminal control slot per session.
+
+## Known nonblocking follow-up findings
+
+- P2-1: The deterministic productionization test matrix is not exhaustive;
+  some explicit start-result, exception, and combined-backpressure paths are
+  not individually tested. No corresponding production source defect was found.
+- P2-2: GitHub default sanitizer jobs do not enable the production-daemon graph;
+  local productization-enabled sanitizer evidence was not independently
+  authenticated.
+- P2-3: SIGINT/SIGTERM cannot immediately cancel synchronous metadata HTTPS
+  acquisition, although network stage deadlines make the delay bounded.
+
+These findings are nonblocking and are not claimed to be resolved.
 
 The [2026-08-23 handoff](HANDOFF_2026-08-23.md) is historical provenance, not
 current project status.

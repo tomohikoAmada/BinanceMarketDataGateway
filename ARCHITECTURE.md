@@ -2,7 +2,8 @@
 
 The detailed, ordered development authority is
 [docs/MILESTONES.md](docs/MILESTONES.md). This document records only the
-responsibility split and the current foundation/G11 boundary.
+responsibility split, the current foundation/G11 boundary, and the accepted
+post-G11 production host.
 
 ## Dependency direction
 
@@ -42,11 +43,41 @@ isolation, and the Gateway gRPC runtime.
   `Stopped`. `Foundation` owns only validated configuration and state; it creates no threads,
   sockets, queues, clocks, callbacks, or asynchronous work.
 
-`bmd-gatewayd` is an offline lifecycle demonstration. It parses the five flags, validates them,
-starts the foundation, reports `running`, stops it, reports `stopped`, and exits. The endpoint is
-not bound and no transport is attempted. The separate `bmd-gateway-g2-synthetic`
-executable drives one deterministic in-memory Spot BTCUSDT scenario through the
-direct Projection APIs; it is not a production transport runtime.
+The Foundation CLI is a historical/minimal Phase-A lifecycle seam. It parses
+the five flags, validates them, starts the foundation, reports `running`, stops
+it, reports `stopped`, and exits. Its endpoint is not bound and no transport is
+attempted. The separate `bmd-gateway-g2-synthetic` executable drives one
+deterministic in-memory Spot BTCUSDT scenario through the direct Projection
+APIs; it is not a production transport runtime.
+
+## Post-G11 production daemon
+
+The ordinary `bmd-gatewayd` is the production two-product host:
+
+```text
+process
+├── TerminationSignals
+├── Spot BTCUSDT ProductRuntime
+├── USD-M perpetual BTCUSDT ProductRuntime
+├── fixed two-entry registry
+└── synchronous Gateway gRPC server
+```
+
+It has one process-global `gateway_instance_id`. Both product runtimes must
+reach initial Live/Synchronized before server readiness; there is no self-test
+client and no controlled-recovery acceptance hook in production. The daemon
+uses a configured nonzero gRPC endpoint, waits for SIGINT/SIGTERM, starts the
+server only after both products are ready, and shuts down the server and its
+handlers before stopping and destroying the product graph. After startup, a
+terminal failure of one market remains isolated from the other market and the
+gRPC server.
+
+`BMD_GATEWAY_BUILD_PRODUCTION_DAEMON` is explicit opt-in and OFF by default.
+When enabled, it composes the full accepted G11 graph and builds/installs the
+real `bmd-gatewayd`. The minimal Foundation build does not include the
+production graph. The direct daemon gRPC deployment is intended for a
+trusted/private/loopback transport boundary or an externally protected
+transport; this phase adds no TLS/auth framework.
 
 The opt-in `bmd_gateway_g3_runtime` target is the first concurrent runtime
 boundary. It implements exactly one Binance Spot BTCUSDT `MarketRuntime`, which
@@ -270,5 +301,7 @@ recovery and G6 adds planned break-before-make rotation without changing
 Projection continuity ownership. G7 adds bounded publication and the first
 synchronous gRPC business flow without adding a second classifier or order book.
 G8 closes the Projection M6 real-Gateway order-book integration acceptance.
-G11 closes the accepted USD-M/two-market runtime boundary. `NEXT=POST_G11_PLANNING`;
-no additional numbered Gateway milestone is currently frozen.
+G11 closes the accepted USD-M/two-market runtime boundary, and post-G11
+productization closes the production daemon host boundary.
+`NEXT=POST_G11_PERFORMANCE_BASELINE`; no additional numbered Gateway milestone
+is currently frozen.
