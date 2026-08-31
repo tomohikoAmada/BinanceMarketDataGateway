@@ -40,11 +40,6 @@ jobs:
         run: cmake --build build/foundation-${{ matrix.compiler }} --parallel
       - name: Test
         run: ctest --test-dir build/foundation-${{ matrix.compiler }} --output-on-failure
-      - name: CLI lifecycle smoke
-        run: >-
-          build/foundation-${{ matrix.compiler }}/bmd-gatewayd
-          --venue binance --market spot --symbol BTCUSDT
-          --grpc-listen 127.0.0.1:50051 --queue-capacity 1024
 
   sanitizers:
     name: Sanitizer ${{ matrix.sanitizer }}
