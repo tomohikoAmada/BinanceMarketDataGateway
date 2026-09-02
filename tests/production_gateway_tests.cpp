@@ -1,4 +1,5 @@
 #include "daemon_config.hpp"
+#include "daemon_runtime.hpp"
 #include "production_metadata.hpp"
 #include "production_test_support.hpp"
 
@@ -17,6 +18,7 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -376,6 +378,32 @@ void context_bound_preserved() {
   gateway.stop();
 }
 
+void recovery_diagnostic_formatter_supports_both_products() {
+  production::GatewayObservation observation;
+  observation.spot_recovery.failure_history_size = 1U;
+  observation.spot_recovery.failure_history[0].connection_generation = 3U;
+  observation.spot_recovery.failure_history[0].cause =
+      g5::RecoveryCause::NeedsResync;
+  observation.usdm_recovery.failure_history_size = 1U;
+  observation.usdm_recovery.failure_history[0].connection_generation = 5U;
+  observation.usdm_recovery.failure_history[0].cause =
+      g5::RecoveryCause::TransportFailure;
+
+  std::ostringstream output;
+  production::write_recovery_failure_diagnostics(output, observation);
+  const auto text = output.str();
+  REQUIRE(text.find("gateway_recovery_failure product=spot index=0 "
+                    "generation=3 cause=needs-resync") != std::string::npos);
+  REQUIRE(text.find("gateway_recovery_failure product=usdm index=0 "
+                    "generation=5 cause=transport-failure") !=
+          std::string::npos);
+
+  std::ostringstream clean;
+  production::write_recovery_failure_diagnostics(
+      clean, production::GatewayObservation{});
+  REQUIRE(clean.str().empty());
+}
+
 void metadata_failures_are_ordered() {
   bool usdm_called = false;
   production::MetadataSources spot_failure;
@@ -444,6 +472,8 @@ int main() {
       {"STARTUP_STOP_REQUEST_ROLLBACK", startup_stop_request_rolls_back},
       {"INITIAL_STARTUP_DEADLINE_BOUNDED", initial_startup_deadline_is_bounded},
       {"CONTEXT_48_PRESERVED", context_bound_preserved},
+      {"RECOVERY_DIAGNOSTIC_FORMATTER_SUPPORTS_BOTH_PRODUCTS",
+       recovery_diagnostic_formatter_supports_both_products},
       {"METADATA_FAILURES_ORDERED", metadata_failures_are_ordered},
       {"FIXED_CLI_FAILS_CLOSED", cli_is_fixed_and_fail_closed},
   };

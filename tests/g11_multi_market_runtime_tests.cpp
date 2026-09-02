@@ -314,6 +314,9 @@ void recovery_and_generation_are_isolated() {
   const auto usdm_after_spot_recovery = products.usdm().runtime().observe();
   const auto usdm_recovery_after_spot = products.usdm().recovery().observe();
   REQUIRE_EQ(spot_generation_two.connection_generation, 2U);
+  REQUIRE_EQ(spot_generation_two.failure_history_size, 1U);
+  REQUIRE_EQ(spot_generation_two.failure_history[0].connection_generation, 1U);
+  REQUIRE_EQ(usdm_recovery_after_spot.failure_history_size, 0U);
   REQUIRE_EQ(usdm_recovery_after_spot.connection_generation, 1U);
   REQUIRE_EQ(usdm_after_spot_recovery.reset_count, usdm_before.reset_count);
   REQUIRE_EQ(usdm_after_spot_recovery.owner_thread_id,
@@ -329,6 +332,8 @@ void recovery_and_generation_are_isolated() {
   const auto spot_after_usdm_recovery = products.spot().runtime().observe();
   const auto spot_recovery_after_usdm = products.spot().recovery().observe();
   REQUIRE_EQ(usdm_generation_two.connection_generation, 2U);
+  REQUIRE_EQ(usdm_generation_two.failure_history_size, 1U);
+  REQUIRE_EQ(usdm_generation_two.failure_history[0].connection_generation, 1U);
   REQUIRE_EQ(spot_recovery_after_usdm.connection_generation, 2U);
   REQUIRE_EQ(spot_after_usdm_recovery.reset_count,
              spot_before_usdm_recovery.reset_count);
@@ -395,6 +400,9 @@ void one_market_terminal_failure_does_not_stop_other() {
   REQUIRE(spot_live.state == g5::RecoveryState::Live);
   REQUIRE(usdm_terminal.terminal);
   REQUIRE(usdm_terminal.state == g5::RecoveryState::Exhausted);
+  REQUIRE_EQ(usdm_terminal.failure_history_size, 1U);
+  REQUIRE_EQ(usdm_terminal.failure_history[0].connection_generation, 1U);
+  REQUIRE(usdm_terminal.failure_history[0].network_error.has_value());
   REQUIRE(spot_after.state == g5::RecoveryState::Live);
   REQUIRE_EQ(spot_after.connection_generation, 1U);
   REQUIRE_EQ(spot_after.active_transport_count, 1U);

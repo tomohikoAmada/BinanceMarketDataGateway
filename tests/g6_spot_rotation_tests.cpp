@@ -404,6 +404,7 @@ void planned_rotation_order_owner_and_counters() {
   REQUIRE_EQ(second.last_rotation_generation, 1U);
   REQUIRE_EQ(second.consecutive_recovery_attempts, 0U);
   REQUIRE_EQ(second.total_recovery_count, 0U);
+  REQUIRE_EQ(second.failure_history_size, 0U);
   REQUIRE_EQ(second.max_active_transport_count, 1U);
   REQUIRE_EQ(after.last_reset_thread_id, after.owner_thread_id);
   REQUIRE(after.last_reset_thread_id != std::this_thread::get_id());

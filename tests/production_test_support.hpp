@@ -27,10 +27,13 @@ enum class AttemptMode : std::uint8_t {
   NeverLive,
 };
 
+class TestAttempt;
+
 struct AttemptState final {
   std::atomic<std::size_t> active{0U};
   std::atomic<std::size_t> maximum_active{0U};
   std::atomic<std::size_t> starts{0U};
+  std::atomic<TestAttempt *> active_attempt{nullptr};
 };
 
 [[nodiscard]] inline g3::RuntimeClock fixed_clock() {
@@ -109,6 +112,7 @@ public:
               std::shared_ptr<AttemptState> state)
       : runtime_{runtime}, product_{product}, generation_{generation},
         mode_{mode}, state_{std::move(state)} {
+    state_->active_attempt.store(this);
     observation_.connection_generation = generation_;
     observation_.connection_id =
         (product_ == common::MARKET_SPOT ? "spot-test-g" : "usdm-test-g") +
@@ -167,7 +171,25 @@ public:
       observation_.running = false;
       observation_.stopped = true;
     }
+    auto *expected = this;
+    static_cast<void>(
+        state_->active_attempt.compare_exchange_strong(expected, nullptr));
     state_->active.fetch_sub(1U);
+  }
+
+  [[nodiscard]] bool inject_recoverable_failure() {
+    {
+      std::lock_guard lock{mutex_};
+      if (stopped_.load()) {
+        return false;
+      }
+      observation_.running = false;
+      observation_.terminal_error = g4::NetworkError{
+          g4::NetworkErrorCode::WebSocketRead, "spot-test\nstage\\source",
+          std::string{"recovery\nmessage\\\t\x01"} + std::string(300U, 'x'),
+          std::nullopt, std::nullopt};
+    }
+    return runtime_.submit_transport_failure() == g3::AdmissionResult::Accepted;
   }
 
   [[nodiscard]] g4::TransportObservation observe() const override {

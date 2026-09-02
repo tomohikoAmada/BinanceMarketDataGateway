@@ -224,8 +224,6 @@ public:
           make_update(base + 1U, base + 1U, generation_, true)));
       static_cast<void>(
           runtime_.submit_snapshot(make_snapshot(base, generation_)));
-      set_error(g4::NetworkErrorCode::RuntimeAdmission, std::nullopt,
-                std::nullopt);
       return g4::TransportStartResult::Started;
     case Action::SnapshotFailure:
       static_cast<void>(runtime_.submit_snapshot_failure());
@@ -355,6 +353,8 @@ make_script(std::initializer_list<Action> actions) {
 }
 
 void initial_live() {
+  static_assert(g5::detail::kRecoveryFailureHistoryCapacity ==
+                g5::detail::kMaximumRecoveryAttempts + 1U);
   auto script = make_script({Action::Live});
   g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
   g5::SpotRecovery recovery{runtime, fixed_clock(), script_options(script)};
@@ -364,6 +364,116 @@ void initial_live() {
   REQUIRE_EQ(live.connection_generation, 1U);
   REQUIRE_EQ(live.total_recovery_count, 0U);
   REQUIRE_EQ(live.max_active_transport_count, 1U);
+  recovery.stop();
+}
+
+void failure_diagnostic_survives_live_replacement() {
+  auto script = make_script({Action::Http429, Action::Live});
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  g5::SpotRecovery recovery{runtime, fixed_clock(), script_options(script)};
+  REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+  const auto live = recovery.wait_for_generation_live(2U);
+  REQUIRE_EQ(live.state, g5::RecoveryState::Live);
+  REQUIRE(!live.terminal_error.has_value());
+  REQUIRE_EQ(live.failure_history_size, 1U);
+  const auto &failure = live.failure_history[0];
+  REQUIRE_EQ(failure.connection_generation, 1U);
+  REQUIRE_EQ(failure.cause, g5::RecoveryCause::Http429);
+  REQUIRE_EQ(failure.runtime_state, g3::RuntimeState::Faulted);
+  REQUIRE_EQ(failure.fault_reason, g3::FaultReason::SnapshotFailure);
+  REQUIRE(failure.network_error.has_value());
+  REQUIRE_EQ(failure.network_error->code, g4::NetworkErrorCode::HttpStatus);
+  REQUIRE_EQ(failure.network_error->stage, std::string{"script"});
+  REQUIRE_EQ(failure.network_error->message, std::string{"scripted failure"});
+  REQUIRE_EQ(failure.network_error->http_status, std::optional<unsigned>{429U});
+  REQUIRE_EQ(failure.network_error->retry_after,
+             std::optional<std::string>{"17"});
+  recovery.stop();
+}
+
+void two_failure_diagnostics_survive_generation_three() {
+  auto script =
+      make_script({Action::ProtocolFailure, Action::Http5xx, Action::Live});
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  g5::SpotRecovery recovery{runtime, fixed_clock(), script_options(script)};
+  REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+  const auto live = recovery.wait_for_generation_live(3U);
+  REQUIRE_EQ(live.failure_history_size, 2U);
+  REQUIRE_EQ(live.failure_history[0].connection_generation, 1U);
+  REQUIRE_EQ(live.failure_history[0].cause, g5::RecoveryCause::Protocol);
+  REQUIRE(live.failure_history[0].network_error.has_value());
+  REQUIRE_EQ(live.failure_history[0].network_error->code,
+             g4::NetworkErrorCode::Protocol);
+  REQUIRE_EQ(live.failure_history[1].connection_generation, 2U);
+  REQUIRE_EQ(live.failure_history[1].cause, g5::RecoveryCause::Http5xx);
+  REQUIRE(live.failure_history[1].network_error.has_value());
+  REQUIRE_EQ(live.failure_history[1].network_error->code,
+             g4::NetworkErrorCode::HttpStatus);
+  REQUIRE_EQ(live.failure_history[1].network_error->http_status,
+             std::optional<unsigned>{503U});
+  recovery.stop();
+}
+
+void failure_diagnostic_history_retains_newest_seven() {
+  auto script = make_script({Action::Live, Action::Live, Action::Live,
+                             Action::Live, Action::Live, Action::Live,
+                             Action::Live, Action::Live, Action::Live});
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  g5::SpotRecovery recovery{runtime, fixed_clock(), script_options(script)};
+  REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+  static_cast<void>(recovery.wait_for_generation_live(1U));
+  for (std::uint64_t failed_generation = 1U; failed_generation <= 8U;
+       ++failed_generation) {
+    REQUIRE(recovery.request_controlled_recovery_for_acceptance());
+    const auto live = recovery.wait_for_generation_live(failed_generation + 1U);
+    REQUIRE(live.failure_history_size <=
+            g5::detail::kRecoveryFailureHistoryCapacity);
+  }
+  const auto retained = recovery.observe();
+  REQUIRE_EQ(retained.failure_history_size,
+             g5::detail::kRecoveryFailureHistoryCapacity);
+  for (std::size_t index = 0U; index < retained.failure_history_size; ++index) {
+    REQUIRE_EQ(retained.failure_history[index].connection_generation,
+               static_cast<std::uint64_t>(index + 2U));
+    REQUIRE_EQ(retained.failure_history[index].cause,
+               g5::RecoveryCause::TransportFailure);
+  }
+  recovery.stop();
+}
+
+void nonrecoverable_failure_diagnostic_is_retained() {
+  auto script = make_script({Action::Http403});
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  g5::SpotRecovery recovery{runtime, fixed_clock(), script_options(script)};
+  REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+  const auto terminal = recovery.wait_until_terminal();
+  REQUIRE(terminal.terminal);
+  REQUIRE_EQ(terminal.failure_history_size, 1U);
+  const auto &failure = terminal.failure_history[0];
+  REQUIRE_EQ(failure.connection_generation, 1U);
+  REQUIRE_EQ(failure.cause, g5::RecoveryCause::TerminalHttp4xx);
+  REQUIRE(failure.network_error.has_value());
+  REQUIRE_EQ(failure.network_error->http_status, std::optional<unsigned>{403U});
+  recovery.stop();
+}
+
+void runtime_only_adapter_failure_diagnostic_is_retained() {
+  auto script = make_script({Action::AdapterFailure});
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  g5::SpotRecovery recovery{runtime, fixed_clock(), script_options(script)};
+  REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+  const auto terminal = recovery.wait_until_terminal();
+  REQUIRE(terminal.terminal);
+  REQUIRE_EQ(terminal.failure_history_size, 1U);
+  const auto &failure = terminal.failure_history[0];
+  REQUIRE_EQ(failure.cause, g5::RecoveryCause::InternalFailure);
+  REQUIRE_EQ(failure.runtime_state, g3::RuntimeState::Faulted);
+  REQUIRE_EQ(failure.fault_reason, g3::FaultReason::AdapterError);
+  REQUIRE(!failure.network_error.has_value());
+  REQUIRE(failure.adapter_error.has_value());
+  REQUIRE_EQ(failure.adapter_error->code,
+             g3::adapter::AdapterErrorCode::IdentityMismatch);
+  REQUIRE_EQ(failure.adapter_error->field, g3::adapter::AdapterField::Symbol);
   recovery.stop();
 }
 
@@ -400,6 +510,10 @@ void needs_resync_direct_recovery() {
   const auto live = recovery.wait_for_generation_live(2U);
   REQUIRE_EQ(live.state, g5::RecoveryState::Live);
   REQUIRE_EQ(live.last_recovery_cause, g5::RecoveryCause::NeedsResync);
+  REQUIRE_EQ(live.failure_history_size, 1U);
+  REQUIRE_EQ(live.failure_history[0].projection_status,
+             core::ProjectionStatus::NeedsResync);
+  REQUIRE(live.failure_history[0].last_gap.has_value());
   REQUIRE_EQ(runtime.observe().reset_count, 1U);
   recovery.stop();
 }
@@ -447,6 +561,8 @@ void backoff_and_exhaustion() {
   REQUIRE(exhausted.exhausted);
   REQUIRE_EQ(exhausted.consecutive_recovery_attempts, 6U);
   REQUIRE_EQ(exhausted.connection_generation, 7U);
+  REQUIRE_EQ(exhausted.failure_history_size,
+             g5::detail::kRecoveryFailureHistoryCapacity);
   {
     std::lock_guard lock{script->mutex};
     REQUIRE_EQ(script->delays,
@@ -818,6 +934,16 @@ void event_generation_two_phase_recovery_and_permanent_cut() {
 int main() {
   const std::vector<std::pair<std::string_view, std::function<void()>>> tests{
       {"INITIAL_LIVE", initial_live},
+      {"FAILURE_DIAGNOSTIC_SURVIVES_LIVE_REPLACEMENT",
+       failure_diagnostic_survives_live_replacement},
+      {"TWO_FAILURE_DIAGNOSTICS_SURVIVE_GENERATION_THREE",
+       two_failure_diagnostics_survive_generation_three},
+      {"FAILURE_DIAGNOSTIC_HISTORY_RETAINS_NEWEST_SEVEN",
+       failure_diagnostic_history_retains_newest_seven},
+      {"NONRECOVERABLE_FAILURE_DIAGNOSTIC_RETAINED",
+       nonrecoverable_failure_diagnostic_is_retained},
+      {"RUNTIME_ONLY_ADAPTER_FAILURE_DIAGNOSTIC_RETAINED",
+       runtime_only_adapter_failure_diagnostic_is_retained},
       {"TRANSPORT_FAILURE_RECOVERY_AND_OLD_GENERATION_CUT",
        transport_failure_recovery_and_cut},
       {"PROJECTION_NEEDS_RESYNC_DIRECT_RECOVERY", needs_resync_direct_recovery},

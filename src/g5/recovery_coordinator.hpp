@@ -2,6 +2,7 @@
 
 #include "spot_transport.hpp"
 
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -70,6 +71,26 @@ enum class RecoveryStartResult : std::uint8_t {
   RuntimeStartFailed,
 };
 
+namespace detail {
+
+inline constexpr std::size_t kMaximumRecoveryAttempts = 6U;
+inline constexpr std::size_t kRecoveryFailureHistoryCapacity =
+    kMaximumRecoveryAttempts + 1U;
+
+} // namespace detail
+
+struct RecoveryFailureDiagnostic final {
+  std::uint64_t connection_generation{0U};
+  RecoveryCause cause{RecoveryCause::InternalFailure};
+  std::optional<g4::NetworkError> network_error;
+  g3::RuntimeState runtime_state{g3::RuntimeState::Constructed};
+  g3::core::ProjectionStatus projection_status{
+      g3::core::ProjectionStatus::AwaitingBaseline};
+  std::optional<g3::core::GapInfo> last_gap;
+  std::optional<g3::FaultReason> fault_reason;
+  std::optional<g3::adapter::AdapterError> adapter_error;
+};
+
 struct RecoveryObservation final {
   RecoveryState state{RecoveryState::Starting};
   std::uint64_t connection_generation{0U};
@@ -89,6 +110,11 @@ struct RecoveryObservation final {
   std::size_t active_transport_count{0U};
   std::size_t max_active_transport_count{0U};
   std::optional<g4::NetworkError> terminal_error;
+  // The most recent classified unplanned failure cuts are retained oldest to
+  // newest. Once full, recording a new cut discards only the oldest one.
+  std::array<RecoveryFailureDiagnostic, detail::kRecoveryFailureHistoryCapacity>
+      failure_history{};
+  std::size_t failure_history_size{0U};
 };
 
 struct QuiescentAcceptanceCut final {
@@ -97,8 +123,6 @@ struct QuiescentAcceptanceCut final {
 };
 
 namespace detail {
-
-inline constexpr std::size_t kMaximumRecoveryAttempts = 6U;
 
 class RecoveryAttempt {
 public:

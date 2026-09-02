@@ -622,6 +622,13 @@ private:
         }
         const auto decision =
             classify_failure(final_runtime, transport_observation);
+        // This is the last coherent cut containing the classified cause, the
+        // quiesced attempt's transport error, and the final owner-domain
+        // runtime evidence. Retain it before reset/rebootstrap can destroy the
+        // attempt context and before a later Live generation clears the
+        // current terminal_error field.
+        record_failure(generation, decision.cause, transport_observation,
+                       final_runtime);
         if (!decision.recoverable) {
           close_source_generation(
               SourceGenerationCloseOutcome::PermanentFailure);
@@ -874,6 +881,35 @@ private:
     }
     std::lock_guard lock{mutex_};
     observation_.last_event_utc_ns = transport.last_event_utc_ns;
+  }
+
+  void record_failure(std::uint64_t generation, RecoveryCause cause,
+                      const g4::TransportObservation &transport,
+                      const g3::RuntimeObservation &runtime) noexcept {
+    try {
+      RecoveryFailureDiagnostic diagnostic{generation,
+                                           cause,
+                                           transport.terminal_error,
+                                           runtime.state,
+                                           runtime.projection_status,
+                                           runtime.last_gap,
+                                           runtime.fault_reason,
+                                           runtime.adapter_error};
+      std::lock_guard lock{mutex_};
+      auto &size = observation_.failure_history_size;
+      auto &history = observation_.failure_history;
+      if (size == history.size()) {
+        for (std::size_t index = 1U; index < size; ++index) {
+          history[index - 1U] = std::move(history[index]);
+        }
+        history[size - 1U] = std::move(diagnostic);
+        return;
+      }
+      history[size] = std::move(diagnostic);
+      ++size;
+    } catch (...) {
+      // Diagnostics must never alter the classified recovery decision.
+    }
   }
 
   [[nodiscard]] bool try_mark_live(const g3::RuntimeObservation &runtime,
