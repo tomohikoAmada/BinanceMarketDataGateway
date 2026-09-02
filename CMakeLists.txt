@@ -31,6 +31,8 @@ option(BMD_GATEWAY_BUILD_G11_MULTI_MARKET
        "Build G11 fixed Spot/USD-M BTCUSDT multi-market runtime" OFF)
 option(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON
        "Build the post-G11 long-running fixed two-product bmd-gatewayd" OFF)
+option(BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION
+       "Instrument the real fixed two-product production daemon" OFF)
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
        "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
 option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
@@ -53,6 +55,12 @@ endif()
 
 if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
     set(BMD_GATEWAY_BUILD_G11_MULTI_MARKET ON)
+endif()
+
+if(BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION AND
+   NOT BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
+    message(FATAL_ERROR
+            "Performance baseline instrumentation requires the production daemon graph")
 endif()
 
 if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
@@ -237,6 +245,18 @@ if(BMD_GATEWAY_BUILD_G3_RUNTIME)
         src/g3/market_runtime.cpp
         src/g7/order_book_publication.cpp
     )
+    if(BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION)
+        target_sources(
+            bmd_gateway_g3_runtime
+            PRIVATE
+                src/performance/performance_baseline.cpp
+        )
+        target_compile_definitions(
+            bmd_gateway_g3_runtime
+            PUBLIC
+                BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED=1
+        )
+    endif()
     set_target_properties(
         bmd_gateway_g3_runtime
         PROPERTIES
@@ -249,6 +269,7 @@ if(BMD_GATEWAY_BUILD_G3_RUNTIME)
         PUBLIC
             ${CMAKE_CURRENT_SOURCE_DIR}/src/g3
             ${CMAKE_CURRENT_SOURCE_DIR}/src/g7
+            $<$<BOOL:${BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION}>:${CMAKE_CURRENT_SOURCE_DIR}/src/performance>
     )
     target_link_libraries(
         bmd_gateway_g3_runtime
@@ -1155,6 +1176,32 @@ if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
         add_test(NAME gateway_production_tests
                  COMMAND bmd_gateway_production_tests)
         set_tests_properties(gateway_production_tests PROPERTIES TIMEOUT 30)
+
+        if(BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION)
+            add_executable(bmd_gateway_performance_baseline_tests
+                tests/performance_baseline_tests.cpp
+            )
+            set_target_properties(
+                bmd_gateway_performance_baseline_tests
+                PROPERTIES
+                    CXX_STANDARD 20
+                    CXX_STANDARD_REQUIRED YES
+                    CXX_EXTENSIONS NO
+            )
+            target_link_libraries(
+                bmd_gateway_performance_baseline_tests
+                PRIVATE
+                    bmd_gateway_production
+            )
+            bmd_gateway_apply_warnings(
+                bmd_gateway_performance_baseline_tests)
+            bmd_gateway_apply_sanitizers(
+                bmd_gateway_performance_baseline_tests)
+            add_test(NAME gateway_performance_baseline_tests
+                     COMMAND bmd_gateway_performance_baseline_tests)
+            set_tests_properties(gateway_performance_baseline_tests
+                                 PROPERTIES TIMEOUT 30)
+        endif()
 
         add_executable(bmd_gateway_production_daemon_fixture
             tests/production_daemon_fixture.cpp

@@ -31,6 +31,9 @@ enum class InjectedFailure : std::uint8_t {
 struct DepthUpdateInput final {
   market::DepthUpdate update;
   SourceProvenance provenance;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  performance::TraceToken trace;
+#endif
 };
 
 struct SnapshotInput final {
@@ -60,6 +63,25 @@ state_for_projection(core::ProjectionStatus status) noexcept {
   }
   return RuntimeState::Faulted;
 }
+
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+[[nodiscard]] performance::T3Disposition
+measurement_disposition(core::ApplyDisposition disposition) noexcept {
+  switch (disposition) {
+  case core::ApplyDisposition::Applied:
+    return performance::T3Disposition::Applied;
+  case core::ApplyDisposition::IgnoredStale:
+    return performance::T3Disposition::IgnoredStale;
+  case core::ApplyDisposition::IgnoredDuplicate:
+    return performance::T3Disposition::IgnoredDuplicate;
+  case core::ApplyDisposition::GapDetected:
+    return performance::T3Disposition::GapDetected;
+  case core::ApplyDisposition::RejectedWrongState:
+    return performance::T3Disposition::RejectedWrongState;
+  }
+  return performance::T3Disposition::InternalFailure;
+}
+#endif
 
 } // namespace
 
@@ -177,6 +199,11 @@ public:
       return AdmissionResult::Faulted;
     }
     if (ingress_.size() == limits_.ingress_capacity) {
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+      if (limits_.performance_baseline != nullptr) {
+        limits_.performance_baseline->record_ingress_full();
+      }
+#endif
       accepting_ = false;
       pending_fault_ = FaultReason::IngressOverflow;
       condition_.notify_all();
@@ -186,6 +213,13 @@ public:
     ++last_admitted_ticket_;
     ingress_.push_back(IngressItem{last_admitted_ticket_, std::move(input)});
     observation_.ingress_occupancy = ingress_.size();
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    if (limits_.performance_baseline != nullptr) {
+      if (auto *depth = std::get_if<DepthUpdateInput>(&ingress_.back().input)) {
+        limits_.performance_baseline->record_q(depth->trace, ingress_.size());
+      }
+    }
+#endif
     condition_.notify_all();
     return AdmissionResult::Accepted;
   }
@@ -621,6 +655,13 @@ private:
         continue;
       }
 
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+      if (limits_.performance_baseline != nullptr) {
+        if (auto *depth = std::get_if<DepthUpdateInput>(&item->input)) {
+          limits_.performance_baseline->record_t2(depth->trace);
+        }
+      }
+#endif
       try {
         process_input(item->input);
       } catch (...) {
@@ -784,7 +825,12 @@ private:
           std::string{"ob-"} + std::to_string(next_subscription_id_);
       auto channel = std::make_shared<g7::SubscriberChannel>(
           subscription_id, request->subscription.gateway_instance_id,
-          limits_.publication.ordinary_queue_capacity);
+          limits_.publication.ordinary_queue_capacity
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+          ,
+          next_subscription_id_, limits_.performance_baseline.get()
+#endif
+      );
       auto accepted = g7::make_accepted_record(
           request->subscription.request_id, subscription_id,
           request->subscription.gateway_instance_id, *published_at);
@@ -1042,12 +1088,24 @@ private:
         input.provenance.connection_generation.has_value() &&
         current_projection_generation_ !=
             input.provenance.connection_generation) {
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+      if (limits_.performance_baseline != nullptr) {
+        limits_.performance_baseline->record_t3(
+            input.trace, performance::T3Disposition::InternalFailure);
+      }
+#endif
       transition_to_fault(FaultReason::InternalError, std::nullopt);
       return;
     }
     auto adapted = adapter::adapt_depth_update(
         input.update, projection_.numeric_spec(), expected_identity_);
     if (std::holds_alternative<adapter::AdapterError>(adapted)) {
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+      if (limits_.performance_baseline != nullptr) {
+        limits_.performance_baseline->record_t3(
+            input.trace, performance::T3Disposition::AdapterFailure);
+      }
+#endif
       transition_to_fault(FaultReason::AdapterError,
                           std::get<adapter::AdapterError>(adapted));
       return;
@@ -1056,17 +1114,34 @@ private:
     const auto applied =
         std::get<adapter::AdaptedDepthBatch>(adapted).apply_to(projection_);
     if (std::holds_alternative<adapter::AdapterError>(applied)) {
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+      if (limits_.performance_baseline != nullptr) {
+        limits_.performance_baseline->record_t3(
+            input.trace, performance::T3Disposition::AdapterFailure);
+      }
+#endif
       transition_to_fault(FaultReason::AdapterError,
                           std::get<adapter::AdapterError>(applied));
       return;
     }
     const auto apply_result = std::get<core::ApplyResult>(applied);
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    if (limits_.performance_baseline != nullptr) {
+      limits_.performance_baseline->record_t3(
+          input.trace, measurement_disposition(apply_result.disposition));
+    }
+#endif
     {
       std::lock_guard lock{mutex_};
       observation_.last_apply = apply_result;
     }
     if (apply_result.disposition == core::ApplyDisposition::Applied) {
-      publish_applied_update(input.update, input.provenance);
+      publish_applied_update(input.update, input.provenance
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+                             ,
+                             input.trace
+#endif
+      );
     } else if (apply_result.disposition ==
                core::ApplyDisposition::GapDetected) {
       terminalize_active_subscribers(
@@ -1078,7 +1153,12 @@ private:
   }
 
   void publish_applied_update(const market::DepthUpdate &update,
-                              SourceProvenance provenance) {
+                              SourceProvenance provenance
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+                              ,
+                              performance::TraceToken trace
+#endif
+  ) {
     if (publication_shutdown_completed_) {
       return;
     }
@@ -1105,7 +1185,12 @@ private:
     }
     for (const auto &subscriber : subscribers_) {
       const auto admitted = subscriber->admit_update(
-          shared_update, provenance.connection_generation, *published_at);
+          shared_update, provenance.connection_generation, *published_at
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+          ,
+          trace
+#endif
+      );
       if (admitted == g7::OrdinaryAdmissionResult::AllocationFailure) {
         transition_to_fault(FaultReason::InternalError, std::nullopt);
         return;
@@ -1302,9 +1387,23 @@ AdmissionResult MarketRuntime::submit_depth_update(market::DepthUpdate update) {
 AdmissionResult
 MarketRuntime::submit_depth_update(market::DepthUpdate update,
                                    SourceProvenance provenance) {
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  return submit_depth_update(std::move(update), std::move(provenance), {});
+#else
   return impl_->submit(
       DepthUpdateInput{std::move(update), std::move(provenance)});
+#endif
 }
+
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+AdmissionResult
+MarketRuntime::submit_depth_update(market::DepthUpdate update,
+                                   SourceProvenance provenance,
+                                   performance::TraceToken trace) {
+  return impl_->submit(
+      DepthUpdateInput{std::move(update), std::move(provenance), trace});
+}
+#endif
 
 AdmissionResult
 MarketRuntime::submit_snapshot(market::ExchangeDepthSnapshot snapshot) {

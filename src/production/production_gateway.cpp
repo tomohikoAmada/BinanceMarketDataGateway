@@ -162,6 +162,19 @@ const std::string &ProductionGateway::gateway_instance_id() const noexcept {
   return gateway_instance_id_;
 }
 
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+bool ProductionGateway::write_performance_baseline(std::ostream &output) const {
+  {
+    std::lock_guard state_lock{state_mutex_};
+    if (state_ != GatewayState::Stopped) {
+      return false;
+    }
+  }
+  products_.write_performance_baseline(output);
+  return output.good();
+}
+#endif
+
 g11::TwoProductRuntime &ProductionGateway::products_for_testing() noexcept {
   return products_;
 }

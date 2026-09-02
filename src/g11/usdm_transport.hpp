@@ -39,6 +39,9 @@ inline constexpr UsdMTransportRoutes kUsdMTransportRoutes{
 
 struct UsdMTransportOptions final {
   g4::NormalizedEventSink normalized_event_sink;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  std::shared_ptr<performance::ProductTraceBuffer> performance_baseline;
+#endif
 };
 
 class UsdMTransport final {

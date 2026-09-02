@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <iosfwd>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -86,6 +87,9 @@ public:
 
   [[nodiscard]] GatewayObservation observe();
   [[nodiscard]] const std::string &gateway_instance_id() const noexcept;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  [[nodiscard]] bool write_performance_baseline(std::ostream &output) const;
+#endif
 
   // Focused deterministic tests inject data/failures through the already
   // accepted G11 owner boundaries. The production executable does not use

@@ -39,15 +39,27 @@ normalized_event_stream(const g4::NormalizedMarketEvent &event) noexcept {
   return common_wire::STREAM_BOOK_TICKER;
 }
 
-EventSubscriberChannel::EventSubscriberChannel(std::string subscription_id,
-                                               std::string gateway_instance_id,
-                                               common_wire::Stream stream,
-                                               std::uint64_t source_generation,
-                                               std::size_t ordinary_capacity)
+EventSubscriberChannel::EventSubscriberChannel(
+    std::string subscription_id, std::string gateway_instance_id,
+    common_wire::Stream stream, std::uint64_t source_generation,
+    std::size_t ordinary_capacity
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    ,
+    std::uint64_t subscriber_ordinal,
+    performance::ProductTraceBuffer *performance_baseline
+#endif
+    )
     : subscription_id_{std::move(subscription_id)},
       gateway_instance_id_{std::move(gateway_instance_id)}, stream_{stream},
       source_generation_{source_generation},
-      ordinary_capacity_{ordinary_capacity}, ordinary_ring_(ordinary_capacity) {
+      ordinary_capacity_{ordinary_capacity}, ordinary_ring_(ordinary_capacity)
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+      ,
+      subscriber_ordinal_{subscriber_ordinal},
+      performance_baseline_{performance_baseline},
+      delivery_ring_(ordinary_capacity)
+#endif
+{
   if (ordinary_capacity_ == 0U || source_generation_ == 0U ||
       stream_ == common_wire::STREAM_UNSPECIFIED) {
     throw std::invalid_argument{"invalid event subscriber channel"};
@@ -74,7 +86,12 @@ bool EventSubscriberChannel::stage_accepted(
 
 EventAdmissionResult EventSubscriberChannel::admit_event(
     const std::shared_ptr<const g4::NormalizedMarketEvent> &event,
-    EventPublicationTime published_at) noexcept {
+    EventPublicationTime published_at
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    ,
+    performance::TraceToken trace
+#endif
+    ) noexcept {
   std::lock_guard lock{mutex_};
   if (state_ != EventChannelState::Active) {
     return EventAdmissionResult::Inactive;
@@ -83,6 +100,12 @@ EventAdmissionResult EventSubscriberChannel::admit_event(
     return EventAdmissionResult::AllocationFailure;
   }
   if (size_ == ordinary_capacity_) {
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    if (performance_baseline_ != nullptr) {
+      performance_baseline_->record_delivery_full(
+          performance::DeliveryKind::Event);
+    }
+#endif
     terminal_.emplace(EventTerminalDescriptor{
         next_session_sequence_, source_generation_, published_at,
         common_wire::CONSUMER_GAP_REASON_SLOW_CONSUMER,
@@ -104,6 +127,15 @@ EventAdmissionResult EventSubscriberChannel::admit_event(
     if (!ring_push_locked(std::move(record))) {
       return EventAdmissionResult::AllocationFailure;
     }
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    if (performance_baseline_ != nullptr &&
+        trace.owner == performance_baseline_) {
+      const auto tail = (head_ + size_ - 1U) % ordinary_capacity_;
+      delivery_ring_[tail] = performance_baseline_->record_t4(
+          trace, performance::DeliveryKind::Event, subscriber_ordinal_,
+          next_session_sequence_, size_);
+    }
+#endif
   } catch (...) {
     return EventAdmissionResult::AllocationFailure;
   }
@@ -146,10 +178,21 @@ PeekedEventPublication EventSubscriberChannel::peek() const {
     return {};
   }
   if (size_ != 0U) {
-    return {ordinary_ring_[head_], std::nullopt};
+    return {ordinary_ring_[head_], std::nullopt
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+            ,
+            delivery_ring_[head_]
+#endif
+    };
   }
   if (terminal_.has_value()) {
-    return {nullptr, terminal_};
+    return {nullptr,
+            terminal_
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+            ,
+            {}
+#endif
+    };
   }
   return {};
 }
@@ -253,6 +296,9 @@ bool EventSubscriberChannel::ring_push_locked(
 
 void EventSubscriberChannel::ring_pop_locked() noexcept {
   ordinary_ring_[head_].reset();
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  delivery_ring_[head_] = {};
+#endif
   head_ = (head_ + 1U) % ordinary_capacity_;
   --size_;
 }
@@ -264,11 +310,21 @@ void EventSubscriberChannel::clear_from_writer_locked() noexcept {
   terminal_.reset();
 }
 
-EventPublication::EventPublication(std::string gateway_instance_id,
-                                   g3::RuntimeClock clock,
-                                   EventPublicationLimits limits)
+EventPublication::EventPublication(
+    std::string gateway_instance_id, g3::RuntimeClock clock,
+    EventPublicationLimits limits
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    ,
+    std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
+#endif
+    )
     : gateway_instance_id_{std::move(gateway_instance_id)},
-      clock_{std::move(clock)}, limits_{limits} {
+      clock_{std::move(clock)}, limits_{limits}
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+      ,
+      performance_baseline_{std::move(performance_baseline)}
+#endif
+{
   if (gateway_instance_id_.empty() || !clock_ ||
       limits_.maximum_active_subscriptions == 0U ||
       limits_.maximum_active_subscriptions > kMaximumActiveEventSubscriptions ||
@@ -361,7 +417,12 @@ EventPublication::admit(const ValidatedEventSubscription &subscription) {
   try {
     auto channel = std::make_shared<EventSubscriberChannel>(
         subscription_id, gateway_instance_id_, subscription.stream,
-        *source_generation_, limits_.ordinary_queue_capacity);
+        *source_generation_, limits_.ordinary_queue_capacity
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+        ,
+        next_subscription_id_, performance_baseline_.get()
+#endif
+    );
     auto accepted = make_accepted_record(subscription, subscription_id,
                                          gateway_instance_id_, *published_at);
     if (!channel->stage_accepted(std::move(accepted))) {
@@ -377,7 +438,12 @@ EventPublication::admit(const ValidatedEventSubscription &subscription) {
 
 EventPublishResult EventPublication::publish(
     const std::shared_ptr<const g4::NormalizedMarketEvent> &event,
-    std::uint64_t generation) noexcept {
+    std::uint64_t generation
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    ,
+    performance::TraceToken trace
+#endif
+    ) noexcept {
   if (event == nullptr) {
     return EventPublishResult::InvariantFailure;
   }
@@ -401,7 +467,12 @@ EventPublishResult EventPublication::publish(
         channel->source_generation() != generation) {
       continue;
     }
-    const auto result = channel->admit_event(event, *published_at);
+    const auto result = channel->admit_event(event, *published_at
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+                                             ,
+                                             trace
+#endif
+    );
     if (result == EventAdmissionResult::AllocationFailure) {
       return EventPublishResult::InvariantFailure;
     }
