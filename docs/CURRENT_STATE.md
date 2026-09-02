@@ -17,6 +17,26 @@ G9=COMPLETE
 G10=COMPLETE
 G11=COMPLETE
 POST_G11_RUNTIME_PRODUCTIZATION=COMPLETE
+LIVE_BRANCH=main
+LATEST_BEHAVIOR_CHANGING_IMPLEMENTATION_MERGE=72961563912f08541b311c09f77f49af1e03fd41
+IMPLEMENTATION_TREE_AT_THAT_MERGE=0c4df08b5bc06e49ab7f66d180b1aeea3f471d47
+RECOVERY_OBSERVABILITY=COMPLETE
+RECOVERY_OBSERVABILITY_MERGE=72961563912f08541b311c09f77f49af1e03fd41
+RECOVERY_FAILURE_HISTORY_CAPACITY=7
+PERFORMANCE_INSTRUMENTATION=COMPLETE
+POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS
+ORIGINAL_INTERNAL_LATENCY_QUEUE_DELIVERY_EVIDENCE_REUSABLE=YES_REUSABLE_WITH_SCOPE_NOTE
+SPOT_RECOVERY_ROOT_CAUSE=NOT_YET_CLASSIFIED
+CLASH_ROOT_CAUSE_ESTABLISHED=NO
+NEXT_PROJECT_ACTION=BOUNDED_JAPAN_VPS_RECOVERY_CAUSE_OBSERVATION
+NEXT_LIVE_PERFORMANCE_RUN_AUTHORIZED=NO
+OLD_A_PROCESS_EXACT_NEW_HEAD_AUTHORITY=NO
+OLD_B_PROCESS_EXACT_NEW_HEAD_AUTHORITY=NO
+OLD_CONTAMINATED_C_PROCESS_REUSABLE=NO
+EVENTUAL_PERFORMANCE_BRIDGE=SHORT_EXACT_HEAD_PROCESS_A_B_C_COMPANION_AFTER_RECOVERY_ADJUDICATION
+BASELINE_MILESTONE_COMPLETE=NO
+PRODUCTION_QUALIFICATION_AUTHORIZED=NO
+ANY_PERFORMANCE_OPTIMIZATION_AUTHORIZED=NO
 G2_SYNTHETIC_HOST_IMPLEMENTED=YES
 G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES
 CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES
@@ -72,7 +92,7 @@ MAX_G9_ACTIVE_TOTAL=16
 MAX_ACTIVE_TRANSPORTS_PER_MARKET=1
 MAX_ACTIVE_TRANSPORTS_TOTAL=2
 STATUS_MARKET_COUNT=2
-NEXT=POST_G11_PERFORMANCE_BASELINE
+NEXT=BOUNDED_JAPAN_VPS_RECOVERY_CAUSE_OBSERVATION
 FIRST_RUNNABLE=G2
 FIRST_REAL_NETWORK=G4
 FIRST_GRPC=G7
@@ -166,8 +186,10 @@ multi-symbol support. G8 is
 an acceptance/test composition and opt-in CMake wiring; it does not add a
 production runtime layer. G4 remains independently usable as a one-shot transport.
 Post-G11 runtime productization is complete: the ordinary `bmd-gatewayd` is
-the installed long-running two-product daemon. `NEXT=POST_G11_PERFORMANCE_BASELINE`;
-no G12 or further numbered Gateway milestone is currently frozen.
+the installed long-running two-product daemon.
+`POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS`; the next project action is
+`BOUNDED_JAPAN_VPS_RECOVERY_CAUSE_OBSERVATION`. No G12 or further numbered
+Gateway milestone is currently frozen.
 G5 recovers transport, snapshot, malformed-input, bounded-admission, bootstrap
 overflow, `serverShutdown`, and Projection `NeedsResync` failures through a new
 connection and the same conservative bootstrap path. Internal adapter,
@@ -204,6 +226,33 @@ terminal slot per channel, and eight pending admissions. Existing sessions
 terminate and resubscribe rather than cross G5/G6 full Projection rebootstrap.
 G9 event subscribers are separately bounded at eight active sessions, 64 ordinary
 records, and one terminal control slot per session.
+
+## Recovery observability
+
+PR #25 merged the bounded internal recovery-failure diagnostics into the
+production daemon. Each product retains the newest seven classified unplanned
+failure cuts in chronological order, including generation, `RecoveryCause`,
+optional `NetworkError`, runtime fault, adapter diagnostic, and
+Projection/gap summary. The history is captured after source quiescence and
+before reset/rebootstrap destroys attempt evidence. It does not change recovery
+policy, retry/backoff, generation/reset semantics, subscribers, public
+protobuf, Contracts, Projection, G10 status, or normal message processing.
+
+Successful later Live recovery may clear the current terminal error while the
+historical failure cuts remain. Startup failure and orderly shutdown may emit
+bounded one-line diagnostics; an empty history emits none.
+
+## Current investigation and next action
+
+The original internal latency, queue, and delivery evidence remains reusable
+with a scope note because PR #25 does not change the normal market-message
+processing path. Old process CPU/RSS A/B measurements are historical context,
+not exact-current-main authority; contaminated Row C evidence is not reusable.
+The intermittent Spot pattern remains descriptive only and the recovery root
+cause is not yet classified. The next action is a bounded Japan VPS
+recovery-cause observation campaign, not a performance benchmark. No such
+campaign has run yet. Performance, production qualification, and optimization
+remain unauthorized.
 
 ## Known nonblocking follow-up findings
 

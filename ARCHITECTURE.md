@@ -5,6 +5,8 @@ The detailed, ordered development authority is
 responsibility split, the current foundation/G11 boundary, and the accepted
 post-G11 production host.
 
+Current project phase: `POST_G11_PERFORMANCE_BASELINE_IN_PROGRESS`.
+
 ## Dependency direction
 
 ```text
@@ -72,6 +74,11 @@ handlers before stopping and destroying the product graph. After startup, a
 terminal failure of one market remains isolated from the other market and the
 gRPC server.
 
+At startup failure and orderly shutdown, the daemon may emit bounded one-line
+records for the retained recovery-failure history. A clean process with no
+retained cuts emits no recovery-failure records. No second telemetry subsystem
+is introduced.
+
 `BMD_GATEWAY_BUILD_PRODUCTION_DAEMON` is explicit opt-in and OFF by default.
 When enabled, it composes the full accepted G11 graph and builds/installs the
 real `bmd-gatewayd`. The minimal Foundation build does not include the
@@ -115,6 +122,15 @@ bounded backoff. HTTP 429/418 honor strict `Retry-After`; terminal internal and
 HTTP 4xx classifications fail closed. Recovery always returns through fresh
 WebSocket buffering and REST depth bootstrap. G5 adds no continuity predicate or
 second sequence classifier.
+
+`RecoveryCoordinator` also retains product-local bounded internal diagnostics
+for classified unplanned recovery failures: seven fixed-capacity cuts in
+chronological order, captured after source quiescence and before
+reset/rebootstrap destroys attempt evidence. Each cut retains the generation,
+recovery cause, optional exact network error, runtime fault, adapter diagnostic,
+and Projection/gap summary. This is diagnostic history only: it changes no
+recovery policy, retry/backoff, generation/reset semantics, subscriber behavior,
+or public wire surface.
 
 The opt-in G6 target adds the 23h50m project planned-rotation policy to that same
 coordinator. A generation's injected monotonic birth timestamp is captured
@@ -302,6 +318,7 @@ Projection continuity ownership. G7 adds bounded publication and the first
 synchronous gRPC business flow without adding a second classifier or order book.
 G8 closes the Projection M6 real-Gateway order-book integration acceptance.
 G11 closes the accepted USD-M/two-market runtime boundary, and post-G11
-productization closes the production daemon host boundary.
-`NEXT=POST_G11_PERFORMANCE_BASELINE`; no additional numbered Gateway milestone
-is currently frozen.
+productization closes the production daemon host boundary. The current phase is
+`POST_G11_PERFORMANCE_BASELINE_IN_PROGRESS`; the next project action is bounded
+recovery-cause observation. No additional numbered Gateway milestone is
+currently frozen.

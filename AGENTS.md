@@ -22,9 +22,15 @@ assembled from existing runtime, recovery, and publication observations.
 G11 adds the fixed two-product USD-M and multi-market runtime boundary.
 POST_G11_RUNTIME_PRODUCTIZATION is complete: the ordinary `bmd-gatewayd` is
 the long-running fixed two-product production daemon.
-`NEXT=POST_G11_PERFORMANCE_BASELINE`; no G12 or further numbered Gateway
-milestone is currently frozen.
+`POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS`; no G12 or further numbered
+Gateway milestone is currently frozen.
 Keep Phase A small and independently buildable.
+
+The current phase is `POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS`.
+`RECOVERY_OBSERVABILITY=COMPLETE`; PR #25 merged the bounded product-local
+recovery-failure diagnostic history. The next project action is
+`BOUNDED_JAPAN_VPS_RECOVERY_CAUSE_OBSERVATION`. It is an observation campaign,
+not a performance benchmark. `NEXT_LIVE_PERFORMANCE_RUN_AUTHORIZED=NO`.
 
 This repository contains the G0 foundation, frozen G1 proof, deterministic G2
 synthetic host, serialized G3 runtime, real G4 Spot transport, G5 recovery, and
@@ -32,8 +38,8 @@ G6 rotation, G7 publication/gRPC, G8 integration acceptance, G9
 `SubscribeEvents`, G10 `GetGatewayStatus`, and the G11 fixed two-product
 USD-M/multi-market runtime; future work follows the milestone authority.
 The post-G11 productization is complete and future work follows the milestone
-authority. `NEXT=POST_G11_PERFORMANCE_BASELINE`; no G12 or further numbered
-Gateway milestone is currently frozen.
+authority. `POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS`; no G12 or further
+numbered Gateway milestone is currently frozen.
 Keep Phase A small and independently buildable.
 
 The ordinary `bmd-gatewayd` is now the long-running production daemon for
@@ -107,11 +113,21 @@ semantics.
 
 ## Post-G11 performance phase
 
-The next phase is `POST_G11_PERFORMANCE_BASELINE`: measure before optimizing
-the actual merged production daemon. Do not authorize lock-free redesign, busy
+The current phase is `POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS`: measure before
+optimizing the actual merged production daemon. The recovery-cause observation
+is the next project action and must be independently adjudicated before any
+new process performance run. Do not authorize lock-free redesign, busy
 polling, CPU affinity, a custom allocator, a generic worker pool, or a combined
 multi-symbol transport without measured evidence and separate architecture
 authority.
+
+The original internal latency, queue, and delivery evidence is reusable with a
+scope note because the recovery-observability change does not alter the normal
+market-message path. Old process A/B CPU/RSS evidence is not exact-current-main
+authority; contaminated Row C evidence is not reusable. If later authorized,
+the minimum process bridge is one short exact-head A/B/C companion. Do not run a
+new 1200-second internal repeat or an OFF rerun merely for symmetry. Do not
+speculatively optimize Projection or rewrite its integration boundary.
 
 ## Phase A implementation rules
 
