@@ -1,5 +1,9 @@
 #pragma once
 
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#include "performance_baseline.hpp"
+#endif
+
 #include <binance_market_data/common/v1/enums.pb.h>
 #include <binance_market_data/gateway/v1/gateway_messages.pb.h>
 #include <binance_market_data/market/v1/market_events.pb.h>
@@ -109,6 +113,9 @@ enum class OrdinaryAdmissionResult : std::uint8_t {
 struct PeekedPublication final {
   std::shared_ptr<const PublicationRecord> ordinary;
   std::optional<TerminalDescriptor> terminal;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  performance::DeliveryToken delivery;
+#endif
 
   [[nodiscard]] bool has_value() const noexcept {
     return ordinary != nullptr || terminal.has_value();
@@ -128,9 +135,15 @@ enum class AcknowledgeResult : std::uint8_t {
 // owner is the only producer. Exactly one RPC handler is the consumer/writer.
 class SubscriberChannel final {
 public:
-  SubscriberChannel(std::string subscription_id,
-                    std::string gateway_instance_id,
-                    std::size_t ordinary_capacity);
+  SubscriberChannel(
+      std::string subscription_id, std::string gateway_instance_id,
+      std::size_t ordinary_capacity
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+      ,
+      std::uint64_t subscriber_ordinal = 0U,
+      performance::ProductTraceBuffer *performance_baseline = nullptr
+#endif
+  );
 
   SubscriberChannel(const SubscriberChannel &) = delete;
   SubscriberChannel &operator=(const SubscriberChannel &) = delete;
@@ -146,7 +159,12 @@ public:
   [[nodiscard]] OrdinaryAdmissionResult
   admit_update(const std::shared_ptr<const market_wire::DepthUpdate> &update,
                std::optional<std::uint64_t> connection_generation,
-               PublicationTime published_at) noexcept;
+               PublicationTime published_at
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+               ,
+               performance::TraceToken trace = {}
+#endif
+               ) noexcept;
 
   // First terminal reason wins. The terminal descriptor has its own reserved
   // slot and never consumes ordinary ring capacity.
@@ -184,6 +202,11 @@ private:
   const std::string gateway_instance_id_;
   const std::size_t ordinary_capacity_;
   std::vector<std::shared_ptr<const PublicationRecord>> ordinary_ring_;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  const std::uint64_t subscriber_ordinal_;
+  performance::ProductTraceBuffer *const performance_baseline_;
+  std::vector<performance::DeliveryToken> delivery_ring_;
+#endif
 
   mutable std::mutex mutex_;
   mutable std::condition_variable condition_;

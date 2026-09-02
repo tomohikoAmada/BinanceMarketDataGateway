@@ -26,6 +26,9 @@ namespace g5 = binance_market_data::gateway::g5;
 namespace g6 = binance_market_data::gateway::g6;
 namespace g7 = binance_market_data::gateway::g7;
 namespace g9 = binance_market_data::gateway::g9;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+namespace performance = binance_market_data::gateway::performance;
+#endif
 namespace wire = binance_market_data::gateway::v1;
 
 inline constexpr auto kRpcDeadline = std::chrono::seconds{60};
@@ -236,9 +239,18 @@ int main() {
       g4::SpotTransportProfile::G9CombinedEvents;
   recovery_options.transport.normalized_event_sink =
       [&publication](std::shared_ptr<const g4::NormalizedSpotEvent> event,
-                     std::uint64_t generation) {
-        return publication.publish(event, generation) ==
-                       g9::EventPublishResult::InvariantFailure
+                     std::uint64_t generation
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+                     ,
+                     performance::TraceToken trace
+#endif
+      ) {
+        return publication.publish(event, generation
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+                                   ,
+                                   trace
+#endif
+                                   ) == g9::EventPublishResult::InvariantFailure
                    ? g4::NormalizedEventSinkResult::InvariantFailure
                    : g4::NormalizedEventSinkResult::Continue;
       };

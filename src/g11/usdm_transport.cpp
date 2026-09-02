@@ -26,6 +26,9 @@ make_usdm_transport_config(UsdMTransportOptions options) {
                        ? g4::BinanceTransportProfile::DepthWithEvents
                        : g4::BinanceTransportProfile::DepthOnly;
   config.normalized_event_sink = std::move(options.normalized_event_sink);
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  config.performance_baseline = std::move(options.performance_baseline);
+#endif
   config.depth_frame_parser = parse_usdm_depth_frame;
   config.depth_snapshot_parser = parse_usdm_depth_snapshot;
   return config;

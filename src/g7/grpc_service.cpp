@@ -669,6 +669,11 @@ grpc::Status OrderBookGrpcService::SubscribeOrderBook(
       return finalize(
           {grpc::StatusCode::INTERNAL, "subscriber writer test seam failed"});
     }
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    if (write_succeeded && publication.delivery.valid()) {
+      publication.delivery.owner->record_t5(publication.delivery);
+    }
+#endif
     if (context->IsCancelled() || !write_succeeded) {
       return finalize(
           context->IsCancelled()
@@ -835,6 +840,11 @@ grpc::Status OrderBookGrpcService::SubscribeEvents(
       return finalize({grpc::StatusCode::INTERNAL,
                        "event subscriber writer test seam failed"});
     }
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    if (write_succeeded && publication.delivery.valid()) {
+      publication.delivery.owner->record_t5(publication.delivery);
+    }
+#endif
     if (context->IsCancelled() || !write_succeeded) {
       return finalize(
           context->IsCancelled()

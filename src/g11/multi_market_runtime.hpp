@@ -8,6 +8,8 @@
 #include "usdm_transport.hpp"
 
 #include <cstdint>
+#include <iosfwd>
+#include <memory>
 #include <string>
 
 namespace binance_market_data::gateway::g11 {
@@ -23,6 +25,9 @@ struct ProductRuntimeOptions final {
   g9::EventPublicationLimits event_limits{};
   g5::PlannedRotationPolicy planned_rotation{g6::production_policy()};
   g5::detail::RecoveryTestOptions recovery_test;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  performance::PerformanceBaselineLimits performance_baseline_limits{};
+#endif
 };
 
 // Owns exactly one single-product runtime graph.
@@ -46,9 +51,16 @@ public:
   [[nodiscard]] g3::MarketRuntime &runtime() noexcept;
   [[nodiscard]] g5::RecoveryCoordinator &recovery() noexcept;
   [[nodiscard]] g9::EventPublication &event_publication() noexcept;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  [[nodiscard]] const performance::ProductTraceBuffer &
+  performance_baseline() const noexcept;
+#endif
 
 private:
   const ProductKind kind_;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  std::shared_ptr<performance::ProductTraceBuffer> performance_baseline_;
+#endif
   g3::MarketRuntime runtime_;
   g9::EventPublication event_publication_;
   g5::RecoveryCoordinator recovery_;
@@ -85,6 +97,9 @@ public:
   [[nodiscard]] ProductRuntime &spot() noexcept;
   [[nodiscard]] ProductRuntime &usdm() noexcept;
   [[nodiscard]] const MarketRuntimeRegistry &registry() const noexcept;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  void write_performance_baseline(std::ostream &output) const;
+#endif
 
 private:
   ProductRuntime spot_;

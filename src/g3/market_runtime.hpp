@@ -2,6 +2,9 @@
 
 #include "order_book_publication.hpp"
 #include "source_provenance.hpp"
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#include "performance_baseline.hpp"
+#endif
 
 #include <binance_market_data/market/v1/market_events.pb.h>
 #include <binance_market_data/projection/v1/projection_state/book_projection.hpp>
@@ -36,6 +39,9 @@ struct RuntimeLimits final {
   std::size_t ingress_capacity;
   std::size_t bootstrap_capacity;
   g7::PublicationLimits publication;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  std::shared_ptr<performance::ProductTraceBuffer> performance_baseline;
+#endif
 };
 
 struct ClockSample final {
@@ -234,6 +240,11 @@ public:
   [[nodiscard]] AdmissionResult submit_depth_update(market::DepthUpdate update);
   [[nodiscard]] AdmissionResult
   submit_depth_update(market::DepthUpdate update, SourceProvenance provenance);
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  [[nodiscard]] AdmissionResult
+  submit_depth_update(market::DepthUpdate update, SourceProvenance provenance,
+                      performance::TraceToken trace);
+#endif
   [[nodiscard]] AdmissionResult
   submit_snapshot(market::ExchangeDepthSnapshot snapshot);
   [[nodiscard]] AdmissionResult

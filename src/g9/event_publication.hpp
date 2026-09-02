@@ -1,6 +1,9 @@
 #pragma once
 
 #include "spot_protocol.hpp"
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#include "performance_baseline.hpp"
+#endif
 
 #include <binance_market_data/common/v1/enums.pb.h>
 #include <binance_market_data/gateway/v1/gateway_messages.pb.h>
@@ -92,6 +95,9 @@ enum class EventAdmissionResult : std::uint8_t {
 struct PeekedEventPublication final {
   std::shared_ptr<const EventPublicationRecord> ordinary;
   std::optional<EventTerminalDescriptor> terminal;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  performance::DeliveryToken delivery;
+#endif
 
   [[nodiscard]] bool has_value() const noexcept {
     return ordinary != nullptr || terminal.has_value();
@@ -109,11 +115,16 @@ enum class EventAcknowledgeResult : std::uint8_t {
 
 class EventSubscriberChannel final {
 public:
-  EventSubscriberChannel(std::string subscription_id,
-                         std::string gateway_instance_id,
-                         common_wire::Stream stream,
-                         std::uint64_t source_generation,
-                         std::size_t ordinary_capacity);
+  EventSubscriberChannel(
+      std::string subscription_id, std::string gateway_instance_id,
+      common_wire::Stream stream, std::uint64_t source_generation,
+      std::size_t ordinary_capacity
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+      ,
+      std::uint64_t subscriber_ordinal = 0U,
+      performance::ProductTraceBuffer *performance_baseline = nullptr
+#endif
+  );
 
   EventSubscriberChannel(const EventSubscriberChannel &) = delete;
   EventSubscriberChannel &operator=(const EventSubscriberChannel &) = delete;
@@ -122,7 +133,12 @@ public:
       std::shared_ptr<const EventPublicationRecord> accepted) noexcept;
   [[nodiscard]] EventAdmissionResult
   admit_event(const std::shared_ptr<const g4::NormalizedMarketEvent> &event,
-              EventPublicationTime published_at) noexcept;
+              EventPublicationTime published_at
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+              ,
+              performance::TraceToken trace = {}
+#endif
+              ) noexcept;
   [[nodiscard]] bool
   terminalize_replacement(EventPublicationTime published_at) noexcept;
   [[nodiscard]] bool close_unavailable() noexcept;
@@ -155,6 +171,11 @@ private:
   const std::uint64_t source_generation_;
   const std::size_t ordinary_capacity_;
   std::vector<std::shared_ptr<const EventPublicationRecord>> ordinary_ring_;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  const std::uint64_t subscriber_ordinal_;
+  performance::ProductTraceBuffer *const performance_baseline_;
+  std::vector<performance::DeliveryToken> delivery_ring_;
+#endif
 
   mutable std::mutex mutex_;
   mutable std::condition_variable condition_;
@@ -203,8 +224,14 @@ struct EventPublicationObservation final {
 
 class EventPublication final {
 public:
-  EventPublication(std::string gateway_instance_id, g3::RuntimeClock clock,
-                   EventPublicationLimits limits = {});
+  EventPublication(
+      std::string gateway_instance_id, g3::RuntimeClock clock,
+      EventPublicationLimits limits = {}
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+      ,
+      std::shared_ptr<performance::ProductTraceBuffer> performance_baseline = {}
+#endif
+  );
 
   EventPublication(const EventPublication &) = delete;
   EventPublication &operator=(const EventPublication &) = delete;
@@ -220,7 +247,12 @@ public:
   admit(const ValidatedEventSubscription &subscription);
   [[nodiscard]] EventPublishResult
   publish(const std::shared_ptr<const g4::NormalizedMarketEvent> &event,
-          std::uint64_t generation) noexcept;
+          std::uint64_t generation
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+          ,
+          performance::TraceToken trace = {}
+#endif
+          ) noexcept;
   void remove(const std::shared_ptr<EventSubscriberChannel> &channel) noexcept;
   void shutdown() noexcept;
 
@@ -236,6 +268,9 @@ private:
   const std::string gateway_instance_id_;
   g3::RuntimeClock clock_;
   const EventPublicationLimits limits_;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  const std::shared_ptr<performance::ProductTraceBuffer> performance_baseline_;
+#endif
 
   mutable std::mutex mutex_;
   EventSourceState source_state_{EventSourceState::Closed};

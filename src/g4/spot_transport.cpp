@@ -71,6 +71,9 @@ spot_transport_config(SpotTransportOptions options) {
   config.user_agent = "bmd-gateway-g4/1.0.0";
   config.profile = options.profile;
   config.normalized_event_sink = std::move(options.normalized_event_sink);
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  config.performance_baseline = std::move(options.performance_baseline);
+#endif
   config.depth_frame_parser = parse_depth_frame;
   config.combined_frame_parser = parse_combined_event_frame;
   config.depth_snapshot_parser = parse_depth_snapshot;
@@ -1267,6 +1270,9 @@ private:
         return false;
       }
       auto update = std::get<market::DepthUpdate>(std::move(parsed));
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+      const auto trace = begin_depth_trace(received_at);
+#endif
       {
         std::lock_guard lock{mutex_};
         observation_.last_event_utc_ns = received_at.utc_ns;
@@ -1283,11 +1289,21 @@ private:
                            false);
           return false;
         }
-        if (!publish_normalized_event(event)) {
+        if (!publish_normalized_event(event
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+                                      ,
+                                      trace
+#endif
+                                      )) {
           return false;
         }
       }
-      return submit_depth_update(std::move(update));
+      return submit_depth_update(std::move(update)
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+                                     ,
+                                 trace
+#endif
+      );
     }
 
     auto parsed = config_.combined_frame_parser(payload, received_at,
@@ -1305,6 +1321,13 @@ private:
       observation_.last_event_utc_ns = received_at.utc_ns;
     }
     condition_.notify_all();
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    performance::TraceToken trace;
+    if (std::holds_alternative<market::DepthUpdate>(
+            std::get<NormalizedMarketEvent>(parsed))) {
+      trace = begin_depth_trace(received_at);
+    }
+#endif
     std::shared_ptr<const NormalizedMarketEvent> event;
     try {
       event = std::make_shared<const NormalizedMarketEvent>(
@@ -1316,11 +1339,21 @@ private:
                        false);
       return false;
     }
-    if (!publish_normalized_event(event)) {
+    if (!publish_normalized_event(event
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+                                  ,
+                                  trace
+#endif
+                                  )) {
       return false;
     }
     if (const auto *depth = std::get_if<market::DepthUpdate>(event.get())) {
-      return submit_depth_update(*depth);
+      return submit_depth_update(*depth
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+                                 ,
+                                 trace
+#endif
+      );
     }
     {
       std::lock_guard lock{mutex_};
@@ -1335,11 +1368,20 @@ private:
   }
 
   [[nodiscard]] bool publish_normalized_event(
-      const std::shared_ptr<const NormalizedMarketEvent> &event) {
+      const std::shared_ptr<const NormalizedMarketEvent> &event
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+      ,
+      performance::TraceToken trace
+#endif
+  ) {
     NormalizedEventSinkResult sink_result{};
     try {
-      sink_result =
-          config_.normalized_event_sink(event, connection_generation_);
+      sink_result = config_.normalized_event_sink(event, connection_generation_
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+                                                  ,
+                                                  trace
+#endif
+      );
     } catch (...) {
       sink_result = NormalizedEventSinkResult::InvariantFailure;
     }
@@ -1370,9 +1412,19 @@ private:
                      false);
   }
 
-  [[nodiscard]] bool submit_depth_update(market::DepthUpdate update) {
+  [[nodiscard]] bool submit_depth_update(market::DepthUpdate update
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+                                         ,
+                                         performance::TraceToken trace
+#endif
+  ) {
     const auto admitted = runtime_.submit_depth_update(
-        std::move(update), g3::SourceProvenance{connection_generation_});
+        std::move(update), g3::SourceProvenance{connection_generation_}
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+        ,
+        trace
+#endif
+    );
     if (admitted != g3::AdmissionResult::Accepted) {
       terminal_failure(network_error(NetworkErrorCode::RuntimeAdmission,
                                      "websocket-runtime-admission",
@@ -1387,6 +1439,18 @@ private:
     condition_.notify_all();
     return true;
   }
+
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  [[nodiscard]] performance::TraceToken
+  begin_depth_trace(g3::ClockSample received_at) noexcept {
+    if (config_.performance_baseline == nullptr) {
+      return {};
+    }
+    return config_.performance_baseline->begin_trace(
+        received_at.monotonic_ns,
+        config_.performance_baseline->sample_monotonic());
+  }
+#endif
 
   void receive_depth_response(AsyncHttpsGet::Result result) {
     if (const auto *failure = std::get_if<NetworkError>(&result)) {

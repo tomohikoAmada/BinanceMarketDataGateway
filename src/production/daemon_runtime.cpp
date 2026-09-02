@@ -4,10 +4,39 @@
 
 #include <csignal>
 #include <cstdlib>
+#include <fstream>
 #include <ostream>
+#include <string>
 #include <utility>
 
 namespace binance_market_data::gateway::production {
+
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+namespace {
+
+[[nodiscard]] bool export_performance_baseline(ProductionGateway &gateway,
+                                               std::ostream &errors) {
+  const auto *path = std::getenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT");
+  if (path == nullptr || *path == '\0') {
+    errors << "performance_baseline_export=skipped reason=output-not-set\n";
+    return true;
+  }
+  std::ofstream artifact{path, std::ios::out | std::ios::trunc};
+  if (!artifact || !gateway.write_performance_baseline(artifact)) {
+    errors << "performance_baseline_export=failed path=" << path << '\n';
+    return false;
+  }
+  artifact.flush();
+  if (!artifact) {
+    errors << "performance_baseline_export=failed path=" << path << '\n';
+    return false;
+  }
+  errors << "performance_baseline_export=complete path=" << path << '\n';
+  return true;
+}
+
+} // namespace
+#endif
 
 int run_production_service(const DaemonConfig &config,
                            const ProductionMetadata &metadata,
@@ -26,6 +55,9 @@ int run_production_service(const DaemonConfig &config,
       gateway.start([&signals] { return signals.requested(); });
   if (started != StartResult::Serving) {
     const auto final = gateway.observe();
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    const auto exported = export_performance_baseline(gateway, errors);
+#endif
     if (started == StartResult::StopRequested) {
       output << "gateway_state=stopped startup_result=" << to_string(started)
              << " contexts=" << final.tracked_contexts << " transports="
@@ -42,7 +74,12 @@ int run_production_service(const DaemonConfig &config,
                      ? "yes"
                      : "no")
              << '\n';
-      return EXIT_SUCCESS;
+      return
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+          exported ? EXIT_SUCCESS : EXIT_FAILURE;
+#else
+          EXIT_SUCCESS;
+#endif
     }
     errors << "gateway_start=failed reason=" << to_string(started) << '\n';
     return EXIT_FAILURE;
@@ -67,6 +104,10 @@ int run_production_service(const DaemonConfig &config,
   gateway.request_stop();
   gateway.stop();
 
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  const auto exported = export_performance_baseline(gateway, errors);
+#endif
+
   const auto final = gateway.observe();
   output << "gateway_state=stopped contexts=" << final.tracked_contexts
          << " transports="
@@ -83,7 +124,12 @@ int run_production_service(const DaemonConfig &config,
                  : "no")
          << '\n'
          << std::flush;
-  return received == -1 ? EXIT_FAILURE : EXIT_SUCCESS;
+  return received == -1
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+                 || !exported
+#endif
+             ? EXIT_FAILURE
+             : EXIT_SUCCESS;
 }
 
 } // namespace binance_market_data::gateway::production

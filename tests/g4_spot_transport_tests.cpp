@@ -449,9 +449,12 @@ int main() {
   g4::SpotTransportOptions combined_options;
   combined_options.profile = g4::SpotTransportProfile::G9CombinedEvents;
   combined_options.normalized_event_sink =
-      [](std::shared_ptr<const g4::NormalizedSpotEvent>, std::uint64_t) {
-        return g4::NormalizedEventSinkResult::Continue;
-      };
+      [](std::shared_ptr<const g4::NormalizedSpotEvent>, std::uint64_t
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+         ,
+         binance_market_data::gateway::performance::TraceToken
+#endif
+      ) { return g4::NormalizedEventSinkResult::Continue; };
   g4::SpotTransport combined_transport{runtime, clock, 3U,
                                        std::move(combined_options)};
 

@@ -104,9 +104,12 @@ void event_profile_is_closed_depth_only_publication() {
       g4::detail::TransportStopCutTestMode::CleanCancellation;
   g11::UsdMTransportOptions options;
   options.normalized_event_sink =
-      [](std::shared_ptr<const g4::NormalizedMarketEvent>, std::uint64_t) {
-        return g4::NormalizedEventSinkResult::Continue;
-      };
+      [](std::shared_ptr<const g4::NormalizedMarketEvent>, std::uint64_t
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+         ,
+         binance_market_data::gateway::performance::TraceToken
+#endif
+      ) { return g4::NormalizedEventSinkResult::Continue; };
   g11::UsdMTransport transport{runtime, clock, 2U, std::move(options),
                                std::move(test_options)};
   REQUIRE(transport.start() == g4::TransportStartResult::Started);

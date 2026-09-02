@@ -71,11 +71,19 @@ enum class NormalizedEventSinkResult : std::uint8_t {
 };
 
 using NormalizedEventSink = std::function<NormalizedEventSinkResult(
-    std::shared_ptr<const NormalizedMarketEvent>, std::uint64_t)>;
+    std::shared_ptr<const NormalizedMarketEvent>, std::uint64_t
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    ,
+    performance::TraceToken
+#endif
+    )>;
 
 struct SpotTransportOptions final {
   SpotTransportProfile profile{SpotTransportProfile::DepthOnly};
   NormalizedEventSink normalized_event_sink;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  std::shared_ptr<performance::ProductTraceBuffer> performance_baseline;
+#endif
 };
 
 struct TransportObservation final {
@@ -152,6 +160,9 @@ struct BinanceTransportConfig final {
   DepthFrameParser depth_frame_parser;
   CombinedFrameParser combined_frame_parser;
   DepthSnapshotParser depth_snapshot_parser;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  std::shared_ptr<performance::ProductTraceBuffer> performance_baseline;
+#endif
 };
 
 class BinanceTransport final {
