@@ -1,8 +1,11 @@
 # Gateway milestones
 
-This is the authoritative development plan for the Gateway. The current
-implementation authority is Gateway `main` at
-`04505b69529e33db8a94b48cd7a216678721cf33`; the related upstream authorities
+This is the authoritative development plan for the Gateway. The latest
+behavior-changing implementation merge is
+`72961563912f08541b311c09f77f49af1e03fd41`, with implementation tree
+`0c4df08b5bc06e49ab7f66d180b1aeea3f471d47`. Live `main` is the branch
+authority; docs-only alignment commits may advance its SHA without changing
+implementation semantics. The related upstream authorities
 for the current productization closure are Contracts
 `d194b663827185feb773515aa63467290780c670` and Projection
 `8621499cbeba0e42c409572ee3f209c32691698b`.
@@ -123,7 +126,9 @@ runtime framework.
 - `STARTUP_ROLLBACK=IMPLEMENTED`.
 - `POST_START_SINGLE_MARKET_FAILURE_ISOLATION=IMPLEMENTED`.
 - `INSTALLABLE_PRODUCTION_DAEMON=YES`.
-- `NEXT=POST_G11_PERFORMANCE_BASELINE`.
+- `POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS`.
+- `RECOVERY_OBSERVABILITY=COMPLETE`.
+- `NEXT=BOUNDED_JAPAN_VPS_RECOVERY_CAUSE_OBSERVATION`.
 
 Gateway `main` currently has typed configuration, synchronous Foundation
 lifecycle, the historical/minimal Foundation CLI seam, Foundation tests,
@@ -156,6 +161,26 @@ after startup, one market may fail without globally stopping the other market
 or the gRPC server. Shutdown drains/cancels server handlers before product
 owner destruction. This productization preserves the accepted G11 semantics
 and adds no new market-data semantics.
+
+## Recovery observability
+
+**STATUS=COMPLETE**
+
+PR #25 merged the independently approved recovery-observability change. The
+production daemon now retains a product-local, fixed-capacity history of the
+newest seven classified unplanned recovery-failure cuts in chronological order.
+Each retained cut includes the connection generation, `RecoveryCause`, optional
+exact `NetworkError`, runtime `FaultReason`, adapter diagnostic, and
+Projection/gap summary. Capture occurs after source quiescence and before
+reset/rebootstrap destroys the attempt evidence. Startup failure and orderly
+shutdown may emit bounded one-line diagnostic records; an empty history emits
+none.
+
+This change does not alter recovery policy, retry budget, backoff, generation or
+reset semantics, subscriber behavior, public protobuf, Contracts, Projection,
+G10 status, or the normal per-message market-data path. A later successful Live
+generation may clear the current terminal error while retained historical cuts
+remain.
 
 ## G0 — Repository Foundation
 
@@ -207,7 +232,7 @@ The normal graph is verified by
 `scripts/gw-preq-002-verify-graph.py`; its invariant is one Contracts message
 lineage plus Projection, with no Contracts gRPC package and no `grpc` package.
 
-`NEXT=G8`.
+Historical acceptance context: `NEXT=G8`.
 
 ## G2 — Deterministic Synthetic Host
 
@@ -341,7 +366,7 @@ recovery cut, distinct generation 2 transport identity, fresh verified TLS
 WebSocket and REST bootstrap, Synchronized/Live Projection, a later real update,
 and owner-domain snapshot capture.
 
-`NEXT=G8`.
+Historical acceptance context: `NEXT=G8`.
 
 ## G6 — Planned Connection Rotation
 
@@ -376,7 +401,7 @@ completed, and distinct generation 2 freshly bootstrapped, reached Live, applied
 a later update, and produced an owner-domain snapshot with zero planned-rotation
 recovery attempts.
 
-`NEXT=G8`.
+Historical acceptance context: `NEXT=G8`.
 
 ## G7 — Bounded Publication + SubscribeOrderBook + gRPC
 
@@ -461,7 +486,7 @@ for Accepted/Snapshot/first post-snapshot real update, frozen generation 1 on th
 snapshot and update, client disconnect cleanup, subscriber removal, and joined
 gRPC/Gateway shutdown.
 
-`NEXT=G8`.
+Historical acceptance context: `NEXT=G8`.
 
 ## G8 — Projection M6 Integration Acceptance
 
@@ -498,7 +523,7 @@ G8 acceptance covers:
 G8 added acceptance/test composition and opt-in CMake wiring. It did not modify
 G3-G7 production source and did not implement G9, G10, or G11.
 
-`NEXT=G10`.
+Historical acceptance context: `NEXT=G10`.
 
 ## G9 — SubscribeEvents
 
@@ -611,8 +636,9 @@ shutdown. The first real-run false negative was an acceptance-harness
 expectation error for G7 controlled recovery, not a production G11 failure;
 production semantics did not change between runs.
 
-`NEXT=POST_G11_PERFORMANCE_BASELINE`. No additional numbered Gateway milestone
-is currently frozen. The existing deferred product surface remains deferred.
+Historical milestone context: `NEXT=POST_G11_PERFORMANCE_BASELINE`. No
+additional numbered Gateway milestone is currently frozen. The existing
+deferred product surface remains deferred.
 
 ## POST_G11_RUNTIME_PRODUCTIZATION
 
@@ -677,7 +703,7 @@ Known nonblocking findings remain:
 
 ## POST_G11_PERFORMANCE_BASELINE
 
-**STATUS=NOT_STARTED**
+**STATUS=IN_PROGRESS**
 
 Purpose: measure before optimizing the actual merged production daemon.
 
@@ -686,9 +712,24 @@ parsing/adaptation, T2 owner dequeue, T3 Projection Apply, T4 subscriber
 enqueue, and T5 gRPC delivery completion observation; report p50/p95/p99/max,
 queue occupancy, CPU, RSS, and Spot versus USD-M contention.
 
-No optimization is authorized merely by adding this future section. After the
-baseline, `POST_G11_PRODUCTION_QUALIFICATION` remains future/planned and not
-started. No numbered G12 is currently frozen.
+Instrumentation is complete and the original internal A/B/C campaign has been
+run and independently reviewed. Its clean generation-stable latency, queue,
+delivery, and overflow evidence remains reusable with a scope note. A clean
+exact-current-head whole-process A/B/C process measurement remains incomplete;
+old A/B CPU/RSS measurements are historical context only, and contaminated Row
+C evidence is not reusable.
+
+The intermittent Spot recovery pattern remains descriptive only. The recovery
+observability gap is fixed by PR #25, but the recovery root cause is not yet
+classified. The next gate is bounded recovery-cause observation, not a
+performance benchmark. No performance run is currently authorized. After
+recovery adjudication, the eventual minimum process bridge is one short exact
+current-head A/B/C companion on the same machine where practical. A new 1200
+second internal repeat and an OFF rerun are not currently required.
+
+`POST_G11_PRODUCTION_QUALIFICATION` remains future/planned and not started.
+Production qualification and optimization remain unauthorized. No numbered G12
+is currently frozen.
 
 ## Deferred product surface
 
