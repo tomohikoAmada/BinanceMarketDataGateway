@@ -5,7 +5,9 @@ The detailed, ordered development authority is
 responsibility split, the current foundation/G11 boundary, and the accepted
 post-G11 production host.
 
-Current project phase: `POST_G11_PERFORMANCE_BASELINE_IN_PROGRESS`.
+Current project state: `POST_G11_PERFORMANCE_BASELINE=COMPLETE`.
+Production Qualification and optimization are not authorized; no further
+numbered Gateway milestone is frozen.
 
 ## Dependency direction
 
@@ -318,7 +320,9 @@ Projection continuity ownership. G7 adds bounded publication and the first
 synchronous gRPC business flow without adding a second classifier or order book.
 G8 closes the Projection M6 real-Gateway order-book integration acceptance.
 G11 closes the accepted USD-M/two-market runtime boundary, and post-G11
-productization closes the production daemon host boundary. The current phase is
-`POST_G11_PERFORMANCE_BASELINE_IN_PROGRESS`; the next project action is bounded
-recovery-cause observation. No additional numbered Gateway milestone is
-currently frozen.
+productization closes the production daemon host boundary. Recovery
+observability, the bounded recovery-observation campaign, and the accepted
+post-G11 performance baseline are complete. The baseline is descriptive
+evidence rather than a hard SLA, capacity guarantee, or infinite-duration RSS
+claim. Production Qualification and optimization are not authorized, and no
+additional numbered Gateway milestone is currently frozen.

@@ -24,19 +24,32 @@ RECOVERY_OBSERVABILITY=COMPLETE
 RECOVERY_OBSERVABILITY_MERGE=72961563912f08541b311c09f77f49af1e03fd41
 RECOVERY_FAILURE_HISTORY_CAPACITY=7
 PERFORMANCE_INSTRUMENTATION=COMPLETE
-POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS
+RECOVERY_OBSERVATION_CAMPAIGN=COMPLETE
+TOTAL_VALID_RECOVERY_OBSERVATION_SECONDS=3600
+POST_READY_TARGET_SPOT_RECOVERY_REPRODUCED=NO
+HISTORICAL_SPOT_ROOT_CAUSE=NOT_ESTABLISHED
+RCO03_AUTHORIZED=NO
+RECOVERY_OBSERVATION_BUDGET=EXHAUSTED
+BOUNDED_UNCERTAINTY_RETAINED=YES
+PERF01=COMPLETE
+POST_G11_PERFORMANCE_BASELINE=COMPLETE
 ORIGINAL_INTERNAL_LATENCY_QUEUE_DELIVERY_EVIDENCE_REUSABLE=YES_REUSABLE_WITH_SCOPE_NOTE
-SPOT_RECOVERY_ROOT_CAUSE=NOT_YET_CLASSIFIED
+PERF01_VALID_SECONDS_PER_ROW=300
+PERF01_ROWS=A_B_C
+PERF01_UNPLANNED_RECOVERY_DURING_CREDIT=NO
+PERF01_HOST_CONTEXT_VALID=YES
+PERF01_ORDERLY_SHUTDOWN=YES
 CLASH_ROOT_CAUSE_ESTABLISHED=NO
-NEXT_PROJECT_ACTION=BOUNDED_JAPAN_VPS_RECOVERY_CAUSE_OBSERVATION
 NEXT_LIVE_PERFORMANCE_RUN_AUTHORIZED=NO
 OLD_A_PROCESS_EXACT_NEW_HEAD_AUTHORITY=NO
 OLD_B_PROCESS_EXACT_NEW_HEAD_AUTHORITY=NO
 OLD_CONTAMINATED_C_PROCESS_REUSABLE=NO
-EVENTUAL_PERFORMANCE_BRIDGE=SHORT_EXACT_HEAD_PROCESS_A_B_C_COMPANION_AFTER_RECOVERY_ADJUDICATION
-BASELINE_MILESTONE_COMPLETE=NO
+EXACT_CURRENT_HEAD_PROCESS_A_B_C_COMPANION=COMPLETE
+BASELINE_MILESTONE_COMPLETE=YES
 PRODUCTION_QUALIFICATION_AUTHORIZED=NO
-ANY_PERFORMANCE_OPTIMIZATION_AUTHORIZED=NO
+OPTIMIZATION_AUTHORIZED=NO
+DOC_ALIGN_01=COMPLETE_ON_MERGE
+NEXT_TECHNICAL_STAGE=NOT_YET_FROZEN
 G2_SYNTHETIC_HOST_IMPLEMENTED=YES
 G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES
 CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES
@@ -75,7 +88,7 @@ EVENT_TERMINAL_CONTROL_CAPACITY=1
 PENDING_ADMISSION_CAPACITY=8
 IDLE_CLIENT_CANCELLATION_CHECK_INTERVAL=250ms
 MAKE_BEFORE_BREAK=NO
-GATEWAY_GRPC_BUSINESS_FLOW=SUBSCRIBE_ORDER_BOOK_AND_SUBSCRIBE_EVENTS_IMPLEMENTED
+GATEWAY_GRPC_BUSINESS_FLOW=SUBSCRIBE_ORDER_BOOK_SUBSCRIBE_EVENTS_GET_GATEWAY_STATUS_IMPLEMENTED
 RECORDER_DEPENDENCY=NO
 GW-PREQ-002=COMPLETE
 PROJECTION_M6_GATEWAY_INTEGRATION_ACCEPTANCE=COMPLETE
@@ -92,13 +105,25 @@ MAX_G9_ACTIVE_TOTAL=16
 MAX_ACTIVE_TRANSPORTS_PER_MARKET=1
 MAX_ACTIVE_TRANSPORTS_TOTAL=2
 STATUS_MARKET_COUNT=2
-NEXT=BOUNDED_JAPAN_VPS_RECOVERY_CAUSE_OBSERVATION
+NEXT=NOT_FROZEN
 FIRST_RUNNABLE=G2
 FIRST_REAL_NETWORK=G4
 FIRST_GRPC=G7
 PROJECTION_M6_START_GATE=G8
 FIRST_MULTI_MARKET=G11
 ```
+
+PERF-01 accepted resource summary (300 credited seconds per row):
+
+| Row | Workload | CPU mean | CPU p95 | RSS median | RSS max |
+|---|---|---:|---:|---:|---:|
+| A | dual market, no subscribers | 5.5684% | 6.9745% | 42.8516 MB | 43.0469 MB |
+| B | dual market, order book | 5.9757% | 7.9739% | 46.7012 MB | 47.0078 MB |
+| C | dual market, book plus depth events | 6.6056% | 7.9803% | 45.9219 MB | 46.1367 MB |
+
+These measurements are descriptive accepted baseline evidence. They are not a
+hard SLA, capacity guarantee, exact causal A→B→C subscriber-cost result,
+infinite-duration RSS proof, or zero-observer production truth.
 
 ## Post-G11 production daemon
 
@@ -187,9 +212,9 @@ an acceptance/test composition and opt-in CMake wiring; it does not add a
 production runtime layer. G4 remains independently usable as a one-shot transport.
 Post-G11 runtime productization is complete: the ordinary `bmd-gatewayd` is
 the installed long-running two-product daemon.
-`POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS`; the next project action is
-`BOUNDED_JAPAN_VPS_RECOVERY_CAUSE_OBSERVATION`. No G12 or further numbered
-Gateway milestone is currently frozen.
+`POST_G11_PERFORMANCE_BASELINE=COMPLETE`; the bounded recovery-observation
+campaign is complete. No G12 or further numbered Gateway milestone is currently
+frozen.
 G5 recovers transport, snapshot, malformed-input, bounded-admission, bootstrap
 overflow, `serverShutdown`, and Projection `NeedsResync` failures through a new
 connection and the same conservative bootstrap path. Internal adapter,
@@ -242,17 +267,27 @@ Successful later Live recovery may clear the current terminal error while the
 historical failure cuts remain. Startup failure and orderly shutdown may emit
 bounded one-line diagnostics; an empty history emits none.
 
-## Current investigation and next action
+## Baseline closure and retained uncertainty
 
 The original internal latency, queue, and delivery evidence remains reusable
 with a scope note because PR #25 does not change the normal market-message
 processing path. Old process CPU/RSS A/B measurements are historical context,
 not exact-current-main authority; contaminated Row C evidence is not reusable.
-The intermittent Spot pattern remains descriptive only and the recovery root
-cause is not yet classified. The next action is a bounded Japan VPS
-recovery-cause observation campaign, not a performance benchmark. No such
-campaign has run yet. Performance, production qualification, and optimization
-remain unauthorized.
+The accepted recovery campaign comprised RCO-01 and RCO-02, each valid for
+1,800 seconds, for 3,600 valid observation seconds total. The post-ready Spot
+recovery target was not reproduced. RCO-02 retained one real Spot startup cut
+(generation 1, pre-serving, `NeedsResync`, classification E,
+`spot-bootstrap-forward-gap`), but historical post-ready causal equivalence was
+not established. Therefore `HISTORICAL_SPOT_ROOT_CAUSE=NOT_ESTABLISHED`, the
+observation budget is exhausted, bounded uncertainty is retained, and RCO-03 is
+not authorized.
+
+The accepted PERF-01 companion is complete. Its A/B/C CPU and RSS values are
+descriptive baseline evidence only; the original internal latency, queue, and
+delivery evidence remains reusable with its scope note. Production
+qualification and optimization remain unauthorized. No new live performance
+run is authorized or required by this closure; that is not a pending recovery
+adjudication.
 
 ## Known nonblocking follow-up findings
 
@@ -264,6 +299,10 @@ remain unauthorized.
   authenticated.
 - P2-3: SIGINT/SIGTERM cannot immediately cancel synchronous metadata HTTPS
   acquisition, although network stage deadlines make the delay bounded.
+- P2-4: the Contracts Gateway service declares `SubscribeMarketState`, while
+  the current Gateway production service does not implement that RPC. The
+  contract and implementation surfaces require future reconciliation before
+  formal product V1 contract acceptance; baseline closure is not blocked.
 
 These findings are nonblocking and are not claimed to be resolved.
 

@@ -22,15 +22,17 @@ assembled from existing runtime, recovery, and publication observations.
 G11 adds the fixed two-product USD-M and multi-market runtime boundary.
 POST_G11_RUNTIME_PRODUCTIZATION is complete: the ordinary `bmd-gatewayd` is
 the long-running fixed two-product production daemon.
-`POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS`; no G12 or further numbered
-Gateway milestone is currently frozen.
+`POST_G11_PERFORMANCE_BASELINE=COMPLETE`; no G12 or further numbered Gateway
+milestone is currently frozen.
 Keep Phase A small and independently buildable.
 
-The current phase is `POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS`.
 `RECOVERY_OBSERVABILITY=COMPLETE`; PR #25 merged the bounded product-local
-recovery-failure diagnostic history. The next project action is
-`BOUNDED_JAPAN_VPS_RECOVERY_CAUSE_OBSERVATION`. It is an observation campaign,
-not a performance benchmark. `NEXT_LIVE_PERFORMANCE_RUN_AUTHORIZED=NO`.
+recovery-failure diagnostic history. The bounded recovery-observation campaign
+is complete, and `POST_G11_PERFORMANCE_BASELINE=COMPLETE`. The accepted
+baseline is descriptive evidence, not a hard SLA or capacity guarantee.
+`PRODUCTION_QUALIFICATION_AUTHORIZED=NO` and
+`OPTIMIZATION_AUTHORIZED=NO`; no G12 or further numbered Gateway milestone is
+currently frozen.
 
 This repository contains the G0 foundation, frozen G1 proof, deterministic G2
 synthetic host, serialized G3 runtime, real G4 Spot transport, G5 recovery, and
@@ -38,8 +40,8 @@ G6 rotation, G7 publication/gRPC, G8 integration acceptance, G9
 `SubscribeEvents`, G10 `GetGatewayStatus`, and the G11 fixed two-product
 USD-M/multi-market runtime; future work follows the milestone authority.
 The post-G11 productization is complete and future work follows the milestone
-authority. `POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS`; no G12 or further
-numbered Gateway milestone is currently frozen.
+authority. Recovery observation and the post-G11 performance baseline are
+complete; no G12 or further numbered Gateway milestone is currently frozen.
 Keep Phase A small and independently buildable.
 
 The ordinary `bmd-gatewayd` is now the long-running production daemon for
@@ -113,13 +115,14 @@ semantics.
 
 ## Post-G11 performance phase
 
-The current phase is `POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS`: measure before
-optimizing the actual merged production daemon. The recovery-cause observation
-is the next project action and must be independently adjudicated before any
-new process performance run. Do not authorize lock-free redesign, busy
-polling, CPU affinity, a custom allocator, a generic worker pool, or a combined
-multi-symbol transport without measured evidence and separate architecture
-authority.
+`POST_G11_PERFORMANCE_BASELINE=COMPLETE`: the actual merged production daemon
+has accepted descriptive baseline evidence. Do not present it as a hard SLA,
+capacity guarantee, exact causal subscriber-cost decomposition,
+infinite-duration RSS proof, or zero-observer production truth. Do not
+authorize lock-free redesign, busy polling, CPU affinity, a custom allocator, a
+generic worker pool, or a combined multi-symbol transport without new measured
+evidence and separate architecture authority. Production Qualification and
+optimization remain unauthorized.
 
 The original internal latency, queue, and delivery evidence is reusable with a
 scope note because the recovery-observability change does not alter the normal
