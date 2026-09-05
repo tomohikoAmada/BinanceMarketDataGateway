@@ -7,12 +7,13 @@ campaign has been run and independently reviewed; its latency, queue, delivery,
 and overflow evidence remains reusable with a scope note because the recovery
 observability change does not alter the normal market-message processing path.
 
-`POST_G11_PERFORMANCE_BASELINE` remains `IN_PROGRESS`: exact-current-head
-whole-process CPU/RSS evidence is incomplete, and recovery-cause observation
-must precede any new performance process campaign. Old A/B process measurements
-are historical context rather than exact-current-main authority, and
-contaminated Row C process evidence is not reusable. Performance runs,
-production qualification, and optimization are not currently authorized.
+`POST_G11_PERFORMANCE_BASELINE` is `COMPLETE`. The final exact-current-head
+whole-process PERF-01 companion was accepted together with the original
+internal latency, queue, delivery, and overflow evidence. These measurements
+are descriptive baseline evidence, not a hard SLA, capacity guarantee, exact
+causal subscriber-cost decomposition, infinite-duration RSS proof, or
+zero-observer production truth. Production qualification and optimization are
+not authorized.
 
 ## Build and export
 

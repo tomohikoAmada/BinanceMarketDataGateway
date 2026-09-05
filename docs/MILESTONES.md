@@ -126,9 +126,10 @@ runtime framework.
 - `STARTUP_ROLLBACK=IMPLEMENTED`.
 - `POST_START_SINGLE_MARKET_FAILURE_ISOLATION=IMPLEMENTED`.
 - `INSTALLABLE_PRODUCTION_DAEMON=YES`.
-- `POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS`.
+- `POST_G11_PERFORMANCE_BASELINE=COMPLETE`.
 - `RECOVERY_OBSERVABILITY=COMPLETE`.
-- `NEXT=BOUNDED_JAPAN_VPS_RECOVERY_CAUSE_OBSERVATION`.
+- `NEXT=NOT_FROZEN`; no further numbered Gateway milestone is currently
+  frozen.
 
 Gateway `main` currently has typed configuration, synchronous Foundation
 lifecycle, the historical/minimal Foundation CLI seam, Foundation tests,
@@ -703,7 +704,7 @@ Known nonblocking findings remain:
 
 ## POST_G11_PERFORMANCE_BASELINE
 
-**STATUS=IN_PROGRESS**
+**STATUS=COMPLETE**
 
 Purpose: measure before optimizing the actual merged production daemon.
 
@@ -713,21 +714,30 @@ enqueue, and T5 gRPC delivery completion observation; report p50/p95/p99/max,
 queue occupancy, CPU, RSS, and Spot versus USD-M contention.
 
 Instrumentation is complete and the original internal A/B/C campaign has been
-run and independently reviewed. Its clean generation-stable latency, queue,
-delivery, and overflow evidence remains reusable with a scope note. A clean
-exact-current-head whole-process A/B/C process measurement remains incomplete;
-old A/B CPU/RSS measurements are historical context only, and contaminated Row
-C evidence is not reusable.
+run and independently reviewed. Its latency, queue, delivery, and overflow
+evidence remains reusable with a scope note. The final exact-current-head
+process companion PERF-01 is also accepted: rows A, B, and C each credit 300
+seconds, with valid host context, no unplanned recovery during credit, and
+orderly shutdown.
 
-The intermittent Spot recovery pattern remains descriptive only. The recovery
-observability gap is fixed by PR #25, but the recovery root cause is not yet
-classified. The next gate is bounded recovery-cause observation, not a
-performance benchmark. No performance run is currently authorized. After
-recovery adjudication, the eventual minimum process bridge is one short exact
-current-head A/B/C companion on the same machine where practical. A new 1200
-second internal repeat and an OFF rerun are not currently required.
+| Row | Workload | CPU mean | CPU p95 | RSS median | RSS max |
+|---|---|---:|---:|---:|---:|
+| A | dual market, no subscribers | 5.5684% | 6.9745% | 42.8516 MB | 43.0469 MB |
+| B | dual market, order book | 5.9757% | 7.9739% | 46.7012 MB | 47.0078 MB |
+| C | dual market, book plus depth events | 6.6056% | 7.9803% | 45.9219 MB | 46.1367 MB |
 
-`POST_G11_PRODUCTION_QUALIFICATION` remains future/planned and not started.
+These are descriptive accepted baseline measurements, not a hard SLA,
+capacity guarantee, exact causal A→B→C subscriber-cost result,
+infinite-duration RSS proof, or zero-observer production truth.
+
+The bounded recovery campaign is also closed. RCO-01 and RCO-02 are each valid
+for 1,800 seconds, totaling 3,600 valid observation seconds; the post-ready
+Spot recovery target was not reproduced. RCO-02 retained one pre-serving Spot
+startup cut, but historical post-ready causal equivalence was not established.
+The historical Spot root cause is therefore not established, bounded
+uncertainty is retained, and RCO-03 is not authorized.
+
+`POST_G11_PRODUCTION_QUALIFICATION` remains future/planned and not authorized.
 Production qualification and optimization remain unauthorized. No numbered G12
 is currently frozen.
 

@@ -16,10 +16,12 @@ transport and metadata acquisition, recovery and rotation orchestration,
 bounded publication, subscriber sessions, and gRPC. There is no arbitrary
 multi-symbol runtime.
 
-The current project phase is `POST_G11_PERFORMANCE_BASELINE=IN_PROGRESS`.
-Recovery observability is complete; the next project action is bounded
-recovery-cause observation. Performance runs, production qualification, and
-optimization are not currently authorized.
+The accepted current state is `POST_G11_PERFORMANCE_BASELINE=COMPLETE`.
+Recovery observability and the bounded recovery-observation campaign are
+complete. The accepted baseline is descriptive evidence, not a hard SLA,
+capacity guarantee, or Production Qualification. Production qualification and
+optimization are not authorized, and no further numbered Gateway milestone is
+frozen.
 
 ## Build and test
 
