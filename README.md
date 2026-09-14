@@ -21,16 +21,19 @@ Recovery observability and the bounded recovery-observation campaign are
 complete. The accepted baseline is descriptive evidence, not a hard SLA,
 capacity guarantee, or Production Qualification. It describes the fixed
 two-product G11 daemon and is not G12 multi-product capacity evidence.
-Production qualification and optimization are not authorized. G12 is now the
-frozen next development campaign; its implementation has not started and
-`G12-A` is next.
+Production qualification and optimization are not authorized. The G12 campaign
+is in progress: G12-A exact single-product parameterization is complete and
+G12-B is next. Current production remains the fixed G11 two-product daemon;
+G12-A's ETH support is reusable offline path capability, not current production
+composition.
 
 G12 targets a startup-configured finite set of Binance Spot and USD-M
 perpetual products, identified by exact `MarketKey` values, with one
 independent transport per product and a maximum of eight configured products.
 Its target configuration authority is `bmd-gatewayd --config PATH`; the current
-G11 daemon and its `--grpc-listen` seam remain unchanged until G12 is
-implemented. Contracts and Projection production changes are not required.
+G11 daemon and its `--grpc-listen` seam remain unchanged until later G12
+configuration and serving milestones are implemented. Contracts and Projection
+production changes are not required.
 
 ## Build and test
 

@@ -22,9 +22,8 @@ assembled from existing runtime, recovery, and publication observations.
 G11 adds the fixed two-product USD-M and multi-market runtime boundary.
 POST_G11_RUNTIME_PRODUCTIZATION is complete: the ordinary `bmd-gatewayd` is
 the long-running fixed two-product production daemon.
-`POST_G11_PERFORMANCE_BASELINE=COMPLETE`; G12 is the frozen authorized next
-development campaign, but its implementation is not started. `G12-A` is next.
-Keep Phase A small and independently buildable.
+`POST_G11_PERFORMANCE_BASELINE=COMPLETE`; G12 is in progress. `G12-A` is
+complete and `G12-B` is next. Keep Phase A small and independently buildable.
 
 `RECOVERY_OBSERVABILITY=COMPLETE`; PR #25 merged the bounded product-local
 recovery-failure diagnostic history. The bounded recovery-observation campaign
@@ -41,7 +40,7 @@ G6 rotation, G7 publication/gRPC, G8 integration acceptance, G9
 USD-M/multi-market runtime; future work follows the milestone authority.
 The post-G11 productization is complete and future work follows the milestone
 authority. Recovery observation and the post-G11 performance baseline are
-complete. Future work follows the frozen G12 authority, with `G12-A` next.
+complete. Future work follows the frozen G12 authority, with `G12-B` next.
 Keep Phase A small and independently buildable.
 
 The ordinary `bmd-gatewayd` is now the long-running production daemon for
@@ -53,11 +52,11 @@ handlers before destroying the product graph. The historical Foundation CLI
 remains a minimal Phase-A seam and is not the daemon's current production
 semantics.
 
-After this documentation authority merges, the coding sequence is
-`GW-PREQ-003=COMPLETE`, then `G12-A`, `G12-B`, `G12-C`, `G12-D`, and `G12-E`;
-`G12-A` is the next active milestone. The current production runtime remains
-the fixed two-product G11 daemon. G12 implementation is authorized, but
-Contracts and Projection production changes are not required. Use the existing
+The coding sequence is `GW-PREQ-003=COMPLETE`, then `G12-A` (complete),
+`G12-B`, `G12-C`, `G12-D`, and `G12-E`; `G12-B` is the next active milestone.
+The current production runtime remains the fixed two-product G11 daemon.
+G12 implementation is authorized, but Contracts and Projection production
+changes are not required. Use the existing
 exact `MarketKey = (venue, market, exact symbol)` authority, support at most
 eight configured products, keep the process-global tracked-context cap at 48,
 and give each `MarketKey` one independent transport. Do not treat the target
