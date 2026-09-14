@@ -22,8 +22,8 @@ assembled from existing runtime, recovery, and publication observations.
 G11 adds the fixed two-product USD-M and multi-market runtime boundary.
 POST_G11_RUNTIME_PRODUCTIZATION is complete: the ordinary `bmd-gatewayd` is
 the long-running fixed two-product production daemon.
-`POST_G11_PERFORMANCE_BASELINE=COMPLETE`; no G12 or further numbered Gateway
-milestone is currently frozen.
+`POST_G11_PERFORMANCE_BASELINE=COMPLETE`; G12 is the frozen authorized next
+development campaign, but its implementation is not started. `G12-A` is next.
 Keep Phase A small and independently buildable.
 
 `RECOVERY_OBSERVABILITY=COMPLETE`; PR #25 merged the bounded product-local
@@ -31,8 +31,8 @@ recovery-failure diagnostic history. The bounded recovery-observation campaign
 is complete, and `POST_G11_PERFORMANCE_BASELINE=COMPLETE`. The accepted
 baseline is descriptive evidence, not a hard SLA or capacity guarantee.
 `PRODUCTION_QUALIFICATION_AUTHORIZED=NO` and
-`OPTIMIZATION_AUTHORIZED=NO`; no G12 or further numbered Gateway milestone is
-currently frozen.
+`OPTIMIZATION_AUTHORIZED=NO`. The baseline describes the fixed two-product G11
+daemon and is not G12 multi-product capacity evidence.
 
 This repository contains the G0 foundation, frozen G1 proof, deterministic G2
 synthetic host, serialized G3 runtime, real G4 Spot transport, G5 recovery, and
@@ -41,7 +41,7 @@ G6 rotation, G7 publication/gRPC, G8 integration acceptance, G9
 USD-M/multi-market runtime; future work follows the milestone authority.
 The post-G11 productization is complete and future work follows the milestone
 authority. Recovery observation and the post-G11 performance baseline are
-complete; no G12 or further numbered Gateway milestone is currently frozen.
+complete. Future work follows the frozen G12 authority, with `G12-A` next.
 Keep Phase A small and independently buildable.
 
 The ordinary `bmd-gatewayd` is now the long-running production daemon for
@@ -52,6 +52,16 @@ completely, isolates a later single-market failure, and shuts down server
 handlers before destroying the product graph. The historical Foundation CLI
 remains a minimal Phase-A seam and is not the daemon's current production
 semantics.
+
+After this documentation authority merges, the coding sequence is
+`GW-PREQ-003=COMPLETE`, then `G12-A`, `G12-B`, `G12-C`, `G12-D`, and `G12-E`;
+`G12-A` is the next active milestone. The current production runtime remains
+the fixed two-product G11 daemon. G12 implementation is authorized, but
+Contracts and Projection production changes are not required. Use the existing
+exact `MarketKey = (venue, market, exact symbol)` authority, support at most
+eight configured products, keep the process-global tracked-context cap at 48,
+and give each `MarketKey` one independent transport. Do not treat the target
+architecture as already implemented or jump ahead of the active milestone.
 
 ## Boundaries
 
@@ -103,6 +113,14 @@ semantics.
   both products, G9 exposes only USD-M `DIFF_DEPTH`, status has two rows, and
   the G11-enabled streaming bound is 48 (the G11-off legacy bound is 24).
   There is no generic multi-market, event, plugin, or runtime framework.
+- G12 is the authorized configurable finite-product target, not current
+  behavior. It keeps exact `MarketKey` identity, permits 1..8 configured
+  products, uses one isolated `ProductRuntime` and independent transport per
+  `MarketKey`, and keeps the process-global tracked-context hard limit at 48.
+  Its startup-only authority is `bmd-gatewayd --config PATH`; all configured
+  products are required for initial readiness, and later failure is isolated
+  per product. Do not introduce shared WebSocket multiplexing, hot reload,
+  runtime add/remove, a second classifier, or a generic framework.
 - Post-G11 productization keeps exactly two production products, one runtime/
   Projection owner/recovery instance per product, a fixed two-entry registry,
   one transport per product and two total, and a 48-context streaming bound.
