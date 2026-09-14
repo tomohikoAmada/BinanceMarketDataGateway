@@ -132,7 +132,8 @@ required_event_schema(common_wire::Stream stream) noexcept {
 
 [[nodiscard]] RequestValidationResult validate_order_book_request_impl(
     const gateway_wire::OrderBookSubscriptionRequest &request,
-    const std::string &gateway_instance_id, bool allow_usdm) {
+    const std::string &gateway_instance_id, bool allow_usdm,
+    bool require_legacy_btcusdt) {
   const auto supported_market =
       request.market() == common_wire::MARKET_SPOT ||
       (allow_usdm && request.market() == common_wire::MARKET_USD_M_PERPETUAL);
@@ -142,7 +143,7 @@ required_event_schema(common_wire::Stream stream) noexcept {
   if (!identifier_safe(request.request_id()) ||
       request.schema_version() != kOrderBookRequestSchema ||
       request.venue() != common_wire::VENUE_BINANCE || !supported_market ||
-      request.symbol() != "BTCUSDT" ||
+      (require_legacy_btcusdt && request.symbol() != "BTCUSDT") ||
       request.initial_snapshot_mode() !=
           common_wire::INITIAL_SNAPSHOT_MODE_REQUIRED ||
       (request.has_depth_limit() && request.depth_limit() <= 0) ||
@@ -166,7 +167,8 @@ required_event_schema(common_wire::Stream stream) noexcept {
 #if defined(BMD_GATEWAY_G9_ENABLED)
 [[nodiscard]] EventRequestValidationResult validate_event_request_impl(
     const gateway_wire::EventSubscriptionRequest &request,
-    const std::string &gateway_instance_id, bool allow_usdm) {
+    const std::string &gateway_instance_id, bool allow_usdm,
+    bool require_legacy_btcusdt) {
   if (!identifier_safe(gateway_instance_id) ||
       !identifier_safe(request.request_id()) ||
       request.schema_version() != g9::kEventRequestSchema ||
@@ -185,8 +187,8 @@ required_event_schema(common_wire::Stream stream) noexcept {
       (spot && required_schema.has_value()) ||
       (usdm && selector.stream() == common_wire::STREAM_DIFF_DEPTH);
   if (selector.venue() != common_wire::VENUE_BINANCE ||
-      selector.symbol() != "BTCUSDT" || !supported_stream ||
-      !required_schema.has_value()) {
+      (require_legacy_btcusdt && selector.symbol() != "BTCUSDT") ||
+      !supported_stream || !required_schema.has_value()) {
     return RequestValidationError::InvalidArgument;
   }
   if (!contains_version(request.supported_payload_schema_versions(),
@@ -211,14 +213,16 @@ bool validate_gateway_status_request(
 RequestValidationResult validate_order_book_request(
     const gateway_wire::OrderBookSubscriptionRequest &request,
     const std::string &gateway_instance_id) {
-  return validate_order_book_request_impl(request, gateway_instance_id, false);
+  return validate_order_book_request_impl(request, gateway_instance_id, false,
+                                          true);
 }
 
 #if defined(BMD_GATEWAY_G11_ENABLED)
 RequestValidationResult validate_g11_order_book_request(
     const gateway_wire::OrderBookSubscriptionRequest &request,
     const std::string &gateway_instance_id) {
-  return validate_order_book_request_impl(request, gateway_instance_id, true);
+  return validate_order_book_request_impl(request, gateway_instance_id, true,
+                                          false);
 }
 #endif
 
@@ -294,14 +298,14 @@ materialize_stream_item(const SubscriberChannel &channel,
 EventRequestValidationResult
 validate_event_request(const gateway_wire::EventSubscriptionRequest &request,
                        const std::string &gateway_instance_id) {
-  return validate_event_request_impl(request, gateway_instance_id, false);
+  return validate_event_request_impl(request, gateway_instance_id, false, true);
 }
 
 #if defined(BMD_GATEWAY_G11_ENABLED)
 EventRequestValidationResult validate_g11_event_request(
     const gateway_wire::EventSubscriptionRequest &request,
     const std::string &gateway_instance_id) {
-  return validate_event_request_impl(request, gateway_instance_id, true);
+  return validate_event_request_impl(request, gateway_instance_id, true, false);
 }
 #endif
 

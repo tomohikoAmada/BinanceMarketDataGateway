@@ -34,6 +34,7 @@ namespace g3 = binance_market_data::gateway::g3;
 namespace g4 = binance_market_data::gateway::g4;
 namespace g7 = binance_market_data::gateway::g7;
 namespace g9 = binance_market_data::gateway::g9;
+namespace g11 = binance_market_data::gateway::g11;
 namespace market = binance_market_data::market::v1;
 namespace performance = binance_market_data::gateway::performance;
 namespace production = binance_market_data::gateway::production;
@@ -533,10 +534,13 @@ void production_shutdown_precedes_bounded_export() {
   const auto final = gateway.observe();
   REQUIRE_EQ(final.state, production::GatewayState::Stopped);
   REQUIRE_EQ(final.tracked_contexts, 0U);
-  REQUIRE(final.spot_runtime.owner_joined);
-  REQUIRE(final.usdm_runtime.owner_joined);
-  REQUIRE_EQ(final.spot_recovery.active_transport_count, 0U);
-  REQUIRE_EQ(final.usdm_recovery.active_transport_count, 0U);
+  REQUIRE_EQ(final.products.size(), 2U);
+  REQUIRE(final.products[0].key == g11::spot_btcusdt_key());
+  REQUIRE(final.products[1].key == g11::usdm_btcusdt_key());
+  REQUIRE(final.products[0].runtime.owner_joined);
+  REQUIRE(final.products[1].runtime.owner_joined);
+  REQUIRE_EQ(final.products[0].recovery.active_transport_count, 0U);
+  REQUIRE_EQ(final.products[1].recovery.active_transport_count, 0U);
 
   std::ostringstream artifact;
   REQUIRE(gateway.write_performance_baseline(artifact));

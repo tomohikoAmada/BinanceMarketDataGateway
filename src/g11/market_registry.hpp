@@ -5,12 +5,12 @@
 #include "market_runtime.hpp"
 #include "recovery_coordinator.hpp"
 
-#include <array>
 #include <cstddef>
+#include <vector>
 
 namespace binance_market_data::gateway::g11 {
 
-inline constexpr std::size_t kFixedMarketCount = 2U;
+inline constexpr std::size_t kMaximumConfiguredProducts = 8U;
 
 struct MarketServices final {
   MarketKey key;
@@ -19,20 +19,19 @@ struct MarketServices final {
   g9::EventPublication *event_publication{nullptr};
 };
 
-// A fixed non-owning view. ProductRuntime owners must outlive this registry.
+// A finite immutable non-owning view. ProductRuntime owners must outlive it.
 class MarketRuntimeRegistry final {
 public:
-  MarketRuntimeRegistry(MarketServices spot, MarketServices usdm);
+  explicit MarketRuntimeRegistry(std::vector<MarketServices> entries);
 
   MarketRuntimeRegistry(const MarketRuntimeRegistry &) = delete;
   MarketRuntimeRegistry &operator=(const MarketRuntimeRegistry &) = delete;
 
   [[nodiscard]] const MarketServices *find(const MarketKey &key) const noexcept;
-  [[nodiscard]] const std::array<MarketServices, kFixedMarketCount> &
-  entries() const noexcept;
+  [[nodiscard]] const std::vector<MarketServices> &entries() const noexcept;
 
 private:
-  std::array<MarketServices, kFixedMarketCount> entries_;
+  const std::vector<MarketServices> entries_;
 };
 
 } // namespace binance_market_data::gateway::g11

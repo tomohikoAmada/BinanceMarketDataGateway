@@ -82,14 +82,14 @@ void require_equal(const Actual &actual, const Expected &expected,
   };
 }
 
-[[nodiscard]] market::DepthUpdate make_update(common::Market product,
-                                              std::uint64_t generation,
-                                              std::uint64_t final_id) {
+[[nodiscard]] market::DepthUpdate
+make_update(common::Market product, std::uint64_t generation,
+            std::uint64_t final_id, std::string_view symbol = "BTCUSDT") {
   market::DepthUpdate update;
   auto *metadata = update.mutable_metadata();
   metadata->set_venue(common::VENUE_BINANCE);
   metadata->set_market(product);
-  metadata->set_symbol("BTCUSDT");
+  metadata->set_symbol(symbol);
   metadata->set_producer("gateway-g11-routing-test");
   metadata->set_producer_version("1.0.0");
   metadata->set_connection_id(
@@ -138,24 +138,34 @@ make_snapshot(common::Market product, std::uint64_t generation) {
   return snapshot;
 }
 
+[[nodiscard]] market::ExchangeDepthSnapshot
+make_snapshot(common::Market product, std::uint64_t generation,
+              std::string_view symbol) {
+  auto snapshot = make_snapshot(product, generation);
+  snapshot.set_symbol(symbol);
+  return snapshot;
+}
+
 class SyntheticLiveAttempt final : public g5::detail::RecoveryAttempt {
 public:
-  SyntheticLiveAttempt(g3::MarketRuntime &runtime, common::Market product,
+  SyntheticLiveAttempt(g3::MarketRuntime &runtime, g11::MarketKey key,
                        std::uint64_t generation)
-      : runtime_{runtime}, product_{product}, generation_{generation} {
+      : runtime_{runtime}, key_{std::move(key)}, generation_{generation} {
     observation_.connection_generation = generation_;
     observation_.connection_id =
-        (product_ == common::MARKET_SPOT ? "spot-attempt-g"
-                                         : "usdm-attempt-g") +
+        (key_.market == common::MARKET_SPOT ? "spot-attempt-g"
+                                            : "usdm-attempt-g") +
         std::to_string(generation_);
   }
 
   [[nodiscard]] g4::TransportStartResult start() override {
-    if (runtime_.submit_depth_update(make_update(product_, generation_, 101U),
-                                     g3::SourceProvenance{generation_}) !=
+    if (runtime_.submit_depth_update(
+            make_update(key_.market, generation_, 101U, key_.symbol),
+            g3::SourceProvenance{generation_}) !=
             g3::AdmissionResult::Accepted ||
-        runtime_.submit_snapshot(make_snapshot(product_, generation_),
-                                 g3::SourceProvenance{generation_}) !=
+        runtime_.submit_snapshot(
+            make_snapshot(key_.market, generation_, key_.symbol),
+            g3::SourceProvenance{generation_}) !=
             g3::AdmissionResult::Accepted) {
       return g4::TransportStartResult::Failed;
     }
@@ -183,7 +193,7 @@ public:
 
 private:
   g3::MarketRuntime &runtime_;
-  const common::Market product_;
+  const g11::MarketKey key_;
   const std::uint64_t generation_;
   mutable std::mutex mutex_;
   g4::TransportObservation observation_;
@@ -260,18 +270,25 @@ private:
 };
 
 [[nodiscard]] g5::detail::RecoveryTestOptions
-recovery_options(common::Market product) {
+recovery_options(g11::MarketKey key) {
   g5::detail::RecoveryTestOptions options;
-  options.attempt_factory = [product](g3::MarketRuntime &runtime,
-                                      const g3::RuntimeClock &,
-                                      std::uint64_t generation) {
-    return std::make_unique<SyntheticLiveAttempt>(runtime, product, generation);
+  options.attempt_factory = [key = std::move(key)](g3::MarketRuntime &runtime,
+                                                   const g3::RuntimeClock &,
+                                                   std::uint64_t generation) {
+    return std::make_unique<SyntheticLiveAttempt>(runtime, key, generation);
   };
   options.backoff_waiter = [](std::chrono::seconds,
                               std::stop_token stop_token) {
     return !stop_token.stop_requested();
   };
   return options;
+}
+
+[[nodiscard]] g5::detail::RecoveryTestOptions
+recovery_options(common::Market product) {
+  const auto key = product == common::MARKET_SPOT ? g11::spot_btcusdt_key()
+                                                  : g11::usdm_btcusdt_key();
+  return recovery_options(std::move(key));
 }
 
 [[nodiscard]] g11::TwoProductRuntimeOptions live_options() {
@@ -320,6 +337,14 @@ order_book_request(common::Market product, std::string request_id) {
   return request;
 }
 
+[[nodiscard]] wire::OrderBookSubscriptionRequest
+order_book_request(const g11::MarketKey &key, std::string request_id) {
+  auto request = order_book_request(key.market, std::move(request_id));
+  request.set_venue(key.venue);
+  request.set_symbol(key.symbol);
+  return request;
+}
+
 [[nodiscard]] const char *schema_for(common::Stream stream) {
   switch (stream) {
   case common::STREAM_DIFF_DEPTH:
@@ -353,18 +378,27 @@ event_request(common::Market product, common::Stream stream,
   return request;
 }
 
+[[nodiscard]] wire::EventSubscriptionRequest
+event_request(const g11::MarketKey &key, common::Stream stream,
+              std::string request_id) {
+  auto request = event_request(key.market, stream, std::move(request_id));
+  request.mutable_selectors(0)->set_venue(key.venue);
+  request.mutable_selectors(0)->set_symbol(key.symbol);
+  return request;
+}
+
 [[nodiscard]] std::shared_ptr<const g4::NormalizedMarketEvent>
 normalized_event(common::Market product, common::Stream stream,
-                 std::uint64_t id) {
+                 std::uint64_t id, std::string_view symbol = "BTCUSDT") {
   if (stream == common::STREAM_DIFF_DEPTH) {
     return std::make_shared<const g4::NormalizedMarketEvent>(
-        make_update(product, 1U, id));
+        make_update(product, 1U, id, symbol));
   }
   market::AggTrade trade;
   auto *metadata = trade.mutable_metadata();
   metadata->set_venue(common::VENUE_BINANCE);
   metadata->set_market(product);
-  metadata->set_symbol("BTCUSDT");
+  metadata->set_symbol(symbol);
   metadata->set_connection_id("spot-event-source");
   metadata->set_stream(stream);
   metadata->set_schema_version(g9::kAggTradeEventSchema);
@@ -414,7 +448,8 @@ direct_event_request(std::string request_id) {
 
 void require_order_book_head(
     grpc::ClientReader<wire::OrderBookStreamItem> &reader,
-    common::Market product, std::string_view expected_id) {
+    common::Market product, std::string_view expected_id,
+    std::string_view symbol = "BTCUSDT") {
   wire::OrderBookStreamItem item;
   REQUIRE(reader.Read(&item));
   REQUIRE(item.has_subscription_accepted());
@@ -422,7 +457,7 @@ void require_order_book_head(
   REQUIRE(reader.Read(&item));
   REQUIRE(item.has_snapshot());
   REQUIRE_EQ(item.snapshot().market(), product);
-  REQUIRE_EQ(item.snapshot().symbol(), "BTCUSDT");
+  REQUIRE_EQ(item.snapshot().symbol(), symbol);
   REQUIRE_EQ(item.delivery_metadata().subscription_id(), expected_id);
 }
 
@@ -473,6 +508,152 @@ void selector_matrix_and_registry() {
                           "usdm-reject-validation"),
             "gw-g11-routing")),
         g7::RequestValidationError::InvalidArgument);
+  }
+}
+
+void four_product_eth_routing_status_and_shutdown() {
+  const auto clock = test_clock();
+  const g11::MarketKey spot_btc = g11::spot_btcusdt_key();
+  const g11::MarketKey spot_eth{common::VENUE_BINANCE, common::MARKET_SPOT,
+                                "ETHUSDT"};
+  const g11::MarketKey usdm_btc = g11::usdm_btcusdt_key();
+  const g11::MarketKey usdm_eth{common::VENUE_BINANCE,
+                                common::MARKET_USD_M_PERPETUAL, "ETHUSDT"};
+  const auto specification = [](g11::MarketKey key) {
+    g11::ProductRuntimeOptions options;
+    options.recovery_test = recovery_options(key);
+    return g11::ProductRuntimeSpec{std::move(key), numeric_spec(),
+                                   std::move(options)};
+  };
+  std::vector<g11::ProductRuntimeSpec> scrambled;
+  scrambled.push_back(specification(usdm_eth));
+  scrambled.push_back(specification(spot_eth));
+  scrambled.push_back(specification(usdm_btc));
+  scrambled.push_back(specification(spot_btc));
+  g11::ConfiguredProductRuntimeSet products{std::move(scrambled), clock,
+                                            "gw-g12b-four"};
+  const auto starts = products.start();
+  REQUIRE_EQ(starts.size(), 4U);
+  for (const auto &start : starts) {
+    REQUIRE_EQ(start.result, g5::RecoveryStartResult::Started);
+    auto *owner = products.find(start.key);
+    REQUIRE(owner != nullptr);
+    REQUIRE_EQ(owner->recovery().wait_for_generation_live(1U).state,
+               g5::RecoveryState::Live);
+  }
+
+  const auto &entries = products.registry().entries();
+  REQUIRE_EQ(entries[0].key, spot_btc);
+  REQUIRE_EQ(entries[1].key, spot_eth);
+  REQUIRE_EQ(entries[2].key, usdm_btc);
+  REQUIRE_EQ(entries[3].key, usdm_eth);
+
+  g7::OrderBookGrpcServer server{products.registry(), clock, "gw-g12b-four"};
+  REQUIRE(server.start("127.0.0.1:0"));
+  REQUIRE_EQ(server.service().tracked_context_count(), 0U);
+  auto stub = make_stub(server.selected_port());
+
+  grpc::ClientContext spot_book_context;
+  grpc::ClientContext usdm_book_context;
+  grpc::ClientContext spot_event_context;
+  grpc::ClientContext usdm_event_context;
+  set_deadline(spot_book_context);
+  set_deadline(usdm_book_context);
+  set_deadline(spot_event_context);
+  set_deadline(usdm_event_context);
+  auto spot_book = stub->SubscribeOrderBook(
+      &spot_book_context, order_book_request(spot_eth, "spot-eth-book"));
+  auto usdm_book = stub->SubscribeOrderBook(
+      &usdm_book_context, order_book_request(usdm_eth, "usdm-eth-book"));
+  auto spot_event = stub->SubscribeEvents(
+      &spot_event_context,
+      event_request(spot_eth, common::STREAM_AGG_TRADE, "spot-eth-event"));
+  auto usdm_event = stub->SubscribeEvents(
+      &usdm_event_context,
+      event_request(usdm_eth, common::STREAM_DIFF_DEPTH, "usdm-eth-event"));
+  require_order_book_head(*spot_book, common::MARKET_SPOT, "ob-1", "ETHUSDT");
+  require_order_book_head(*usdm_book, common::MARKET_USD_M_PERPETUAL, "ob-1",
+                          "ETHUSDT");
+  require_event_head(*spot_event, "ev-1");
+  require_event_head(*usdm_event, "ev-1");
+
+  auto *spot_eth_owner = products.find(spot_eth);
+  auto *usdm_eth_owner = products.find(usdm_eth);
+  REQUIRE(spot_eth_owner != nullptr);
+  REQUIRE(usdm_eth_owner != nullptr);
+  REQUIRE_EQ(spot_eth_owner->event_publication().publish(
+                 normalized_event(common::MARKET_SPOT, common::STREAM_AGG_TRADE,
+                                  20U, "ETHUSDT"),
+                 1U),
+             g9::EventPublishResult::Published);
+  REQUIRE_EQ(usdm_eth_owner->event_publication().publish(
+                 normalized_event(common::MARKET_USD_M_PERPETUAL,
+                                  common::STREAM_DIFF_DEPTH, 102U, "ETHUSDT"),
+                 1U),
+             g9::EventPublishResult::Published);
+  wire::GatewayEventEnvelope event_item;
+  REQUIRE(spot_event->Read(&event_item));
+  REQUIRE(event_item.has_agg_trade());
+  REQUIRE_EQ(event_item.agg_trade().metadata().symbol(), "ETHUSDT");
+  REQUIRE(usdm_event->Read(&event_item));
+  REQUIRE(event_item.has_depth_update());
+  REQUIRE_EQ(event_item.depth_update().metadata().symbol(), "ETHUSDT");
+
+  grpc::ClientContext unsupported_context;
+  set_deadline(unsupported_context);
+  auto unsupported = stub->SubscribeEvents(
+      &unsupported_context,
+      event_request(usdm_eth, common::STREAM_AGG_TRADE, "usdm-eth-agg"));
+  REQUIRE(!unsupported->Read(&event_item));
+  REQUIRE_EQ(unsupported->Finish().error_code(),
+             grpc::StatusCode::INVALID_ARGUMENT);
+
+  const g11::MarketKey unconfigured{common::VENUE_BINANCE, common::MARKET_SPOT,
+                                    "ADAUSDT"};
+  grpc::ClientContext unconfigured_context;
+  set_deadline(unconfigured_context);
+  auto unconfigured_book = stub->SubscribeOrderBook(
+      &unconfigured_context,
+      order_book_request(unconfigured, "unconfigured-book"));
+  wire::OrderBookStreamItem book_item;
+  REQUIRE(!unconfigured_book->Read(&book_item));
+  REQUIRE_EQ(unconfigured_book->Finish().error_code(),
+             grpc::StatusCode::INVALID_ARGUMENT);
+  grpc::ClientContext unconfigured_event_context;
+  set_deadline(unconfigured_event_context);
+  auto unconfigured_event = stub->SubscribeEvents(
+      &unconfigured_event_context,
+      event_request(unconfigured, common::STREAM_DIFF_DEPTH,
+                    "unconfigured-event"));
+  REQUIRE(!unconfigured_event->Read(&event_item));
+  REQUIRE_EQ(unconfigured_event->Finish().error_code(),
+             grpc::StatusCode::INVALID_ARGUMENT);
+
+  wire::GatewayStatusRequest status_request;
+  status_request.set_request_id("four-product-status");
+  status_request.set_schema_version(g10::kStatusRequestSchema);
+  wire::GatewayStatusSnapshot status_snapshot;
+  grpc::ClientContext status_context;
+  const auto status =
+      stub->GetGatewayStatus(&status_context, status_request, &status_snapshot);
+  REQUIRE(status.ok());
+  REQUIRE_EQ(status_snapshot.markets_size(), 4);
+  for (std::size_t index = 0U; index < entries.size(); ++index) {
+    const auto wire_index = static_cast<int>(index);
+    REQUIRE_EQ(status_snapshot.markets(wire_index).venue(),
+               entries[index].key.venue);
+    REQUIRE_EQ(status_snapshot.markets(wire_index).market(),
+               entries[index].key.market);
+    REQUIRE_EQ(status_snapshot.markets(wire_index).symbol(),
+               entries[index].key.symbol);
+  }
+  REQUIRE_EQ(status_snapshot.total_active_subscriptions(), 4U);
+
+  server.shutdown();
+  REQUIRE_EQ(server.service().tracked_context_count(), 0U);
+  products.stop();
+  for (const auto &owner : products.products()) {
+    REQUIRE(owner->runtime().observe().owner_joined);
   }
 }
 
@@ -930,6 +1111,100 @@ void context_tracker_reaches_and_never_exceeds_48() {
   products.stop();
 }
 
+void four_product_context_limit_is_process_global() {
+  static_assert(g7::kMaximumGrpcTrackedContexts == 48U);
+  const auto clock = test_clock();
+  const std::vector<g11::MarketKey> keys{
+      {common::VENUE_BINANCE, common::MARKET_SPOT, "ETHUSDT"},
+      {common::VENUE_BINANCE, common::MARKET_USD_M_PERPETUAL, "ETHUSDT"},
+      g11::usdm_btcusdt_key(),
+      g11::spot_btcusdt_key()};
+  std::vector<g11::ProductRuntimeSpec> specifications;
+  for (const auto &key : keys) {
+    g11::ProductRuntimeOptions options;
+    options.recovery_test = recovery_options(key);
+    specifications.push_back({key, numeric_spec(), std::move(options)});
+  }
+  g11::ConfiguredProductRuntimeSet products{std::move(specifications), clock,
+                                            "gw-g12b-contexts"};
+  for (const auto &start : products.start()) {
+    REQUIRE_EQ(start.result, g5::RecoveryStartResult::Started);
+    REQUIRE_EQ(
+        products.find(start.key)->recovery().wait_for_generation_live(1U).state,
+        g5::RecoveryState::Live);
+  }
+  g7::OrderBookGrpcServer server{products.registry(), clock,
+                                 "gw-g12b-contexts"};
+  REQUIRE(server.start("127.0.0.1:0"));
+  auto stub = make_stub(server.selected_port());
+
+  std::vector<std::unique_ptr<grpc::ClientContext>> book_contexts;
+  std::vector<std::unique_ptr<grpc::ClientReader<wire::OrderBookStreamItem>>>
+      book_readers;
+  std::vector<std::unique_ptr<grpc::ClientContext>> event_contexts;
+  std::vector<std::unique_ptr<grpc::ClientReader<wire::GatewayEventEnvelope>>>
+      event_readers;
+  book_contexts.reserve(32U);
+  book_readers.reserve(32U);
+  event_contexts.reserve(16U);
+  event_readers.reserve(16U);
+  for (const auto &entry : products.registry().entries()) {
+    for (std::size_t index = 0U; index < 8U; ++index) {
+      book_contexts.push_back(std::make_unique<grpc::ClientContext>());
+      set_deadline(*book_contexts.back());
+      book_readers.push_back(stub->SubscribeOrderBook(
+          book_contexts.back().get(),
+          order_book_request(entry.key, "global-book-" + entry.key.symbol +
+                                            "-" +
+                                            std::to_string(entry.key.market) +
+                                            "-" + std::to_string(index))));
+      require_order_book_head(*book_readers.back(), entry.key.market,
+                              "ob-" + std::to_string(index + 1U),
+                              entry.key.symbol);
+    }
+    for (std::size_t index = 0U; index < 4U; ++index) {
+      event_contexts.push_back(std::make_unique<grpc::ClientContext>());
+      set_deadline(*event_contexts.back());
+      event_readers.push_back(stub->SubscribeEvents(
+          event_contexts.back().get(),
+          event_request(entry.key, common::STREAM_DIFF_DEPTH,
+                        "global-event-" + entry.key.symbol + "-" +
+                            std::to_string(entry.key.market) + "-" +
+                            std::to_string(index))));
+      require_event_head(*event_readers.back(),
+                         "ev-" + std::to_string(index + 1U));
+    }
+  }
+  REQUIRE_EQ(server.service().tracked_context_count(), 48U);
+
+  grpc::ClientContext overflow_context;
+  set_deadline(overflow_context);
+  auto overflow = stub->SubscribeEvents(
+      &overflow_context,
+      event_request(g11::spot_btcusdt_key(), common::STREAM_DIFF_DEPTH,
+                    "global-context-overflow"));
+  wire::GatewayEventEnvelope event_item;
+  REQUIRE(!overflow->Read(&event_item));
+  REQUIRE_EQ(overflow->Finish().error_code(),
+             grpc::StatusCode::RESOURCE_EXHAUSTED);
+  REQUIRE_EQ(server.service().tracked_context_count(), 48U);
+
+  server.shutdown();
+  REQUIRE_EQ(server.service().tracked_context_count(), 0U);
+  wire::OrderBookStreamItem book_item;
+  for (auto &reader : book_readers) {
+    while (reader->Read(&book_item)) {
+    }
+    static_cast<void>(reader->Finish());
+  }
+  for (auto &reader : event_readers) {
+    while (reader->Read(&event_item)) {
+    }
+    static_cast<void>(reader->Finish());
+  }
+  products.stop();
+}
+
 void adverse_global_shutdown_is_bounded_and_joined() {
   auto clock_gate = std::make_shared<ClockGate>();
   const g3::RuntimeClock clock = [clock_gate] { return clock_gate->sample(); };
@@ -1095,12 +1370,16 @@ void one_faulted_market_still_returns_two_status_rows() {
 int main() {
   const std::vector<std::pair<std::string_view, std::function<void()>>> tests{
       {"SELECTOR_MATRIX_AND_REGISTRY", selector_matrix_and_registry},
+      {"FOUR_PRODUCT_ETH_ROUTING_STATUS_AND_SHUTDOWN",
+       four_product_eth_routing_status_and_shutdown},
       {"LOOPBACK_ROUTING_IDS_STATUS_AND_GENERATION_CUTS",
        loopback_routing_ids_status_and_generation_cuts},
       {"PER_MARKET_CAPACITIES_AND_PENDING_ARE_INDEPENDENT",
        per_market_capacities_and_pending_are_independent},
       {"CONTEXT_TRACKER_REACHES_AND_NEVER_EXCEEDS_48",
        context_tracker_reaches_and_never_exceeds_48},
+      {"FOUR_PRODUCT_CONTEXT_LIMIT_IS_PROCESS_GLOBAL",
+       four_product_context_limit_is_process_global},
       {"ADVERSE_GLOBAL_SHUTDOWN_IS_BOUNDED_AND_JOINED",
        adverse_global_shutdown_is_bounded_and_joined},
       {"ONE_FAULTED_MARKET_STILL_RETURNS_TWO_STATUS_ROWS",

@@ -89,9 +89,8 @@ materialize_event_envelope(const g9::EventSubscriberChannel &channel,
 #endif
 
 #if defined(BMD_GATEWAY_G11_ENABLED)
-inline constexpr std::size_t kMaximumGrpcTrackedContexts =
-    2U * (kMaximumActiveSubscriptions + kPendingAdmissionCapacity +
-          g9::kMaximumActiveEventSubscriptions);
+// One process-wide G11/G12 streaming-context bound, independent of products.
+inline constexpr std::size_t kMaximumGrpcTrackedContexts = 48U;
 #elif defined(BMD_GATEWAY_G9_ENABLED)
 inline constexpr std::size_t kMaximumGrpcTrackedContexts =
     kMaximumActiveSubscriptions + kPendingAdmissionCapacity +

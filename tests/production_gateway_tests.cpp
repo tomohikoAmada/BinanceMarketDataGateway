@@ -35,6 +35,7 @@ namespace g5 = binance_market_data::gateway::g5;
 namespace g7 = binance_market_data::gateway::g7;
 namespace g9 = binance_market_data::gateway::g9;
 namespace g10 = binance_market_data::gateway::g10;
+namespace g11 = binance_market_data::gateway::g11;
 namespace production = binance_market_data::gateway::production;
 namespace support = production::test_support;
 namespace wire = binance_market_data::gateway::v1;
@@ -58,6 +59,26 @@ void require(bool condition, std::string_view expression) {
 
 #define REQUIRE(condition) require((condition), #condition)
 
+[[nodiscard]] const production::ProductObservation &
+product(const production::GatewayObservation &observation,
+        const g11::MarketKey &key) {
+  for (const auto &candidate : observation.products) {
+    if (candidate.key == key) {
+      return candidate;
+    }
+  }
+  throw TestFailure{"missing product observation"};
+}
+
+[[nodiscard]] g11::ProductRuntime &
+product(production::ProductionGateway &gateway, const g11::MarketKey &key) {
+  auto *selected = gateway.products_for_testing().find(key);
+  if (selected == nullptr) {
+    throw TestFailure{"missing product runtime"};
+  }
+  return *selected;
+}
+
 template <typename Predicate> void require_eventually(Predicate predicate) {
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds{2};
@@ -79,20 +100,22 @@ make_gateway(production::GatewayOptions options,
 
 void require_fully_stopped(production::ProductionGateway &gateway) {
   const auto final = gateway.observe();
+  const auto &spot = product(final, g11::spot_btcusdt_key());
+  const auto &usdm = product(final, g11::usdm_btcusdt_key());
   REQUIRE(final.state == production::GatewayState::Stopped);
   REQUIRE(final.tracked_contexts == 0U);
-  REQUIRE(final.spot_recovery.active_transport_count == 0U);
-  REQUIRE(final.usdm_recovery.active_transport_count == 0U);
-  REQUIRE(final.spot_recovery.state == g5::RecoveryState::Stopped);
-  REQUIRE(final.usdm_recovery.state == g5::RecoveryState::Stopped);
-  REQUIRE(final.spot_runtime.owner_joined);
-  REQUIRE(final.usdm_runtime.owner_joined);
-  REQUIRE(final.spot_runtime.resident_subscription_count == 0U);
-  REQUIRE(final.usdm_runtime.resident_subscription_count == 0U);
-  REQUIRE(final.spot_runtime.pending_admission_count == 0U);
-  REQUIRE(final.usdm_runtime.pending_admission_count == 0U);
-  REQUIRE(final.spot_events.active_subscriptions == 0U);
-  REQUIRE(final.usdm_events.active_subscriptions == 0U);
+  REQUIRE(spot.recovery.active_transport_count == 0U);
+  REQUIRE(usdm.recovery.active_transport_count == 0U);
+  REQUIRE(spot.recovery.state == g5::RecoveryState::Stopped);
+  REQUIRE(usdm.recovery.state == g5::RecoveryState::Stopped);
+  REQUIRE(spot.runtime.owner_joined);
+  REQUIRE(usdm.runtime.owner_joined);
+  REQUIRE(spot.runtime.resident_subscription_count == 0U);
+  REQUIRE(usdm.runtime.resident_subscription_count == 0U);
+  REQUIRE(spot.runtime.pending_admission_count == 0U);
+  REQUIRE(usdm.runtime.pending_admission_count == 0U);
+  REQUIRE(spot.events.active_subscriptions == 0U);
+  REQUIRE(usdm.events.active_subscriptions == 0U);
 }
 
 [[nodiscard]] std::unique_ptr<wire::BinanceMarketDataGatewayService::Stub>
@@ -185,18 +208,20 @@ void normal_start_stop() {
   auto gateway = make_gateway(std::move(configured.gateway));
   REQUIRE(gateway.start() == production::StartResult::Serving);
   const auto serving = gateway.observe();
+  const auto &spot = product(serving, g11::spot_btcusdt_key());
+  const auto &usdm = product(serving, g11::usdm_btcusdt_key());
   REQUIRE(serving.state == production::GatewayState::Serving);
   REQUIRE(serving.selected_port > 0);
-  REQUIRE(serving.spot_recovery.state == g5::RecoveryState::Live);
-  REQUIRE(serving.usdm_recovery.state == g5::RecoveryState::Live);
-  REQUIRE(serving.spot_runtime.state == g3::RuntimeState::Live);
-  REQUIRE(serving.usdm_runtime.state == g3::RuntimeState::Live);
-  REQUIRE(serving.spot_runtime.ingress_capacity == 64U);
-  REQUIRE(serving.spot_runtime.bootstrap_capacity == 64U);
-  REQUIRE(serving.usdm_runtime.ingress_capacity == 64U);
-  REQUIRE(serving.usdm_runtime.bootstrap_capacity == 64U);
-  REQUIRE(serving.spot_recovery.max_active_transport_count == 1U);
-  REQUIRE(serving.usdm_recovery.max_active_transport_count == 1U);
+  REQUIRE(spot.recovery.state == g5::RecoveryState::Live);
+  REQUIRE(usdm.recovery.state == g5::RecoveryState::Live);
+  REQUIRE(spot.runtime.state == g3::RuntimeState::Live);
+  REQUIRE(usdm.runtime.state == g3::RuntimeState::Live);
+  REQUIRE(spot.runtime.ingress_capacity == 64U);
+  REQUIRE(spot.runtime.bootstrap_capacity == 64U);
+  REQUIRE(usdm.runtime.ingress_capacity == 64U);
+  REQUIRE(usdm.runtime.bootstrap_capacity == 64U);
+  REQUIRE(spot.recovery.max_active_transport_count == 1U);
+  REQUIRE(usdm.recovery.max_active_transport_count == 1U);
   gateway.stop();
   require_fully_stopped(gateway);
 }
@@ -241,18 +266,23 @@ void post_start_failure_isolated() {
   REQUIRE(gateway.start() == production::StartResult::Serving);
   auto stub = stub_for(gateway.observe());
 
-  REQUIRE(
-      gateway.products_for_testing().usdm().runtime().submit_depth_update(
-          support::make_update(common::MARKET_USD_M_PERPETUAL, 1U, 102U, true),
-          g3::SourceProvenance{1U}) == g3::AdmissionResult::Accepted);
-  const auto terminal =
-      gateway.products_for_testing().usdm().recovery().wait_until_terminal();
+  REQUIRE(product(gateway, g11::usdm_btcusdt_key())
+              .runtime()
+              .submit_depth_update(
+                  support::make_update(common::MARKET_USD_M_PERPETUAL, 1U, 102U,
+                                       true),
+                  g3::SourceProvenance{1U}) == g3::AdmissionResult::Accepted);
+  const auto terminal = product(gateway, g11::usdm_btcusdt_key())
+                            .recovery()
+                            .wait_until_terminal();
   REQUIRE(terminal.terminal);
 
   const auto serving = gateway.observe();
+  const auto &spot = product(serving, g11::spot_btcusdt_key());
+  const auto &usdm = product(serving, g11::usdm_btcusdt_key());
   REQUIRE(serving.state == production::GatewayState::Serving);
-  REQUIRE(serving.spot_recovery.state == g5::RecoveryState::Live);
-  REQUIRE(serving.usdm_recovery.terminal);
+  REQUIRE(spot.recovery.state == g5::RecoveryState::Live);
+  REQUIRE(usdm.recovery.terminal);
   const auto snapshot = status(*stub, "status-after-usdm-failure");
   REQUIRE(snapshot.markets_size() == 2);
   REQUIRE(snapshot.markets(0).state() == common::STREAM_LIFECYCLE_STATE_LIVE);
@@ -307,10 +337,16 @@ void active_stream_shutdown() {
   require_eventually(
       [&gateway] { return gateway.observe().tracked_contexts == 4U; });
   const auto before = gateway.observe();
-  REQUIRE(before.spot_runtime.resident_subscription_count == 1U);
-  REQUIRE(before.usdm_runtime.resident_subscription_count == 1U);
-  REQUIRE(before.spot_events.active_subscriptions == 1U);
-  REQUIRE(before.usdm_events.active_subscriptions == 1U);
+  REQUIRE(product(before, g11::spot_btcusdt_key())
+              .runtime.resident_subscription_count == 1U);
+  REQUIRE(product(before, g11::usdm_btcusdt_key())
+              .runtime.resident_subscription_count == 1U);
+  REQUIRE(
+      product(before, g11::spot_btcusdt_key()).events.active_subscriptions ==
+      1U);
+  REQUIRE(
+      product(before, g11::usdm_btcusdt_key()).events.active_subscriptions ==
+      1U);
   REQUIRE(status(*stub, "status-near-shutdown").markets_size() == 2);
 
   gateway.stop();
@@ -326,6 +362,47 @@ void active_stream_shutdown() {
   static_cast<void>(usdm_book->Finish());
   static_cast<void>(spot_event->Finish());
   static_cast<void>(usdm_event->Finish());
+  require_fully_stopped(gateway);
+}
+
+void active_handler_drains_before_product_stop() {
+  auto configured = support::gateway_options();
+  std::promise<void> finalization_entered;
+  std::promise<void> release_finalization;
+  auto release = release_finalization.get_future().share();
+  configured.gateway.grpc.before_context_finalization =
+      [&finalization_entered, release](grpc::StatusCode) {
+        finalization_entered.set_value();
+        release.wait();
+      };
+  auto gateway = make_gateway(std::move(configured.gateway));
+  REQUIRE(gateway.start() == production::StartResult::Serving);
+  auto stub = stub_for(gateway.observe());
+
+  grpc::ClientContext context;
+  auto reader = stub->SubscribeOrderBook(
+      &context, book_request(common::MARKET_SPOT, "lifetime-book"));
+  wire::OrderBookStreamItem item;
+  REQUIRE(reader->Read(&item));
+  REQUIRE(reader->Read(&item));
+
+  auto stopped = std::async(std::launch::async, [&gateway] { gateway.stop(); });
+  auto entered = finalization_entered.get_future();
+  REQUIRE(entered.wait_for(std::chrono::seconds{2}) ==
+          std::future_status::ready);
+  REQUIRE(stopped.wait_for(std::chrono::milliseconds{0}) ==
+          std::future_status::timeout);
+  const auto during_drain = gateway.observe();
+  REQUIRE(!product(during_drain, g11::spot_btcusdt_key()).runtime.owner_joined);
+  REQUIRE(!product(during_drain, g11::usdm_btcusdt_key()).runtime.owner_joined);
+
+  release_finalization.set_value();
+  REQUIRE(stopped.wait_for(std::chrono::seconds{2}) ==
+          std::future_status::ready);
+  stopped.get();
+  while (reader->Read(&item)) {
+  }
+  static_cast<void>(reader->Finish());
   require_fully_stopped(gateway);
 }
 
@@ -378,25 +455,63 @@ void context_bound_preserved() {
   gateway.stop();
 }
 
+void dynamic_gateway_observation_is_canonical() {
+  const g11::MarketKey spot_btc = g11::spot_btcusdt_key();
+  const g11::MarketKey spot_eth{common::VENUE_BINANCE, common::MARKET_SPOT,
+                                "ETHUSDT"};
+  const g11::MarketKey usdm_btc = g11::usdm_btcusdt_key();
+  const g11::MarketKey usdm_eth{common::VENUE_BINANCE,
+                                common::MARKET_USD_M_PERPETUAL, "ETHUSDT"};
+  const auto specification = [](g11::MarketKey key) {
+    return g11::ProductRuntimeSpec{std::move(key), support::numeric_spec(), {}};
+  };
+  std::vector<g11::ProductRuntimeSpec> scrambled;
+  scrambled.push_back(specification(usdm_eth));
+  scrambled.push_back(specification(spot_eth));
+  scrambled.push_back(specification(usdm_btc));
+  scrambled.push_back(specification(spot_btc));
+  g11::ConfiguredProductRuntimeSet products{
+      std::move(scrambled), support::fixed_clock(), "gw-observation-four"};
+  const auto observations = production::observe_products(products);
+  REQUIRE(observations.size() == 4U);
+  REQUIRE(observations[0].key == spot_btc);
+  REQUIRE(observations[1].key == spot_eth);
+  REQUIRE(observations[2].key == usdm_btc);
+  REQUIRE(observations[3].key == usdm_eth);
+  for (const auto &observation : observations) {
+    REQUIRE(observation.runtime.state == g3::RuntimeState::Constructed);
+    REQUIRE(observation.events.active_subscriptions == 0U);
+  }
+}
+
 void recovery_diagnostic_formatter_supports_both_products() {
   production::GatewayObservation observation;
-  observation.spot_recovery.failure_history_size = 1U;
-  observation.spot_recovery.failure_history[0].connection_generation = 3U;
-  observation.spot_recovery.failure_history[0].cause =
+  observation.products.resize(2U);
+  observation.products[0].key = g11::spot_btcusdt_key();
+  observation.products[0].recovery.failure_history_size = 1U;
+  observation.products[0].recovery.failure_history[0].connection_generation =
+      3U;
+  observation.products[0].recovery.failure_history[0].cause =
       g5::RecoveryCause::NeedsResync;
-  observation.usdm_recovery.failure_history_size = 1U;
-  observation.usdm_recovery.failure_history[0].connection_generation = 5U;
-  observation.usdm_recovery.failure_history[0].cause =
+  observation.products[1].key = {common::VENUE_BINANCE,
+                                 common::MARKET_USD_M_PERPETUAL, "ETHUSDT"};
+  observation.products[1].recovery.failure_history_size = 1U;
+  observation.products[1].recovery.failure_history[0].connection_generation =
+      5U;
+  observation.products[1].recovery.failure_history[0].cause =
       g5::RecoveryCause::TransportFailure;
 
   std::ostringstream output;
   production::write_recovery_failure_diagnostics(output, observation);
   const auto text = output.str();
-  REQUIRE(text.find("gateway_recovery_failure product=spot index=0 "
-                    "generation=3 cause=needs-resync") != std::string::npos);
-  REQUIRE(text.find("gateway_recovery_failure product=usdm index=0 "
-                    "generation=5 cause=transport-failure") !=
-          std::string::npos);
+  REQUIRE(text.find("gateway_recovery_failure venue=VENUE_BINANCE "
+                    "market=MARKET_SPOT symbol=\"BTCUSDT\" "
+                    "symbol_truncated=no index=0 generation=3 "
+                    "cause=needs-resync") != std::string::npos);
+  REQUIRE(text.find("gateway_recovery_failure venue=VENUE_BINANCE "
+                    "market=MARKET_USD_M_PERPETUAL symbol=\"ETHUSDT\" "
+                    "symbol_truncated=no index=0 generation=5 "
+                    "cause=transport-failure") != std::string::npos);
 
   std::ostringstream clean;
   production::write_recovery_failure_diagnostics(
@@ -468,10 +583,14 @@ int main() {
       {"POST_START_SINGLE_MARKET_FAILURE_ISOLATED",
        post_start_failure_isolated},
       {"ACTIVE_FOUR_STREAM_SHUTDOWN", active_stream_shutdown},
+      {"ACTIVE_HANDLER_DRAINS_BEFORE_PRODUCT_STOP",
+       active_handler_drains_before_product_stop},
       {"REPEATED_STOP", repeated_stop},
       {"STARTUP_STOP_REQUEST_ROLLBACK", startup_stop_request_rolls_back},
       {"INITIAL_STARTUP_DEADLINE_BOUNDED", initial_startup_deadline_is_bounded},
       {"CONTEXT_48_PRESERVED", context_bound_preserved},
+      {"DYNAMIC_GATEWAY_OBSERVATION_IS_CANONICAL",
+       dynamic_gateway_observation_is_canonical},
       {"RECOVERY_DIAGNOSTIC_FORMATTER_SUPPORTS_BOTH_PRODUCTS",
        recovery_diagnostic_formatter_supports_both_products},
       {"METADATA_FAILURES_ORDERED", metadata_failures_are_ordered},

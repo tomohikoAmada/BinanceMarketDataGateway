@@ -10,6 +10,19 @@ namespace binance_market_data::gateway::production {
 
 namespace {
 
+[[nodiscard]] std::vector<g11::ProductRuntimeSpec>
+production_specs(projection::v1::NumericSpec spot_numeric_spec,
+                 projection::v1::NumericSpec usdm_numeric_spec,
+                 g11::TwoProductRuntimeOptions options) {
+  std::vector<g11::ProductRuntimeSpec> specifications;
+  specifications.reserve(2U);
+  specifications.push_back(
+      {g11::spot_btcusdt_key(), spot_numeric_spec, std::move(options.spot)});
+  specifications.push_back(
+      {g11::usdm_btcusdt_key(), usdm_numeric_spec, std::move(options.usdm)});
+  return specifications;
+}
+
 [[nodiscard]] bool initial_live(g11::ProductRuntime &product) {
   const auto recovery = product.recovery().observe();
   const auto runtime = product.runtime().observe();
@@ -33,6 +46,18 @@ namespace {
 
 } // namespace
 
+std::vector<ProductObservation>
+observe_products(g11::ConfiguredProductRuntimeSet &products) {
+  std::vector<ProductObservation> observations;
+  observations.reserve(products.size());
+  for (const auto &owner : products.products()) {
+    observations.push_back({owner->key(), owner->recovery().observe(),
+                            owner->runtime().observe(),
+                            owner->event_publication().observe()});
+  }
+  return observations;
+}
+
 ProductionGateway::ProductionGateway(
     projection::v1::NumericSpec spot_numeric_spec,
     projection::v1::NumericSpec usdm_numeric_spec, g3::RuntimeClock clock,
@@ -43,8 +68,9 @@ ProductionGateway::ProductionGateway(
       initial_startup_timeout_{options.initial_startup_timeout},
       allow_ephemeral_listen_for_testing_{
           options.allow_ephemeral_listen_for_testing},
-      products_{spot_numeric_spec, usdm_numeric_spec, clock,
-                gateway_instance_id_, std::move(options.products)},
+      products_{production_specs(spot_numeric_spec, usdm_numeric_spec,
+                                 std::move(options.products)),
+                clock, gateway_instance_id_},
       server_{products_.registry(), std::move(clock), gateway_instance_id_,
               std::move(options.grpc)} {
   if (initial_startup_timeout_ <= std::chrono::steady_clock::duration::zero()) {
@@ -79,11 +105,18 @@ ProductionGateway::start(const std::function<bool()> &external_stop_requested) {
   }
 
   const auto starts = products_.start();
-  if (starts.spot != g5::RecoveryStartResult::Started) {
+  const auto start_for = [&starts](const g11::MarketKey &key) {
+    const auto found =
+        std::find_if(starts.begin(), starts.end(),
+                     [&key](const auto &entry) { return entry.key == key; });
+    return found == starts.end() ? g5::RecoveryStartResult::RuntimeStartFailed
+                                 : found->result;
+  };
+  if (start_for(g11::spot_btcusdt_key()) != g5::RecoveryStartResult::Started) {
     rollback(StartResult::SpotStartFailed);
     return StartResult::SpotStartFailed;
   }
-  if (starts.usdm != g5::RecoveryStartResult::Started) {
+  if (start_for(g11::usdm_btcusdt_key()) != g5::RecoveryStartResult::Started) {
     rollback(StartResult::UsdMStartFailed);
     return StartResult::UsdMStartFailed;
   }
@@ -149,12 +182,7 @@ GatewayObservation ProductionGateway::observe() {
   }
   observation.selected_port = server_.selected_port();
   observation.tracked_contexts = server_.service().tracked_context_count();
-  observation.spot_recovery = products_.spot().recovery().observe();
-  observation.usdm_recovery = products_.usdm().recovery().observe();
-  observation.spot_runtime = products_.spot().runtime().observe();
-  observation.usdm_runtime = products_.usdm().runtime().observe();
-  observation.spot_events = products_.spot().event_publication().observe();
-  observation.usdm_events = products_.usdm().event_publication().observe();
+  observation.products = observe_products(products_);
   return observation;
 }
 
@@ -175,7 +203,8 @@ bool ProductionGateway::write_performance_baseline(std::ostream &output) const {
 }
 #endif
 
-g11::TwoProductRuntime &ProductionGateway::products_for_testing() noexcept {
+g11::ConfiguredProductRuntimeSet &
+ProductionGateway::products_for_testing() noexcept {
   return products_;
 }
 
@@ -198,13 +227,18 @@ StartResult ProductionGateway::wait_for_initial_live(
     if (stop_requested(external_stop_requested)) {
       return StartResult::StopRequested;
     }
-    if (initial_failure(products_.spot())) {
+    auto *spot = products_.find(g11::spot_btcusdt_key());
+    auto *usdm = products_.find(g11::usdm_btcusdt_key());
+    if (spot == nullptr || usdm == nullptr) {
       return StartResult::SpotInitialFailure;
     }
-    if (initial_failure(products_.usdm())) {
+    if (initial_failure(*spot)) {
+      return StartResult::SpotInitialFailure;
+    }
+    if (initial_failure(*usdm)) {
       return StartResult::UsdMInitialFailure;
     }
-    if (initial_live(products_.spot()) && initial_live(products_.usdm())) {
+    if (initial_live(*spot) && initial_live(*usdm)) {
       return StartResult::Serving;
     }
 

@@ -15,18 +15,36 @@ MarketKey usdm_btcusdt_key() {
           "BTCUSDT"};
 }
 
-MarketRuntimeRegistry::MarketRuntimeRegistry(MarketServices spot,
-                                             MarketServices usdm)
-    : entries_{std::move(spot), std::move(usdm)} {
-  if (entries_[0].key != spot_btcusdt_key() ||
-      entries_[1].key != usdm_btcusdt_key()) {
-    throw std::invalid_argument{
-        "G11 registry requires ordered Spot and USD-M BTCUSDT entries"};
-  }
-  for (const auto &entry : entries_) {
+MarketRuntimeRegistry::MarketRuntimeRegistry(
+    std::vector<MarketServices> entries)
+    : entries_{[&entries] {
+        if (entries.empty() || entries.size() > kMaximumConfiguredProducts) {
+          throw std::invalid_argument{
+              "configured registry requires between one and eight entries"};
+        }
+        std::sort(entries.begin(), entries.end(),
+                  [](const auto &left, const auto &right) {
+                    return MarketKeyLess{}(left.key, right.key);
+                  });
+        return std::move(entries);
+      }()} {
+  for (std::size_t index = 0U; index < entries_.size(); ++index) {
+    const auto &entry = entries_[index];
+    if (index != 0U && entries_[index - 1U].key == entry.key) {
+      throw std::invalid_argument{"configured registry keys must be unique"};
+    }
     if (entry.runtime == nullptr || entry.recovery == nullptr ||
         entry.event_publication == nullptr) {
-      throw std::invalid_argument{"G11 registry services must be non-null"};
+      throw std::invalid_argument{
+          "configured registry services must be non-null"};
+    }
+    for (std::size_t earlier = 0U; earlier < index; ++earlier) {
+      if (entries_[earlier].runtime == entry.runtime ||
+          entries_[earlier].recovery == entry.recovery ||
+          entries_[earlier].event_publication == entry.event_publication) {
+        throw std::invalid_argument{
+            "configured registry services must not alias between products"};
+      }
     }
   }
 }
@@ -39,7 +57,7 @@ MarketRuntimeRegistry::find(const MarketKey &key) const noexcept {
   return found == entries_.end() ? nullptr : &*found;
 }
 
-const std::array<MarketServices, kFixedMarketCount> &
+const std::vector<MarketServices> &
 MarketRuntimeRegistry::entries() const noexcept {
   return entries_;
 }

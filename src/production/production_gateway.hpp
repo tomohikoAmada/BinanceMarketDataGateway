@@ -14,6 +14,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace binance_market_data::gateway::production {
 
@@ -51,21 +52,26 @@ struct GatewayOptions final {
   bool allow_ephemeral_listen_for_testing{false};
 };
 
+struct ProductObservation final {
+  g11::MarketKey key;
+  g5::RecoveryObservation recovery;
+  g3::RuntimeObservation runtime;
+  g9::EventPublicationObservation events;
+};
+
 struct GatewayObservation final {
   GatewayState state{GatewayState::Constructed};
   int selected_port{0};
   std::size_t tracked_contexts{0U};
   std::size_t context_limit{g7::kMaximumGrpcTrackedContexts};
-  g5::RecoveryObservation spot_recovery;
-  g5::RecoveryObservation usdm_recovery;
-  g3::RuntimeObservation spot_runtime;
-  g3::RuntimeObservation usdm_runtime;
-  g9::EventPublicationObservation spot_events;
-  g9::EventPublicationObservation usdm_events;
+  std::vector<ProductObservation> products;
 };
 
-// Concrete post-G11 process composition. It always owns exactly the two frozen
-// BTCUSDT products and one synchronous Gateway server.
+[[nodiscard]] std::vector<ProductObservation>
+observe_products(g11::ConfiguredProductRuntimeSet &products);
+
+// Concrete production composition. Its compatibility constructor still creates
+// exactly the two frozen BTCUSDT products until G12-C.
 class ProductionGateway final {
 public:
   ProductionGateway(projection::v1::NumericSpec spot_numeric_spec,
@@ -94,7 +100,8 @@ public:
   // Focused deterministic tests inject data/failures through the already
   // accepted G11 owner boundaries. The production executable does not use
   // these accessors or any acceptance-only recovery hook.
-  [[nodiscard]] g11::TwoProductRuntime &products_for_testing() noexcept;
+  [[nodiscard]] g11::ConfiguredProductRuntimeSet &
+  products_for_testing() noexcept;
 
 private:
   [[nodiscard]] bool
@@ -111,7 +118,7 @@ private:
 
   // Declaration order is the lifetime proof: server_ is destroyed before its
   // non-owning registry/status references in products_.
-  g11::TwoProductRuntime products_;
+  g11::ConfiguredProductRuntimeSet products_;
   g7::OrderBookGrpcServer server_;
 
   mutable std::mutex state_mutex_;

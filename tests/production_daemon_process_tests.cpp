@@ -221,7 +221,8 @@ void signal_process(const std::string &fixture, int signal,
           std::string::npos);
   if (scenario == "spot-recovery") {
     constexpr std::string_view prefix{
-        "gateway_recovery_failure product=spot index=0 generation=1 "
+        "gateway_recovery_failure venue=VENUE_BINANCE market=MARKET_SPOT "
+        "symbol=\"BTCUSDT\" symbol_truncated=no index=0 generation=1 "
         "cause=transport-failure"};
     REQUIRE(count_occurrences(output, "gateway_recovery_failure") == 1U);
     const auto start = output.find(prefix);
@@ -250,9 +251,10 @@ void startup_failure_diagnostic(const std::string &fixture) {
   REQUIRE(WEXITSTATUS(status) == 1);
   REQUIRE(output.find("gateway_start=failed reason=spot-initial-failure") !=
           std::string::npos);
-  REQUIRE(output.find("gateway_recovery_failure product=spot index=0 "
-                      "generation=1 cause=internal-failure") !=
-          std::string::npos);
+  REQUIRE(output.find("gateway_recovery_failure venue=VENUE_BINANCE "
+                      "market=MARKET_SPOT symbol=\"BTCUSDT\" "
+                      "symbol_truncated=no index=0 generation=1 "
+                      "cause=internal-failure") != std::string::npos);
   REQUIRE(output.find("network_error_code=internal") != std::string::npos);
   REQUIRE(output.find("network_stage=\"spot-test-terminal\"") !=
           std::string::npos);
