@@ -49,7 +49,23 @@ BASELINE_MILESTONE_COMPLETE=YES
 PRODUCTION_QUALIFICATION_AUTHORIZED=NO
 OPTIMIZATION_AUTHORIZED=NO
 DOC_ALIGN_01=COMPLETE_ON_MERGE
-NEXT_TECHNICAL_STAGE=NOT_YET_FROZEN
+GW-PREQ-003=COMPLETE
+G12=PLANNED
+G12-A=NOT_STARTED
+G12-B=NOT_STARTED
+G12-C=NOT_STARTED
+G12-D=NOT_STARTED
+G12-E=NOT_STARTED
+G12_IMPLEMENTATION_AUTHORIZED=YES
+G12_CONTRACTS_CHANGE_REQUIRED=NO
+G12_PROJECTION_CHANGE_REQUIRED=NO
+G12_MAX_CONFIGURED_PRODUCTS=8
+G12_GLOBAL_GRPC_TRACKED_CONTEXT_LIMIT=48
+G12_TRANSPORT_MODEL=INDEPENDENT_PER_MARKET_KEY
+G12_CONFIG_AUTHORITY=STARTUP_JSON_FILE
+G12_HOT_RELOAD=NO
+G12_INITIAL_ACCEPTANCE_PRODUCT_COUNT=4
+NEXT_TECHNICAL_STAGE=G12-A
 G2_SYNTHETIC_HOST_IMPLEMENTED=YES
 G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES
 CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES
@@ -105,7 +121,7 @@ MAX_G9_ACTIVE_TOTAL=16
 MAX_ACTIVE_TRANSPORTS_PER_MARKET=1
 MAX_ACTIVE_TRANSPORTS_TOTAL=2
 STATUS_MARKET_COUNT=2
-NEXT=NOT_FROZEN
+NEXT=G12-A
 FIRST_RUNNABLE=G2
 FIRST_REAL_NETWORK=G4
 FIRST_GRPC=G7
@@ -135,6 +151,15 @@ listener. It serves until SIGINT/SIGTERM. A startup failure rolls back the
 partial graph; after startup, a failure of one market remains isolated. During
 shutdown, server handlers are drained/cancelled before product owner
 destruction. Production contains no acceptance-only controlled-recovery hook.
+
+The current production behavior remains exactly two products:
+`BINANCE / SPOT / BTCUSDT` and `BINANCE / USD_M_PERPETUAL / BTCUSDT`, with
+`PRODUCTION_PRODUCT_COUNT=2`. The G12 fields above are authorized target
+architecture, not implemented behavior. G12 will add a finite startup-configured
+set of exact `MarketKey` values with a maximum of eight, one independent
+transport per `MarketKey`, and a process-wide tracked-context limit of 48.
+G12-A is the next technical stage. Contracts and Projection production changes
+are not required, and there is no G12 hot reload or runtime product mutation.
 
 ## What is implemented
 
@@ -213,8 +238,8 @@ production runtime layer. G4 remains independently usable as a one-shot transpor
 Post-G11 runtime productization is complete: the ordinary `bmd-gatewayd` is
 the installed long-running two-product daemon.
 `POST_G11_PERFORMANCE_BASELINE=COMPLETE`; the bounded recovery-observation
-campaign is complete. No G12 or further numbered Gateway milestone is currently
-frozen.
+campaign is complete. G12 is the authorized planned next campaign but is not
+implemented; `NEXT=G12-A`.
 G5 recovers transport, snapshot, malformed-input, bounded-admission, bootstrap
 overflow, `serverShutdown`, and Projection `NeedsResync` failures through a new
 connection and the same conservative bootstrap path. Internal adapter,

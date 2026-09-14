@@ -6,8 +6,10 @@ responsibility split, the current foundation/G11 boundary, and the accepted
 post-G11 production host.
 
 Current project state: `POST_G11_PERFORMANCE_BASELINE=COMPLETE`.
-Production Qualification and optimization are not authorized; no further
-numbered Gateway milestone is frozen.
+The current production implementation remains the fixed G11 two-product
+runtime. Production Qualification and optimization are not authorized. G12 is
+the frozen, authorized next development campaign, its implementation is not
+started, and G12-A is next.
 
 ## Dependency direction
 
@@ -299,6 +301,93 @@ for the server, then stops and joins both recovery/transport lifecycles and
 both `MarketRuntime` owners before destroying non-owning routing/service
 references. No new lifecycle framework is introduced.
 
+## G12 target architecture (authorized, not implemented)
+
+G12 keeps the current G11 implementation as the production baseline while
+authorizing a finite startup-configured product set. Its exact product identity
+is the existing Gateway `MarketKey`:
+
+```text
+MarketKey = (venue, market, exact symbol)
+```
+
+Only `BINANCE` with `SPOT` or `USD_M_PERPETUAL` is supported by this target.
+The symbol is an exact opaque identity: no case folding, Unicode normalization,
+or automatic uppercasing is allowed. Lowercase Binance route text is transport
+encoding only and does not mutate the public `MarketKey`.
+
+The G12 graph is one isolated product graph per exact `MarketKey`:
+
+```text
+MarketKey
+  -> ProductRuntime
+  -> MarketRuntime
+  -> private BookProjection
+  -> EventPublication
+  -> RecoveryCoordinator
+  -> independent Binance transport
+```
+
+`ProductRuntime` owns one exact immutable `MarketKey`. Expected identity,
+sequence-policy selection, transport routes, protocol identity, status
+identity, and diagnostics derive from that authority. G12 does not authorize a
+shared multiplexed WebSocket, a cross-product `RecoveryCoordinator`,
+`MultiSymbolProjection`, `ProjectionManager`, or a second sequence classifier.
+
+The configured product count is `1..8`; eight is the frozen
+`G12_MAX_CONFIGURED_PRODUCTS` process-resource policy and accepted envelope,
+not a permanent architectural maximum, Binance protocol maximum, or universal
+capacity claim. The gRPC tracked-context limit is one process-wide hard limit of
+48. It must not become a configured-product-count multiplication of a
+per-product limit. Existing G7/G9 publication and admission bounds remain
+product-local unless a later milestone changes them.
+
+The target production configuration authority is startup-only JSON:
+
+```text
+bmd-gatewayd --config PATH
+```
+
+The parser accepts the finite `grpc_listen`, `spot_symbols`, and `usdm_symbols`
+surface, rejects malformed JSON and unknown top-level fields, rejects exact
+duplicates within one market, and requires at least one and at most eight
+configured `MarketKey` values. Either symbol list may be empty, but not both;
+the same exact symbol in Spot and USD-M is valid because the `MarketKey`
+differs. There is no hot reload, runtime product add/remove, second CLI
+configuration authority, or new configuration dependency; existing
+`nlohmann_json` is sufficient.
+
+Startup acquires Spot `exchangeInfo` once when Spot products exist and USD-M
+`exchangeInfo` once when USD-M products exist. It selects every exact configured
+symbol and derives one supported `NumericSpec` per `MarketKey`; missing,
+ineligible, malformed, or unsupported metadata fails closed before serving.
+Product-local REST depth snapshots remain product-local. One shared absolute
+process-level startup deadline governs metadata, construction, start, and
+initial readiness. All configured products must reach Live/Synchronized before
+gRPC starts. Any initial product failure or stop causes complete rollback; once
+serving, one product can fail without taking down healthy products or gRPC.
+
+The serving aggregate uses stable `ProductRuntime` object addresses and an
+immutable non-owning dynamic registry after construction, with deterministic
+product ordering and exact membership routing. The finite bound permits a
+small linear lookup; it does not authorize a generic registry framework or a
+relocating owner layout. Server handlers must stop and drain before any product
+owner is destroyed.
+
+G12 makes `SubscribeOrderBook`, `SubscribeEvents`, status rows, observations,
+recovery diagnostics, and shutdown aggregation dynamic over the configured set.
+`SubscribeEvents` still requires exactly one selector. Spot retains
+`DIFF_DEPTH`, `AGG_TRADE`, and `BOOK_TICKER`; USD-M retains only its existing
+`DIFF_DEPTH`. G12 does not add cross-product merged subscriptions or new USD-M
+event types.
+
+The G12 implementation sequence is frozen in [docs/MILESTONES.md](docs/MILESTONES.md):
+`G12-A` exact single-product parameterization, `G12-B` configured runtime set
+and dynamic serving surface, `G12-C` configuration/metadata/startup
+composition, `G12-D` deterministic four-product acceptance, and `G12-E` real
+network bounded qualification. `G12-A` is the next stage; no later stage may
+be implemented ahead of it.
+
 ## MarketRuntime Projection boundary
 
 The G3 `MarketRuntime`, G4 transport, and G5/G6 lifecycle coordinator use, and
@@ -324,5 +413,7 @@ productization closes the production daemon host boundary. Recovery
 observability, the bounded recovery-observation campaign, and the accepted
 post-G11 performance baseline are complete. The baseline is descriptive
 evidence rather than a hard SLA, capacity guarantee, or infinite-duration RSS
-claim. Production Qualification and optimization are not authorized, and no
-additional numbered Gateway milestone is currently frozen.
+claim. The accepted baseline is evidence for the fixed two-product G11 daemon,
+not G12 multi-product capacity evidence. Production Qualification and
+optimization are not authorized. G12 is the planned next campaign and
+`G12-A` is next; its implementation is not yet present.

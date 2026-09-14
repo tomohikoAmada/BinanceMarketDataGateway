@@ -12,8 +12,10 @@ whole-process PERF-01 companion was accepted together with the original
 internal latency, queue, delivery, and overflow evidence. These measurements
 are descriptive baseline evidence, not a hard SLA, capacity guarantee, exact
 causal subscriber-cost decomposition, infinite-duration RSS proof, or
-zero-observer production truth. Production qualification and optimization are
-not authorized.
+zero-observer production truth. They are evidence for the fixed two-product
+G11 daemon only, not capacity evidence for the authorized G12 configurable
+multi-product target. Production qualification and optimization are not
+authorized.
 
 ## Build and export
 

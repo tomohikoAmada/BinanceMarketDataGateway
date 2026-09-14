@@ -25,6 +25,12 @@ Historical G2/G3 attempts, including the deleted `feat/g2-deterministic-syntheti
 branch and its recovery bundle, are not implementation authority. Historical PR #5 is
 retained only as a closed, not-merged, abandoned implementation attempt.
 
+The current production implementation remains the fixed G11 two-product
+runtime. The next authorized development campaign is G12, which introduces a
+finite startup-configured product set without changing Contracts or Projection.
+G12 is planned and authorized, not implemented; G12-A is the next technical
+stage.
+
 ## Responsibility split
 
 Contracts owns:
@@ -128,8 +134,24 @@ runtime framework.
 - `INSTALLABLE_PRODUCTION_DAEMON=YES`.
 - `POST_G11_PERFORMANCE_BASELINE=COMPLETE`.
 - `RECOVERY_OBSERVABILITY=COMPLETE`.
-- `NEXT=NOT_FROZEN`; no further numbered Gateway milestone is currently
-  frozen.
+- `GW-PREQ-003=COMPLETE`.
+- `G12=PLANNED`.
+- `G12-A=NOT_STARTED`.
+- `G12-B=NOT_STARTED`.
+- `G12-C=NOT_STARTED`.
+- `G12-D=NOT_STARTED`.
+- `G12-E=NOT_STARTED`.
+- `G12_IMPLEMENTATION_AUTHORIZED=YES`.
+- `G12_CONTRACTS_CHANGE_REQUIRED=NO`.
+- `G12_PROJECTION_CHANGE_REQUIRED=NO`.
+- `G12_MAX_CONFIGURED_PRODUCTS=8`.
+- `G12_GLOBAL_GRPC_TRACKED_CONTEXT_LIMIT=48`.
+- `G12_TRANSPORT_MODEL=INDEPENDENT_PER_MARKET_KEY`.
+- `G12_CONFIG_AUTHORITY=STARTUP_JSON_FILE`.
+- `G12_HOT_RELOAD=NO`.
+- `G12_INITIAL_ACCEPTANCE_PRODUCT_COUNT=4`.
+- `NEXT_TECHNICAL_STAGE=G12-A`.
+- `NEXT=G12-A`.
 
 Gateway `main` currently has typed configuration, synchronous Foundation
 lifecycle, the historical/minimal Foundation CLI seam, Foundation tests,
@@ -738,8 +760,267 @@ The historical Spot root cause is therefore not established, bounded
 uncertainty is retained, and RCO-03 is not authorized.
 
 `POST_G11_PRODUCTION_QUALIFICATION` remains future/planned and not authorized.
-Production qualification and optimization remain unauthorized. No numbered G12
-is currently frozen.
+Production qualification and optimization remain unauthorized. The accepted
+PERF-01 baseline is evidence for the fixed two-product G11 daemon; it is not
+G12 multi-product capacity evidence.
+
+## GW-PREQ-003 — Cross-Repository Multi-Product Prerequisite Freeze
+
+**STATUS=COMPLETE**
+
+This documentation authority freezes the cross-repository prerequisite for G12.
+Contracts production/schema change required is **NO**. Projection production
+change required is **NO**. Gateway configurable-product implementation is
+authorized. G11 remains historically and currently valid as the fixed
+two-product implementation until G12 code is actually delivered.
+
+The prerequisite freezes these G12 invariants:
+
+- maximum configured products is eight;
+- the existing exact `MarketKey` remains the product identity authority;
+- one isolated `ProductRuntime` and independent transport exist per
+  `MarketKey`;
+- the process-wide tracked streaming-context hard limit is 48;
+- configuration is startup-only JSON;
+- every configured product is required for initial readiness;
+- a later single-product failure is isolated after serving begins;
+- `SubscribeEvents` remains a one-selector RPC; and
+- there is no shared WebSocket multiplexing.
+
+## G12 — Configurable Finite Product Support
+
+**STATUS=PLANNED**
+
+G12 is the frozen next development campaign. It parameterizes the existing
+single-product path and then composes a finite configured product set. It does
+not claim that the current production daemon already supports this model.
+
+### Product identity
+
+The existing Gateway concept remains authoritative:
+
+```text
+MarketKey = (venue, market, exact symbol)
+```
+
+For G12 production configuration, `venue` is `BINANCE`, `market` is either
+`SPOT` or `USD_M_PERPETUAL`, and `symbol` is an exact opaque identity. The
+public identity is not case-folded, Unicode-normalized, or automatically
+uppercased. A transport route may encode `BTCUSDT` as `btcusdt`, but that is
+transport encoding and does not mutate `MarketKey`.
+
+### Process and ownership bounds
+
+```text
+G12_MAX_CONFIGURED_PRODUCTS = 8
+GLOBAL_GRPC_TRACKED_CONTEXT_LIMIT = 48
+```
+
+The configured product count is `1..8`. Eight is a G12 qualified
+process-resource policy and accepted-envelope bound, not a permanent
+architectural maximum, Binance protocol maximum, or benchmark-derived
+universal capacity claim. A future separately reviewed milestone may raise it
+after evidence.
+
+The gRPC tracked-context limit is process-wide and remains exactly 48. It must
+not become configured-product-count multiplied by a per-product limit. Existing
+G7/G9 publication and admission limits remain product-local unless a later
+milestone explicitly changes them.
+
+Each exact `MarketKey` owns one isolated product graph:
+
+```text
+MarketKey
+  -> ProductRuntime
+  -> MarketRuntime
+  -> private BookProjection
+  -> EventPublication
+  -> RecoveryCoordinator
+  -> independent Binance transport
+```
+
+`ProductRuntime` ultimately owns one exact immutable `MarketKey`. Expected
+identity, sequence-policy selection, transport routes, protocol identity,
+status identity, and diagnostics derive consistently from that authority. G12
+does not authorize a shared multiplexed WebSocket, cross-product recovery
+coordinator, `MultiSymbolProjection`, `ProjectionManager`, or a second
+sequence classifier.
+
+### Startup and configuration
+
+The G12 production configuration authority is the startup-only JSON file passed
+to the daemon as:
+
+```text
+bmd-gatewayd --config PATH
+```
+
+Its conceptual shape is:
+
+```json
+{
+  "grpc_listen": "127.0.0.1:50051",
+  "spot_symbols": ["BTCUSDT", "ETHUSDT"],
+  "usdm_symbols": ["BTCUSDT", "ETHUSDT"]
+}
+```
+
+The parser accepts exactly the supported top-level fields, rejects unknown
+fields and malformed JSON, and performs no network I/O. `spot_symbols` and
+`usdm_symbols` may each be empty, but not both; the total configured
+`MarketKey` count is `1..8`; duplicate exact symbols within one market are
+rejected; and the same exact symbol in Spot and USD-M is valid because the
+`MarketKey` differs. There is no case folding, hot reload, runtime product
+add/remove, second CLI configuration authority, or newly introduced
+configuration library; the existing `nlohmann_json` dependency is sufficient.
+
+Startup composes the configured products in this order:
+
+```text
+parse config
+  -> acquire authoritative metadata
+  -> derive per-MarketKey NumericSpec
+  -> construct all ProductRuntime instances
+  -> start all products
+  -> all configured products reach initial Live/Synchronized
+  -> start gRPC
+```
+
+One shared absolute process-level initial-startup deadline governs this flow; it
+is not an N-times-per-product timeout design. Any product failure or stop during
+initial startup causes complete rollback. After serving begins, a failure of
+one product is product-local and healthy products plus gRPC remain available.
+Server handlers must stop and drain before any `ProductRuntime` owner can be
+destroyed.
+
+### Metadata
+
+If Spot products are configured, acquire authoritative Spot `exchangeInfo` once
+for the configured set. If USD-M products are configured, acquire authoritative
+USD-M `exchangeInfo` once for the configured set. Select every exact configured
+symbol and derive one supported `NumericSpec` per `MarketKey`. A missing,
+ineligible, malformed, or unsupported configured-symbol record fails startup
+closed before serving. Product-local REST depth snapshot traffic remains
+product-local; G12 does not prescribe one `exchangeInfo` request per symbol.
+
+### Event surface
+
+G12 does not add cross-product merged subscriptions. `SubscribeEvents` still
+requires `selectors_size == 1`, now for any configured and supported
+`MarketKey`; it does not merge multiple products in one RPC. Existing support
+remains unchanged:
+
+- Spot: `DIFF_DEPTH`, `AGG_TRADE`, and `BOOK_TICKER`;
+- USD-M perpetual: the existing `DIFF_DEPTH` only.
+
+G12 does not expand USD-M event types.
+
+## G12-A — Exact MarketKey Single-Product Parameterization
+
+**STATUS=NOT_STARTED**
+
+This is the next stage after the G12 documentation authority merges. Remove
+BTCUSDT-specific assumptions from the reusable single-product path before
+introducing the configured aggregate. Parameterize exact configured symbols in
+Spot protocol parsing, output metadata, exchangeInfo selection, REST depth
+routes, WebSocket routes, and connection/request identity. Apply the equivalent
+USD-M parameterization while preserving existing USD-M sequencing semantics.
+
+Make one exact immutable `MarketKey` the `ProductRuntime` identity authority.
+Provide deterministic offline coverage for Spot BTCUSDT, Spot ETHUSDT, USD-M
+BTCUSDT, and USD-M ETHUSDT. Do not add a dynamic product aggregate in G12-A;
+Contracts and Projection remain unchanged.
+
+## G12-B — Configured Product Runtime Set and Dynamic Serving Surface
+
+**STATUS=NOT_STARTED**
+
+Replace the fixed two-product production aggregate with a finite configured
+owning set and do not leave an intermediate architecture whose registry is
+dynamic while status, routing, or observability remains fixed at two products.
+Use stable `ProductRuntime` object addresses and an immutable non-owning dynamic
+registry after construction, with deterministic product ordering and exact
+registry-membership routing. A small finite linear lookup is acceptable under
+the G12 bound; a generic registry framework or `unordered_map` is not required
+without evidence.
+
+Make `SubscribeOrderBook`, `SubscribeEvents`, Gateway status market rows,
+Gateway observations, product recovery diagnostics, and shutdown aggregation
+dynamic over the configured set. Keep the global tracked-context bound exactly
+48, reject unconfigured `MarketKey` values, preserve `selectors_size == 1`,
+and preserve current stream support. Handlers must stop and drain before owners
+are destroyed; no relocating owner layout may invalidate registry references.
+
+## G12-C — Production Configuration, Metadata and Startup Composition
+
+**STATUS=NOT_STARTED**
+
+Implement `bmd-gatewayd --config PATH` with strict startup-only JSON parsing,
+total configured `MarketKey` count `1..8`, exact duplicate checks, canonical
+deterministic `MarketKey` ordering, once-per-configured-market authoritative
+metadata acquisition, per-`MarketKey` `NumericSpec`, construction of the
+configured runtime set, one shared absolute initial-startup deadline, and
+all-products Live/Synchronized readiness before gRPC starts. Initial product
+failure or stop during startup requires complete rollback; after serving,
+one-product failure remains isolated. There is no hot reload.
+
+## G12-D — Deterministic Four-Product Acceptance
+
+**STATUS=NOT_STARTED**
+
+The fixed initial acceptance workload is:
+
+```text
+BINANCE / SPOT / BTCUSDT
+BINANCE / SPOT / ETHUSDT
+BINANCE / USD_M_PERPETUAL / BTCUSDT
+BINANCE / USD_M_PERPETUAL / ETHUSDT
+```
+
+Acceptance must prove four distinct product runtimes, four private Projection
+ownership domains, exact symbol/market routing, independent recovery and
+generation, one-product recovery isolation, post-start terminal-failure
+isolation, deterministic status rows, unconfigured-product rejection,
+duplicate rejection, rejection of zero products, rejection of nine products,
+acceptance of eight products, a process-wide tracked-context maximum of 48,
+one global startup deadline rather than N multiplied timeouts, safe rollback,
+safe shutdown, and no active RPC handler outliving an owned product. No
+real-network long soak is part of this milestone.
+
+## G12-E — Real Network Bounded Qualification
+
+**STATUS=NOT_STARTED**
+
+The later execution target is a Tokyo VPS with the same four-product workload
+as G12-D. Bounded qualification verifies authoritative metadata, exact
+per-`MarketKey` `NumericSpec`, REST/WebSocket routes, four successful bootstrap
+paths, four initial Live/Synchronized states, exact gRPC routing, four-row
+status, product-local recovery/failure behavior where safely observable,
+process CPU/RSS/thread/socket footprint, and bounded shutdown.
+
+G12-E does not automatically authorize a 24-hour or 72-hour soak, G13,
+multiplexed transport, or an optimization campaign.
+
+## G12 non-goals
+
+The following are outside G12 and must not be introduced by later coding agents:
+
+- Contracts schema expansion or Projection production changes;
+- `MultiSymbolProjection`, `ProjectionManager`, or a second sequence classifier;
+- shared multi-symbol WebSocket transport or a cross-product recovery
+  coordinator;
+- cross-product event merge or multi-selector `SubscribeEvents`;
+- new USD-M stream types;
+- a generic exchange abstraction or another exchange;
+- DI, plugin, actor, generic event-bus, custom scheduler, or generic runtime
+  frameworks;
+- lock-free redesign, shared-memory IPC, or speculative scheduler/allocator
+  optimization;
+- hot configuration reload or runtime product add/remove;
+- optional/required product classes;
+- multiplying the global gRPC context cap per product;
+- a new configuration dependency;
+- History, Viewer, Recorder changes, automatic G13, or automatic long soak.
 
 ## Deferred product surface
 
