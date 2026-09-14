@@ -8,8 +8,8 @@ post-G11 production host.
 Current project state: `POST_G11_PERFORMANCE_BASELINE=COMPLETE`.
 The current production implementation remains the fixed G11 two-product
 runtime. Production Qualification and optimization are not authorized. G12 is
-the frozen, authorized next development campaign, its implementation is not
-started, and G12-A is next.
+the frozen, authorized development campaign; G12-A is complete and G12-B is
+next. Current production remains the fixed G11 two-product daemon.
 
 ## Dependency direction
 
@@ -301,7 +301,7 @@ for the server, then stops and joins both recovery/transport lifecycles and
 both `MarketRuntime` owners before destroying non-owning routing/service
 references. No new lifecycle framework is introduced.
 
-## G12 target architecture (authorized, not implemented)
+## G12 target architecture (G12-A implemented; G12-B/C/D/E pending)
 
 G12 keeps the current G11 implementation as the production baseline while
 authorizing a finite startup-configured product set. Its exact product identity
@@ -390,8 +390,9 @@ The G12 implementation sequence is frozen in [docs/MILESTONES.md](docs/MILESTONE
 `G12-A` exact single-product parameterization, `G12-B` configured runtime set
 and dynamic serving surface, `G12-C` configuration/metadata/startup
 composition, `G12-D` deterministic four-product acceptance, and `G12-E` real
-network bounded qualification. `G12-A` is the next stage; no later stage may
-be implemented ahead of it.
+network bounded qualification. `G12-A` is implemented for the reusable
+single-product path; `G12-B` is the next stage, and no later stage may be
+implemented ahead of it.
 
 ## MarketRuntime Projection boundary
 
@@ -420,5 +421,5 @@ post-G11 performance baseline are complete. The baseline is descriptive
 evidence rather than a hard SLA, capacity guarantee, or infinite-duration RSS
 claim. The accepted baseline is evidence for the fixed two-product G11 daemon,
 not G12 multi-product capacity evidence. Production Qualification and
-optimization are not authorized. G12 is the planned next campaign and
-`G12-A` is next; its implementation is not yet present.
+optimization are not authorized. G12 is in progress: G12-A is complete and
+G12-B is next. The current daemon remains fixed at two production products.

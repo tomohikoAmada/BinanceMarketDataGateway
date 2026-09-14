@@ -2,8 +2,8 @@
 
 This is the authoritative development plan for the Gateway. The latest
 behavior-changing implementation merge is
-`72961563912f08541b311c09f77f49af1e03fd41`, with implementation tree
-`0c4df08b5bc06e49ab7f66d180b1aeea3f471d47`. Live `main` is the branch
+`c846046a85027512e02516907b630ac9f2015146`, with implementation tree
+`1755513556e09abb080ffbcd4a41bec32668f8c0`. Live `main` is the branch
 authority; docs-only alignment commits may advance its SHA without changing
 implementation semantics. The related upstream authorities
 for the current productization closure are Contracts
@@ -26,10 +26,11 @@ branch and its recovery bundle, are not implementation authority. Historical PR 
 retained only as a closed, not-merged, abandoned implementation attempt.
 
 The current production implementation remains the fixed G11 two-product
-runtime. The next authorized development campaign is G12, which introduces a
-finite startup-configured product set without changing Contracts or Projection.
-G12 is planned and authorized, not implemented; G12-A is the next technical
-stage.
+runtime. The G12 campaign is in progress and introduces a finite
+startup-configured product set without changing Contracts or Projection.
+G12-A exact single-product parameterization is complete; G12-B is the next
+technical stage. The reusable G12-A path does not change the current production
+composition.
 
 ## Responsibility split
 
@@ -135,8 +136,8 @@ runtime framework.
 - `POST_G11_PERFORMANCE_BASELINE=COMPLETE`.
 - `RECOVERY_OBSERVABILITY=COMPLETE`.
 - `GW-PREQ-003=COMPLETE`.
-- `G12=PLANNED`.
-- `G12-A=NOT_STARTED`.
+- `G12=IN_PROGRESS`.
+- `G12-A=COMPLETE`.
 - `G12-B=NOT_STARTED`.
 - `G12-C=NOT_STARTED`.
 - `G12-D=NOT_STARTED`.
@@ -150,8 +151,8 @@ runtime framework.
 - `G12_CONFIG_AUTHORITY=STARTUP_JSON_FILE`.
 - `G12_HOT_RELOAD=NO`.
 - `G12_INITIAL_ACCEPTANCE_PRODUCT_COUNT=4`.
-- `NEXT_TECHNICAL_STAGE=G12-A`.
-- `NEXT=G12-A`.
+- `NEXT_TECHNICAL_STAGE=G12-B`.
+- `NEXT=G12-B`.
 
 Gateway `main` currently has typed configuration, synchronous Foundation
 lifecycle, the historical/minimal Foundation CLI seam, Foundation tests,
@@ -771,8 +772,9 @@ G12 multi-product capacity evidence.
 This documentation authority freezes the cross-repository prerequisite for G12.
 Contracts production/schema change required is **NO**. Projection production
 change required is **NO**. Gateway configurable-product implementation is
-authorized. G11 remains historically and currently valid as the fixed
-two-product implementation until G12 code is actually delivered.
+authorized. G12-A has delivered reusable single-product parameterization;
+G11 remains historically and currently valid as the fixed two-product
+implementation until later G12 serving composition is delivered.
 
 The prerequisite freezes these G12 invariants:
 
@@ -789,11 +791,11 @@ The prerequisite freezes these G12 invariants:
 
 ## G12 — Configurable Finite Product Support
 
-**STATUS=PLANNED**
+**STATUS=IN_PROGRESS**
 
-G12 is the frozen next development campaign. It parameterizes the existing
-single-product path and then composes a finite configured product set. It does
-not claim that the current production daemon already supports this model.
+G12 is the current development campaign. G12-A has parameterized the existing
+single-product path; later stages compose a finite configured product set. It
+does not claim that the current production daemon already supports this model.
 
 ### Product identity
 
@@ -921,19 +923,33 @@ G12 does not expand USD-M event types.
 
 ## G12-A — Exact MarketKey Single-Product Parameterization
 
-**STATUS=NOT_STARTED**
+**STATUS=COMPLETE**
 
-This is the next stage after the G12 documentation authority merges. Remove
-BTCUSDT-specific assumptions from the reusable single-product path before
-introducing the configured aggregate. Parameterize exact configured symbols in
-Spot protocol parsing, output metadata, exchangeInfo selection, REST depth
-routes, WebSocket routes, and connection/request identity. Apply the equivalent
-USD-M parameterization while preserving existing USD-M sequencing semantics.
+PR #29 is the implementation authority, merged at
+`c846046a85027512e02516907b630ac9f2015146` from approved implementation head
+`1b3146c9bbd21dde2676a671d02342927dc6a530` with tree
+`1755513556e09abb080ffbcd4a41bec32668f8c0`.
 
-Make one exact immutable `MarketKey` the `ProductRuntime` identity authority.
-Provide deterministic offline coverage for Spot BTCUSDT, Spot ETHUSDT, USD-M
-BTCUSDT, and USD-M ETHUSDT. Do not add a dynamic product aggregate in G12-A;
-Contracts and Projection remain unchanged.
+G12-A removes BTCUSDT-specific assumptions from the reusable single-product
+path and makes one exact immutable `MarketKey` the `ProductRuntime` identity
+authority. Deterministic/offline parameterization covers Spot BTCUSDT, Spot
+ETHUSDT, USD-M BTCUSDT, and USD-M ETHUSDT. Spot and USD-M protocol parsing,
+metadata, routes, and connection/request identity derive from that authority;
+Projection remains the sole sequence/continuity authority. For USD-M,
+`s == MarketKey.symbol`; `ps` remains a distinct pair field and is only
+structurally validated as a string.
+
+The reviewed result has `P0=NONE` and `P1=NONE`. The reviewed USD-M `ps` issue
+was repaired before merge. The retained nonblocking finding
+`G12A-P2-DEFAULT-ATTEMPT-FACTORY-COVERAGE` records that the deterministic ETH
+`ProductRuntime` test uses a synthetic attempt factory, so direct offline
+coverage joining the default production attempt factory to concrete transport
+construction across initial and retry generations is not yet present. Source
+review found no corresponding production defect; this does not block G12-B.
+
+G12-A does not add a dynamic product aggregate. The current production daemon
+remains fixed at Spot BTCUSDT and USD-M perpetual BTCUSDT; Contracts and
+Projection are unchanged.
 
 ## G12-B — Configured Product Runtime Set and Dynamic Serving Surface
 
