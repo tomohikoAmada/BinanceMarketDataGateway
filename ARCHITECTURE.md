@@ -334,13 +334,15 @@ identity, and diagnostics derive from that authority. G12 does not authorize a
 shared multiplexed WebSocket, a cross-product `RecoveryCoordinator`,
 `MultiSymbolProjection`, `ProjectionManager`, or a second sequence classifier.
 
-The configured product count is `1..8`; eight is the frozen
-`G12_MAX_CONFIGURED_PRODUCTS` process-resource policy and accepted envelope,
-not a permanent architectural maximum, Binance protocol maximum, or universal
-capacity claim. The gRPC tracked-context limit is one process-wide hard limit of
-48. It must not become a configured-product-count multiplication of a
-per-product limit. Existing G7/G9 publication and admission bounds remain
-product-local unless a later milestone changes them.
+The configured product count is `1..8`. Eight is the frozen
+`G12_MAX_CONFIGURED_PRODUCTS` configuration/resource bound and configuration
+envelope, not a demonstrated throughput capacity, real-network-qualified
+eight-product production capacity, benchmark-derived capacity guarantee,
+Binance protocol maximum, or permanent architectural maximum. The gRPC
+tracked-context limit is one process-wide hard limit of 48. It must not become a
+configured-product-count multiplication of a per-product limit. Existing
+G7/G9 publication and admission bounds remain product-local unless a later
+milestone changes them.
 
 The target production configuration authority is startup-only JSON:
 
@@ -361,11 +363,14 @@ Startup acquires Spot `exchangeInfo` once when Spot products exist and USD-M
 `exchangeInfo` once when USD-M products exist. It selects every exact configured
 symbol and derives one supported `NumericSpec` per `MarketKey`; missing,
 ineligible, malformed, or unsupported metadata fails closed before serving.
-Product-local REST depth snapshots remain product-local. One shared absolute
-process-level startup deadline governs metadata, construction, start, and
-initial readiness. All configured products must reach Live/Synchronized before
-gRPC starts. Any initial product failure or stop causes complete rollback; once
-serving, one product can fail without taking down healthy products or gRPC.
+Product-local REST depth snapshots remain product-local. Metadata acquisition
+remains bounded by its network-stage authority and fails closed; it is not
+folded into the shared product-readiness deadline. The product-start/initial-
+readiness phase uses one shared absolute deadline across the configured product
+set, and the deadline is not reset per product. All configured products must
+reach Live/Synchronized before gRPC starts. Any initial product failure or stop
+causes complete rollback; once serving, one product can fail without taking
+down healthy products or gRPC.
 
 The serving aggregate uses stable `ProductRuntime` object addresses and an
 immutable non-owning dynamic registry after construction, with deterministic

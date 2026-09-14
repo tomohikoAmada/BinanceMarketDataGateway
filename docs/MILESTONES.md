@@ -816,11 +816,12 @@ G12_MAX_CONFIGURED_PRODUCTS = 8
 GLOBAL_GRPC_TRACKED_CONTEXT_LIMIT = 48
 ```
 
-The configured product count is `1..8`. Eight is a G12 qualified
-process-resource policy and accepted-envelope bound, not a permanent
-architectural maximum, Binance protocol maximum, or benchmark-derived
-universal capacity claim. A future separately reviewed milestone may raise it
-after evidence.
+The configured product count is `1..8`. Eight is the frozen G12
+configuration/resource bound and configuration envelope, and a process
+boundedness policy. It is not a demonstrated throughput capacity, a
+real-network-qualified eight-product production capacity, a benchmark-derived
+capacity guarantee, a Binance protocol maximum, or a permanent architectural
+maximum. A future separately reviewed milestone may raise it after evidence.
 
 The gRPC tracked-context limit is process-wide and remains exactly 48. It must
 not become configured-product-count multiplied by a per-product limit. Existing
@@ -886,10 +887,13 @@ parse config
   -> start gRPC
 ```
 
-One shared absolute process-level initial-startup deadline governs this flow; it
-is not an N-times-per-product timeout design. Any product failure or stop during
-initial startup causes complete rollback. After serving begins, a failure of
-one product is product-local and healthy products plus gRPC remain available.
+Metadata acquisition remains bounded by its network-stage authority and fails
+closed. The product-start/initial-readiness phase uses one shared absolute
+deadline across the configured product set; the deadline is not reset per
+product and readiness does not become N times a per-product timeout. Any
+product failure or stop during initial startup causes complete rollback. After
+serving begins, a failure of one product is product-local and healthy products
+plus gRPC remain available.
 Server handlers must stop and drain before any `ProductRuntime` owner can be
 destroyed.
 
@@ -958,11 +962,13 @@ are destroyed; no relocating owner layout may invalidate registry references.
 Implement `bmd-gatewayd --config PATH` with strict startup-only JSON parsing,
 total configured `MarketKey` count `1..8`, exact duplicate checks, canonical
 deterministic `MarketKey` ordering, once-per-configured-market authoritative
-metadata acquisition, per-`MarketKey` `NumericSpec`, construction of the
-configured runtime set, one shared absolute initial-startup deadline, and
-all-products Live/Synchronized readiness before gRPC starts. Initial product
-failure or stop during startup requires complete rollback; after serving,
-one-product failure remains isolated. There is no hot reload.
+metadata acquisition independently bounded by its network-stage authority and
+fail-closed,
+per-`MarketKey` `NumericSpec`, construction of the configured runtime set, one
+shared absolute product-start/initial-readiness deadline across all configured
+products, and all-products Live/Synchronized readiness before gRPC starts.
+Initial product failure or stop during startup requires complete rollback; after
+serving, one-product failure remains isolated. There is no hot reload.
 
 ## G12-D — Deterministic Four-Product Acceptance
 
@@ -977,15 +983,21 @@ BINANCE / USD_M_PERPETUAL / BTCUSDT
 BINANCE / USD_M_PERPETUAL / ETHUSDT
 ```
 
+The configuration-cardinality checks must reject zero products, accept one
+product, accept four products, accept eight products at the configuration
+boundary, and reject nine products. The deterministic runtime acceptance
+remains the fixed four-product workload above; G12-D does not require a second
+full eight-runtime acceptance workload.
+
 Acceptance must prove four distinct product runtimes, four private Projection
 ownership domains, exact symbol/market routing, independent recovery and
 generation, one-product recovery isolation, post-start terminal-failure
-isolation, deterministic status rows, unconfigured-product rejection,
-duplicate rejection, rejection of zero products, rejection of nine products,
-acceptance of eight products, a process-wide tracked-context maximum of 48,
-one global startup deadline rather than N multiplied timeouts, safe rollback,
-safe shutdown, and no active RPC handler outliving an owned product. No
-real-network long soak is part of this milestone.
+isolation, deterministic configured status rows, unconfigured-product
+rejection, duplicate rejection, a process-wide tracked-context maximum of 48,
+one shared product-start/initial-readiness deadline rather than N multiplied
+per-product readiness timeouts, safe rollback, safe shutdown, and no active RPC
+handler outliving an owned product. No real-network long soak is part of this
+milestone.
 
 ## G12-E — Real Network Bounded Qualification
 
