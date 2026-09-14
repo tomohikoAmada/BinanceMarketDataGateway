@@ -47,6 +47,18 @@ static_assert(
     std::is_const_v<std::remove_reference_t<
         decltype(*std::declval<g9::PeekedEventPublication>().ordinary)>>);
 
+template <typename T, typename = void>
+struct exposes_aggregate_performance_export : std::false_type {};
+
+template <typename T>
+struct exposes_aggregate_performance_export<
+    T,
+    std::void_t<decltype(std::declval<const T &>().write_performance_baseline(
+        std::declval<std::ostream &>()))>> : std::true_type {};
+
+static_assert(!exposes_aggregate_performance_export<
+              g11::ConfiguredProductRuntimeSet>::value);
+
 class TestFailure final : public std::exception {
 public:
   explicit TestFailure(std::string message) : message_{std::move(message)} {}
@@ -545,8 +557,23 @@ void production_shutdown_precedes_bounded_export() {
   std::ostringstream artifact;
   REQUIRE(gateway.write_performance_baseline(artifact));
   const auto text = artifact.str();
-  REQUIRE(text.find("BINANCE/SPOT/BTCUSDT") != std::string::npos);
-  REQUIRE(text.find("BINANCE/USD_M_PERPETUAL/BTCUSDT") != std::string::npos);
+  const auto spot_campaign =
+      text.find("{\"record\":\"campaign\",\"schema\":\"bmd-gateway-"
+                "performance-baseline.v1\",\"product\":\"BINANCE/SPOT/"
+                "BTCUSDT\"");
+  const auto usdm_campaign =
+      text.find("{\"record\":\"campaign\",\"schema\":\"bmd-gateway-"
+                "performance-baseline.v1\",\"product\":\"BINANCE/"
+                "USD_M_PERPETUAL/BTCUSDT\"");
+  REQUIRE(spot_campaign != std::string::npos);
+  REQUIRE(usdm_campaign != std::string::npos);
+  REQUIRE(spot_campaign < usdm_campaign);
+  const auto campaign_record =
+      text.find("{\"record\":\"campaign\"", spot_campaign + 1U);
+  const auto trailing_campaign =
+      text.find("{\"record\":\"campaign\"", usdm_campaign + 1U);
+  REQUIRE(campaign_record == usdm_campaign);
+  REQUIRE(trailing_campaign == std::string::npos);
 }
 
 } // namespace

@@ -501,15 +501,6 @@ void ConfiguredProductRuntimeSet::stop() noexcept {
   }
 }
 
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
-void ConfiguredProductRuntimeSet::write_performance_baseline(
-    std::ostream &output) const {
-  for (const auto &owner : owners_) {
-    owner->performance_baseline().write_json_lines(output);
-  }
-}
-#endif
-
 TwoProductRuntime::TwoProductRuntime(core::NumericSpec spot_numeric_spec,
                                      core::NumericSpec usdm_numeric_spec,
                                      g3::RuntimeClock clock,
@@ -551,7 +542,16 @@ const MarketRuntimeRegistry &TwoProductRuntime::registry() const noexcept {
 
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
 void TwoProductRuntime::write_performance_baseline(std::ostream &output) const {
-  products_.write_performance_baseline(output);
+  if (products_.size() != 2U) {
+    return;
+  }
+  const auto *spot = products_.find(spot_btcusdt_key());
+  const auto *usdm = products_.find(usdm_btcusdt_key());
+  if (spot == nullptr || usdm == nullptr) {
+    return;
+  }
+  spot->performance_baseline().write_json_lines(output);
+  usdm->performance_baseline().write_json_lines(output);
 }
 #endif
 

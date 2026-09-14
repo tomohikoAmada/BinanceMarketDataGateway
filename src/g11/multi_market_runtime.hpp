@@ -121,9 +121,6 @@ public:
   [[nodiscard]] std::vector<ProductStartObservation> start();
   void shutdown_publications() noexcept;
   void stop() noexcept;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
-  void write_performance_baseline(std::ostream &output) const;
-#endif
 
 private:
   struct PreparedSpecifications final {
