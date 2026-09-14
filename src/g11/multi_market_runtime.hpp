@@ -11,6 +11,7 @@
 #include <iosfwd>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace binance_market_data::gateway::g11 {
 
@@ -28,6 +29,14 @@ struct ProductRuntimeOptions final {
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
   performance::PerformanceBaselineLimits performance_baseline_limits{};
 #endif
+};
+
+// Already-resolved runtime input. Configuration parsing and metadata
+// acquisition remain outside this G12-B type.
+struct ProductRuntimeSpec final {
+  MarketKey key;
+  core::NumericSpec numeric_spec;
+  ProductRuntimeOptions options;
 };
 
 // Owns exactly one single-product runtime graph.
@@ -82,7 +91,60 @@ struct TwoProductStartResult final {
   g5::RecoveryStartResult usdm;
 };
 
-// Fixed G11 owning aggregate: exactly Spot BTCUSDT and USD-M BTCUSDT.
+struct ProductStartObservation final {
+  MarketKey key;
+  g5::RecoveryStartResult result{g5::RecoveryStartResult::AlreadyStarted};
+};
+
+// Finite immutable owner set. unique_ptr keeps every ProductRuntime and its
+// registry-visible subobjects at a stable address for the set lifetime.
+class ConfiguredProductRuntimeSet final {
+public:
+  ConfiguredProductRuntimeSet(std::vector<ProductRuntimeSpec> specifications,
+                              g3::RuntimeClock clock,
+                              std::string gateway_instance_id);
+  ~ConfiguredProductRuntimeSet();
+
+  ConfiguredProductRuntimeSet(const ConfiguredProductRuntimeSet &) = delete;
+  ConfiguredProductRuntimeSet &
+  operator=(const ConfiguredProductRuntimeSet &) = delete;
+  ConfiguredProductRuntimeSet(ConfiguredProductRuntimeSet &&) = delete;
+  ConfiguredProductRuntimeSet &
+  operator=(ConfiguredProductRuntimeSet &&) = delete;
+
+  [[nodiscard]] std::size_t size() const noexcept;
+  [[nodiscard]] const MarketRuntimeRegistry &registry() const noexcept;
+  [[nodiscard]] ProductRuntime *find(const MarketKey &key) noexcept;
+  [[nodiscard]] const ProductRuntime *find(const MarketKey &key) const noexcept;
+  [[nodiscard]] const std::vector<std::unique_ptr<ProductRuntime>> &
+  products() const noexcept;
+  [[nodiscard]] std::vector<ProductStartObservation> start();
+  void shutdown_publications() noexcept;
+  void stop() noexcept;
+
+private:
+  struct PreparedSpecifications final {
+    std::vector<ProductRuntimeSpec> values;
+  };
+
+  ConfiguredProductRuntimeSet(PreparedSpecifications specifications,
+                              g3::RuntimeClock clock,
+                              std::string gateway_instance_id);
+  [[nodiscard]] static PreparedSpecifications
+  prepare(std::vector<ProductRuntimeSpec> specifications);
+  [[nodiscard]] static std::vector<std::unique_ptr<ProductRuntime>>
+  construct_owners(PreparedSpecifications specifications,
+                   const g3::RuntimeClock &clock,
+                   const std::string &gateway_instance_id);
+  [[nodiscard]] static std::vector<MarketServices> make_registry_entries(
+      const std::vector<std::unique_ptr<ProductRuntime>> &owners);
+
+  // Declaration order is the lifetime proof: registry_ dies before owners_.
+  std::vector<std::unique_ptr<ProductRuntime>> owners_;
+  MarketRuntimeRegistry registry_;
+};
+
+// Thin fixed-G11 compatibility view over the generic configured owner set.
 class TwoProductRuntime final {
 public:
   TwoProductRuntime(core::NumericSpec spot_numeric_spec,
@@ -108,9 +170,7 @@ public:
 #endif
 
 private:
-  ProductRuntime spot_;
-  ProductRuntime usdm_;
-  MarketRuntimeRegistry registry_;
+  ConfiguredProductRuntimeSet products_;
 };
 
 } // namespace binance_market_data::gateway::g11

@@ -325,10 +325,14 @@ void write_absent_string(std::ostream &output, std::string_view name) {
   output << ' ' << name << "=none " << name << "_truncated=no";
 }
 
-void write_failure(std::ostream &output, std::string_view product,
+void write_failure(std::ostream &output, const g11::MarketKey &key,
                    std::size_t index,
                    const g5::RecoveryFailureDiagnostic &failure) {
-  output << "gateway_recovery_failure product=" << product << " index=" << index
+  output << "gateway_recovery_failure venue="
+         << g11::common_wire::Venue_Name(key.venue)
+         << " market=" << g11::common_wire::Market_Name(key.market);
+  write_bounded_string(output, "symbol", key.symbol);
+  output << " index=" << index
          << " generation=" << failure.connection_generation
          << " cause=" << diagnostic_name(failure.cause)
          << " runtime_state=" << diagnostic_name(failure.runtime_state)
@@ -406,21 +410,47 @@ void write_failure(std::ostream &output, std::string_view product,
   output << '\n';
 }
 
-void write_product_failures(std::ostream &output, std::string_view product,
+void write_product_failures(std::ostream &output, const g11::MarketKey &key,
                             const g5::RecoveryObservation &recovery) {
   const auto size =
       std::min(recovery.failure_history_size, recovery.failure_history.size());
   for (std::size_t index = 0U; index < size; ++index) {
-    write_failure(output, product, index, recovery.failure_history[index]);
+    write_failure(output, key, index, recovery.failure_history[index]);
   }
+}
+
+struct GatewayTotals final {
+  std::size_t transports{0U};
+  std::size_t subscriptions{0U};
+  bool owners_joined{true};
+};
+
+[[nodiscard]] GatewayTotals totals(const GatewayObservation &observation) {
+  GatewayTotals result;
+  for (const auto &product : observation.products) {
+    result.transports += product.recovery.active_transport_count;
+    result.subscriptions += product.runtime.resident_subscription_count +
+                            product.events.active_subscriptions;
+    result.owners_joined = result.owners_joined && product.runtime.owner_joined;
+  }
+  return result;
+}
+
+[[nodiscard]] const ProductObservation *
+find_product(const GatewayObservation &observation, const g11::MarketKey &key) {
+  const auto found =
+      std::find_if(observation.products.begin(), observation.products.end(),
+                   [&key](const auto &product) { return product.key == key; });
+  return found == observation.products.end() ? nullptr : &*found;
 }
 
 } // namespace
 
 void write_recovery_failure_diagnostics(std::ostream &output,
                                         const GatewayObservation &observation) {
-  write_product_failures(output, "spot", observation.spot_recovery);
-  write_product_failures(output, "usdm", observation.usdm_recovery);
+  for (const auto &product : observation.products) {
+    write_product_failures(output, product.key, product.recovery);
+  }
 }
 
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
@@ -467,24 +497,16 @@ int run_production_service(const DaemonConfig &config,
       gateway.start([&signals] { return signals.requested(); });
   if (started != StartResult::Serving) {
     const auto final = gateway.observe();
+    const auto final_totals = totals(final);
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
     const auto exported = export_performance_baseline(gateway, errors);
 #endif
     if (started == StartResult::StopRequested) {
       output << "gateway_state=stopped startup_result=" << to_string(started)
-             << " contexts=" << final.tracked_contexts << " transports="
-             << final.spot_recovery.active_transport_count +
-                    final.usdm_recovery.active_transport_count
-             << " subscriptions="
-             << final.spot_runtime.resident_subscription_count +
-                    final.usdm_runtime.resident_subscription_count +
-                    final.spot_events.active_subscriptions +
-                    final.usdm_events.active_subscriptions
-             << " owners_joined="
-             << (final.spot_runtime.owner_joined &&
-                         final.usdm_runtime.owner_joined
-                     ? "yes"
-                     : "no")
+             << " contexts=" << final.tracked_contexts
+             << " transports=" << final_totals.transports
+             << " subscriptions=" << final_totals.subscriptions
+             << " owners_joined=" << (final_totals.owners_joined ? "yes" : "no")
              << '\n';
       return
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
@@ -499,10 +521,13 @@ int run_production_service(const DaemonConfig &config,
   }
 
   const auto serving = gateway.observe();
+  const auto *spot = find_product(serving, g11::spot_btcusdt_key());
+  const auto *usdm = find_product(serving, g11::usdm_btcusdt_key());
   output << "gateway_state=serving products=2 grpc_port="
-         << serving.selected_port
-         << " spot_generation=" << serving.spot_recovery.connection_generation
-         << " usdm_generation=" << serving.usdm_recovery.connection_generation
+         << serving.selected_port << " spot_generation="
+         << (spot == nullptr ? 0U : spot->recovery.connection_generation)
+         << " usdm_generation="
+         << (usdm == nullptr ? 0U : usdm->recovery.connection_generation)
          << " context_limit=" << serving.context_limit
          << " gateway_instance_id=" << gateway.gateway_instance_id() << '\n'
          << std::flush;
@@ -522,20 +547,12 @@ int run_production_service(const DaemonConfig &config,
 #endif
 
   const auto final = gateway.observe();
+  const auto final_totals = totals(final);
   write_recovery_failure_diagnostics(errors, final);
   output << "gateway_state=stopped contexts=" << final.tracked_contexts
-         << " transports="
-         << final.spot_recovery.active_transport_count +
-                final.usdm_recovery.active_transport_count
-         << " subscriptions="
-         << final.spot_runtime.resident_subscription_count +
-                final.usdm_runtime.resident_subscription_count +
-                final.spot_events.active_subscriptions +
-                final.usdm_events.active_subscriptions
-         << " owners_joined="
-         << (final.spot_runtime.owner_joined && final.usdm_runtime.owner_joined
-                 ? "yes"
-                 : "no")
+         << " transports=" << final_totals.transports
+         << " subscriptions=" << final_totals.subscriptions
+         << " owners_joined=" << (final_totals.owners_joined ? "yes" : "no")
          << '\n'
          << std::flush;
   return received == -1

@@ -284,6 +284,109 @@ live_test_options(common_wire::Market market) {
   return options;
 }
 
+[[nodiscard]] g11::ProductRuntimeSpec resolved_spec(g11::MarketKey key,
+                                                    bool live = false) {
+  g11::ProductRuntimeOptions options;
+  if (live) {
+    options.recovery_test = live_test_options(key);
+  }
+  return {std::move(key), numeric_spec(), std::move(options)};
+}
+
+[[nodiscard]] bool
+rejects_configured_set(std::vector<g11::ProductRuntimeSpec> specifications) {
+  try {
+    g11::ConfiguredProductRuntimeSet products{std::move(specifications),
+                                              fixed_clock(), "gw-invalid-set"};
+    return false;
+  } catch (const std::invalid_argument &) {
+    return true;
+  }
+}
+
+void configured_set_cardinality_duplicates_order_and_stability() {
+  REQUIRE(rejects_configured_set({}));
+
+  g11::ConfiguredProductRuntimeSet one{
+      std::vector<g11::ProductRuntimeSpec>{resolved_spec(
+          {common_wire::VENUE_BINANCE, common_wire::MARKET_SPOT, "ETHUSDT"})},
+      fixed_clock(), "gw-one"};
+  REQUIRE_EQ(one.size(), 1U);
+  REQUIRE_EQ(one.registry().entries().size(), 1U);
+  const auto rejects_registry = [](std::vector<g11::MarketServices> entries) {
+    try {
+      g11::MarketRuntimeRegistry registry{std::move(entries)};
+      return false;
+    } catch (const std::invalid_argument &) {
+      return true;
+    }
+  };
+  auto null_services = one.registry().entries().front();
+  null_services.runtime = nullptr;
+  REQUIRE(rejects_registry({null_services}));
+  auto aliased_services = one.registry().entries().front();
+  auto second_alias = aliased_services;
+  second_alias.key = g11::usdm_btcusdt_key();
+  REQUIRE(rejects_registry({aliased_services, second_alias}));
+
+  std::vector<g11::ProductRuntimeSpec> eight_specs;
+  for (const auto *symbol : {"A", "B", "C", "D", "E", "F", "G", "H"}) {
+    eight_specs.push_back(resolved_spec(
+        {common_wire::VENUE_BINANCE, common_wire::MARKET_SPOT, symbol}));
+  }
+  g11::ConfiguredProductRuntimeSet eight{std::move(eight_specs), fixed_clock(),
+                                         "gw-eight"};
+  REQUIRE_EQ(eight.size(), 8U);
+  REQUIRE_EQ(eight.registry().entries().size(), 8U);
+
+  auto nine_specs = std::vector<g11::ProductRuntimeSpec>{};
+  for (const auto *symbol : {"A", "B", "C", "D", "E", "F", "G", "H", "I"}) {
+    nine_specs.push_back(resolved_spec(
+        {common_wire::VENUE_BINANCE, common_wire::MARKET_SPOT, symbol}));
+  }
+  REQUIRE(rejects_configured_set(std::move(nine_specs)));
+
+  const g11::MarketKey duplicate_key{common_wire::VENUE_BINANCE,
+                                     common_wire::MARKET_SPOT, "ETHUSDT"};
+  std::vector<g11::ProductRuntimeSpec> duplicates;
+  duplicates.push_back(resolved_spec(duplicate_key));
+  duplicates.push_back(resolved_spec(duplicate_key));
+  REQUIRE(rejects_configured_set(std::move(duplicates)));
+
+  const g11::MarketKey spot_btc = g11::spot_btcusdt_key();
+  const g11::MarketKey spot_eth{common_wire::VENUE_BINANCE,
+                                common_wire::MARKET_SPOT, "ETHUSDT"};
+  const g11::MarketKey usdm_btc = g11::usdm_btcusdt_key();
+  const g11::MarketKey usdm_eth{common_wire::VENUE_BINANCE,
+                                common_wire::MARKET_USD_M_PERPETUAL, "ETHUSDT"};
+  std::vector<g11::ProductRuntimeSpec> scrambled;
+  scrambled.push_back(resolved_spec(usdm_eth));
+  scrambled.push_back(resolved_spec(spot_eth));
+  scrambled.push_back(resolved_spec(usdm_btc));
+  scrambled.push_back(resolved_spec(spot_btc));
+  g11::ConfiguredProductRuntimeSet four{std::move(scrambled), fixed_clock(),
+                                        "gw-four"};
+  const auto &entries = four.registry().entries();
+  REQUIRE_EQ(entries.size(), 4U);
+  REQUIRE_EQ(entries[0].key, spot_btc);
+  REQUIRE_EQ(entries[1].key, spot_eth);
+  REQUIRE_EQ(entries[2].key, usdm_btc);
+  REQUIRE_EQ(entries[3].key, usdm_eth);
+  for (std::size_t index = 0U; index < entries.size(); ++index) {
+    auto *owner = four.find(entries[index].key);
+    REQUIRE(owner != nullptr);
+    REQUIRE(owner == four.products()[index].get());
+    REQUIRE(entries[index].runtime == &owner->runtime());
+    REQUIRE(entries[index].recovery == &owner->recovery());
+    REQUIRE(entries[index].event_publication == &owner->event_publication());
+  }
+  REQUIRE(four.find({common_wire::VENUE_BINANCE, common_wire::MARKET_SPOT,
+                     "UNCONFIGURED"}) == nullptr);
+  REQUIRE(four.registry().find(spot_btc) != nullptr);
+  REQUIRE(four.registry().find(usdm_btc) != nullptr);
+  REQUIRE(four.registry().find(spot_btc) != four.registry().find(usdm_btc));
+}
+
 void two_product_ownership_and_projection_policy() {
   g11::TwoProductRuntime products{numeric_spec(), numeric_spec(), fixed_clock(),
                                   "gw-g11", live_two_product_options()};
@@ -495,6 +598,8 @@ int main() {
        one_market_terminal_failure_does_not_stop_other},
       {"PRODUCT_RUNTIME_USES_EXACT_MARKET_KEY_IDENTITY",
        product_runtime_uses_exact_market_key_identity},
+      {"CONFIGURED_SET_CARDINALITY_DUPLICATES_ORDER_AND_STABILITY",
+       configured_set_cardinality_duplicates_order_and_stability},
   };
 
   for (const auto &[name, test] : tests) {

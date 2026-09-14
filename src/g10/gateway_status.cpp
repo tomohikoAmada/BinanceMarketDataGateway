@@ -1,9 +1,9 @@
 #include "gateway_status.hpp"
 
-#include <array>
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace binance_market_data::gateway::g10 {
 
@@ -99,15 +99,15 @@ void GatewayStatusAssembler::clear_start_baseline() noexcept {
 }
 
 StatusSnapshotResult GatewayStatusAssembler::collect() const {
-  std::array<CollectedMarket, 2U> markets;
-  std::size_t market_count = 0U;
+  std::vector<CollectedMarket> markets;
 #if defined(BMD_GATEWAY_G11_ENABLED)
   if (registry_ != nullptr) {
+    markets.reserve(registry_->entries().size());
     for (const auto &entry : registry_->entries()) {
-      markets[market_count++] = CollectedMarket{
-          entry.key.venue,           entry.key.market,
-          entry.key.symbol,          entry.runtime->observe(),
-          entry.recovery->observe(), entry.event_publication->observe()};
+      markets.push_back(
+          CollectedMarket{entry.key.venue, entry.key.market, entry.key.symbol,
+                          entry.runtime->observe(), entry.recovery->observe(),
+                          entry.event_publication->observe()});
     }
   } else
 #endif
@@ -116,16 +116,13 @@ StatusSnapshotResult GatewayStatusAssembler::collect() const {
         event_publication_ == nullptr) {
       return StatusSnapshotError::InvalidObservation;
     }
-    markets[market_count++] = CollectedMarket{common_wire::VENUE_BINANCE,
-                                              common_wire::MARKET_SPOT,
-                                              "BTCUSDT",
-                                              runtime_->observe(),
-                                              recovery_->observe(),
-                                              event_publication_->observe()};
+    markets.push_back(CollectedMarket{common_wire::VENUE_BINANCE,
+                                      common_wire::MARKET_SPOT, "BTCUSDT",
+                                      runtime_->observe(), recovery_->observe(),
+                                      event_publication_->observe()});
   }
 
-  for (std::size_t index = 0U; index < market_count; ++index) {
-    const auto &market = markets[index];
+  for (const auto &market : markets) {
     if (!map_runtime_state(market.runtime.state).has_value() ||
         !valid_recovery_observation(market.recovery) ||
         market.runtime.resident_subscription_count >
@@ -162,8 +159,7 @@ StatusSnapshotResult GatewayStatusAssembler::collect() const {
   snapshot.set_uptime_seconds(
       (observed_at.monotonic_ns - baseline_monotonic_ns) / 1'000'000'000U);
   std::uint64_t total_active_subscriptions = 0U;
-  for (std::size_t index = 0U; index < market_count; ++index) {
-    const auto &observation = markets[index];
+  for (const auto &observation : markets) {
     const auto mapped_state = map_runtime_state(observation.runtime.state);
     const auto active_subscriptions =
         observation.runtime.resident_subscription_count +

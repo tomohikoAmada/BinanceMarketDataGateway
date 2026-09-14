@@ -2,6 +2,8 @@
 
 #include "spot_transport.hpp"
 
+#include <algorithm>
+#include <cassert>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -285,6 +287,19 @@ make_performance_baseline(const MarketKey &key, const g3::RuntimeClock &clock,
   throw std::invalid_argument{"unsupported legacy product kind"};
 }
 
+[[nodiscard]] std::vector<ProductRuntimeSpec>
+two_product_specifications(core::NumericSpec spot_numeric_spec,
+                           core::NumericSpec usdm_numeric_spec,
+                           TwoProductRuntimeOptions options) {
+  std::vector<ProductRuntimeSpec> specifications;
+  specifications.reserve(2U);
+  specifications.push_back(
+      {spot_btcusdt_key(), spot_numeric_spec, std::move(options.spot)});
+  specifications.push_back(
+      {usdm_btcusdt_key(), usdm_numeric_spec, std::move(options.usdm)});
+  return specifications;
+}
+
 } // namespace
 
 ProductRuntime::ProductRuntime(MarketKey key, core::NumericSpec numeric_spec,
@@ -363,55 +378,180 @@ ProductRuntime::performance_baseline() const noexcept {
 }
 #endif
 
+ConfiguredProductRuntimeSet::ConfiguredProductRuntimeSet(
+    std::vector<ProductRuntimeSpec> specifications, g3::RuntimeClock clock,
+    std::string gateway_instance_id)
+    : ConfiguredProductRuntimeSet(prepare(std::move(specifications)),
+                                  std::move(clock),
+                                  std::move(gateway_instance_id)) {}
+
+ConfiguredProductRuntimeSet::ConfiguredProductRuntimeSet(
+    PreparedSpecifications specifications, g3::RuntimeClock clock,
+    std::string gateway_instance_id)
+    : owners_{construct_owners(std::move(specifications), clock,
+                               gateway_instance_id)},
+      registry_{make_registry_entries(owners_)} {}
+
+ConfiguredProductRuntimeSet::~ConfiguredProductRuntimeSet() { stop(); }
+
+ConfiguredProductRuntimeSet::PreparedSpecifications
+ConfiguredProductRuntimeSet::prepare(
+    std::vector<ProductRuntimeSpec> specifications) {
+  if (specifications.empty() ||
+      specifications.size() > kMaximumConfiguredProducts) {
+    throw std::invalid_argument{
+        "configured products require between one and eight specifications"};
+  }
+  std::sort(specifications.begin(), specifications.end(),
+            [](const auto &left, const auto &right) {
+              return MarketKeyLess{}(left.key, right.key);
+            });
+  const auto duplicate =
+      std::adjacent_find(specifications.begin(), specifications.end(),
+                         [](const auto &left, const auto &right) {
+                           return left.key == right.key;
+                         });
+  if (duplicate != specifications.end()) {
+    throw std::invalid_argument{
+        "configured product specifications must have unique MarketKeys"};
+  }
+  return {std::move(specifications)};
+}
+
+std::vector<std::unique_ptr<ProductRuntime>>
+ConfiguredProductRuntimeSet::construct_owners(
+    PreparedSpecifications specifications, const g3::RuntimeClock &clock,
+    const std::string &gateway_instance_id) {
+  std::vector<std::unique_ptr<ProductRuntime>> owners;
+  owners.reserve(specifications.values.size());
+  for (auto &specification : specifications.values) {
+    owners.push_back(std::make_unique<ProductRuntime>(
+        std::move(specification.key), specification.numeric_spec, clock,
+        gateway_instance_id, std::move(specification.options)));
+  }
+  return owners;
+}
+
+std::vector<MarketServices> ConfiguredProductRuntimeSet::make_registry_entries(
+    const std::vector<std::unique_ptr<ProductRuntime>> &owners) {
+  std::vector<MarketServices> entries;
+  entries.reserve(owners.size());
+  for (const auto &owner : owners) {
+    entries.push_back({owner->key(), &owner->runtime(), &owner->recovery(),
+                       &owner->event_publication()});
+  }
+  return entries;
+}
+
+std::size_t ConfiguredProductRuntimeSet::size() const noexcept {
+  return owners_.size();
+}
+
+const MarketRuntimeRegistry &
+ConfiguredProductRuntimeSet::registry() const noexcept {
+  return registry_;
+}
+
+ProductRuntime *
+ConfiguredProductRuntimeSet::find(const MarketKey &key) noexcept {
+  const auto found =
+      std::find_if(owners_.begin(), owners_.end(),
+                   [&key](const auto &owner) { return owner->key() == key; });
+  return found == owners_.end() ? nullptr : found->get();
+}
+
+const ProductRuntime *
+ConfiguredProductRuntimeSet::find(const MarketKey &key) const noexcept {
+  const auto found =
+      std::find_if(owners_.begin(), owners_.end(),
+                   [&key](const auto &owner) { return owner->key() == key; });
+  return found == owners_.end() ? nullptr : found->get();
+}
+
+const std::vector<std::unique_ptr<ProductRuntime>> &
+ConfiguredProductRuntimeSet::products() const noexcept {
+  return owners_;
+}
+
+std::vector<ProductStartObservation> ConfiguredProductRuntimeSet::start() {
+  std::vector<ProductStartObservation> results;
+  results.reserve(owners_.size());
+  for (const auto &owner : owners_) {
+    results.push_back({owner->key(), owner->start()});
+  }
+  return results;
+}
+
+void ConfiguredProductRuntimeSet::shutdown_publications() noexcept {
+  for (const auto &owner : owners_) {
+    owner->runtime().close_publication_admission();
+  }
+  for (const auto &owner : owners_) {
+    static_cast<void>(owner->runtime().shutdown_publication());
+  }
+  for (const auto &owner : owners_) {
+    owner->event_publication().shutdown();
+  }
+}
+
+void ConfiguredProductRuntimeSet::stop() noexcept {
+  shutdown_publications();
+  for (const auto &owner : owners_) {
+    owner->recovery().stop();
+  }
+}
+
 TwoProductRuntime::TwoProductRuntime(core::NumericSpec spot_numeric_spec,
                                      core::NumericSpec usdm_numeric_spec,
                                      g3::RuntimeClock clock,
                                      std::string gateway_instance_id,
                                      TwoProductRuntimeOptions options)
-    : spot_{spot_btcusdt_key(), spot_numeric_spec, clock, gateway_instance_id,
-            std::move(options.spot)},
-      usdm_{usdm_btcusdt_key(), usdm_numeric_spec, std::move(clock),
-            std::move(gateway_instance_id), std::move(options.usdm)},
-      registry_{{spot_.key(), &spot_.runtime(), &spot_.recovery(),
-                 &spot_.event_publication()},
-                {usdm_.key(), &usdm_.runtime(), &usdm_.recovery(),
-                 &usdm_.event_publication()}} {}
+    : products_{two_product_specifications(spot_numeric_spec, usdm_numeric_spec,
+                                           std::move(options)),
+                std::move(clock), std::move(gateway_instance_id)} {}
 
 TwoProductRuntime::~TwoProductRuntime() { stop(); }
 
 TwoProductStartResult TwoProductRuntime::start() {
-  const auto spot_result = spot_.start();
-  const auto usdm_result = usdm_.start();
-  return {spot_result, usdm_result};
+  const auto results = products_.start();
+  assert(results.size() == 2U);
+  return {results[0].result, results[1].result};
 }
 
 void TwoProductRuntime::shutdown_publications() noexcept {
-  spot_.runtime().close_publication_admission();
-  usdm_.runtime().close_publication_admission();
-  static_cast<void>(spot_.runtime().shutdown_publication());
-  static_cast<void>(usdm_.runtime().shutdown_publication());
-  spot_.event_publication().shutdown();
-  usdm_.event_publication().shutdown();
+  products_.shutdown_publications();
 }
 
-void TwoProductRuntime::stop() noexcept {
-  shutdown_publications();
-  spot_.recovery().stop();
-  usdm_.recovery().stop();
+void TwoProductRuntime::stop() noexcept { products_.stop(); }
+
+ProductRuntime &TwoProductRuntime::spot() noexcept {
+  auto *product = products_.find(spot_btcusdt_key());
+  assert(product != nullptr);
+  return *product;
 }
 
-ProductRuntime &TwoProductRuntime::spot() noexcept { return spot_; }
-
-ProductRuntime &TwoProductRuntime::usdm() noexcept { return usdm_; }
+ProductRuntime &TwoProductRuntime::usdm() noexcept {
+  auto *product = products_.find(usdm_btcusdt_key());
+  assert(product != nullptr);
+  return *product;
+}
 
 const MarketRuntimeRegistry &TwoProductRuntime::registry() const noexcept {
-  return registry_;
+  return products_.registry();
 }
 
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
 void TwoProductRuntime::write_performance_baseline(std::ostream &output) const {
-  spot_.performance_baseline().write_json_lines(output);
-  usdm_.performance_baseline().write_json_lines(output);
+  if (products_.size() != 2U) {
+    return;
+  }
+  const auto *spot = products_.find(spot_btcusdt_key());
+  const auto *usdm = products_.find(usdm_btcusdt_key());
+  if (spot == nullptr || usdm == nullptr) {
+    return;
+  }
+  spot->performance_baseline().write_json_lines(output);
+  usdm->performance_baseline().write_json_lines(output);
 }
 #endif
 

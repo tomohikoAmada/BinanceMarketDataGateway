@@ -34,6 +34,7 @@ namespace g3 = binance_market_data::gateway::g3;
 namespace g4 = binance_market_data::gateway::g4;
 namespace g7 = binance_market_data::gateway::g7;
 namespace g9 = binance_market_data::gateway::g9;
+namespace g11 = binance_market_data::gateway::g11;
 namespace market = binance_market_data::market::v1;
 namespace performance = binance_market_data::gateway::performance;
 namespace production = binance_market_data::gateway::production;
@@ -45,6 +46,18 @@ static_assert(std::is_const_v<std::remove_reference_t<
 static_assert(
     std::is_const_v<std::remove_reference_t<
         decltype(*std::declval<g9::PeekedEventPublication>().ordinary)>>);
+
+template <typename T, typename = void>
+struct exposes_aggregate_performance_export : std::false_type {};
+
+template <typename T>
+struct exposes_aggregate_performance_export<
+    T,
+    std::void_t<decltype(std::declval<const T &>().write_performance_baseline(
+        std::declval<std::ostream &>()))>> : std::true_type {};
+
+static_assert(!exposes_aggregate_performance_export<
+              g11::ConfiguredProductRuntimeSet>::value);
 
 class TestFailure final : public std::exception {
 public:
@@ -533,16 +546,34 @@ void production_shutdown_precedes_bounded_export() {
   const auto final = gateway.observe();
   REQUIRE_EQ(final.state, production::GatewayState::Stopped);
   REQUIRE_EQ(final.tracked_contexts, 0U);
-  REQUIRE(final.spot_runtime.owner_joined);
-  REQUIRE(final.usdm_runtime.owner_joined);
-  REQUIRE_EQ(final.spot_recovery.active_transport_count, 0U);
-  REQUIRE_EQ(final.usdm_recovery.active_transport_count, 0U);
+  REQUIRE_EQ(final.products.size(), 2U);
+  REQUIRE(final.products[0].key == g11::spot_btcusdt_key());
+  REQUIRE(final.products[1].key == g11::usdm_btcusdt_key());
+  REQUIRE(final.products[0].runtime.owner_joined);
+  REQUIRE(final.products[1].runtime.owner_joined);
+  REQUIRE_EQ(final.products[0].recovery.active_transport_count, 0U);
+  REQUIRE_EQ(final.products[1].recovery.active_transport_count, 0U);
 
   std::ostringstream artifact;
   REQUIRE(gateway.write_performance_baseline(artifact));
   const auto text = artifact.str();
-  REQUIRE(text.find("BINANCE/SPOT/BTCUSDT") != std::string::npos);
-  REQUIRE(text.find("BINANCE/USD_M_PERPETUAL/BTCUSDT") != std::string::npos);
+  const auto spot_campaign =
+      text.find("{\"record\":\"campaign\",\"schema\":\"bmd-gateway-"
+                "performance-baseline.v1\",\"product\":\"BINANCE/SPOT/"
+                "BTCUSDT\"");
+  const auto usdm_campaign =
+      text.find("{\"record\":\"campaign\",\"schema\":\"bmd-gateway-"
+                "performance-baseline.v1\",\"product\":\"BINANCE/"
+                "USD_M_PERPETUAL/BTCUSDT\"");
+  REQUIRE(spot_campaign != std::string::npos);
+  REQUIRE(usdm_campaign != std::string::npos);
+  REQUIRE(spot_campaign < usdm_campaign);
+  const auto campaign_record =
+      text.find("{\"record\":\"campaign\"", spot_campaign + 1U);
+  const auto trailing_campaign =
+      text.find("{\"record\":\"campaign\"", usdm_campaign + 1U);
+  REQUIRE(campaign_record == usdm_campaign);
+  REQUIRE(trailing_campaign == std::string::npos);
 }
 
 } // namespace
