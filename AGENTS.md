@@ -22,8 +22,9 @@ assembled from existing runtime, recovery, and publication observations.
 G11 adds the fixed two-product USD-M and multi-market runtime boundary.
 POST_G11_RUNTIME_PRODUCTIZATION is complete: the ordinary `bmd-gatewayd` is
 the long-running fixed two-product production daemon.
-`POST_G11_PERFORMANCE_BASELINE=COMPLETE`; G12 is in progress. `G12-A` is
-complete and `G12-B` is next. Keep Phase A small and independently buildable.
+`POST_G11_PERFORMANCE_BASELINE=COMPLETE`; G12 is in progress. `G12-A` and
+`G12-B` are complete and `G12-C` is next. Keep Phase A small and
+independently buildable.
 
 `RECOVERY_OBSERVABILITY=COMPLETE`; PR #25 merged the bounded product-local
 recovery-failure diagnostic history. The bounded recovery-observation campaign
@@ -40,8 +41,9 @@ G6 rotation, G7 publication/gRPC, G8 integration acceptance, G9
 USD-M/multi-market runtime; future work follows the milestone authority.
 The post-G11 productization is complete and future work follows the milestone
 authority. Recovery observation and the post-G11 performance baseline are
-complete. Future work follows the frozen G12 authority, with `G12-B` next.
-Keep Phase A small and independently buildable.
+complete. G12-B now provides the reusable/internal configured owner set and
+dynamic serving surface. Future work follows the frozen G12 authority, with
+`G12-C` next. Keep Phase A small and independently buildable.
 
 The ordinary `bmd-gatewayd` is now the long-running production daemon for
 exactly Binance Spot BTCUSDT and Binance USD-M perpetual BTCUSDT. It requires
@@ -53,14 +55,18 @@ remains a minimal Phase-A seam and is not the daemon's current production
 semantics.
 
 The coding sequence is `GW-PREQ-003=COMPLETE`, then `G12-A` (complete),
-`G12-B`, `G12-C`, `G12-D`, and `G12-E`; `G12-B` is the next active milestone.
-The current production runtime remains the fixed two-product G11 daemon.
-G12 implementation is authorized, but Contracts and Projection production
-changes are not required. Use the existing
+`G12-B` (complete), `G12-C`, `G12-D`, and `G12-E`; `G12-C` is the next active
+milestone. The current production runtime remains the fixed two-product G11
+daemon. G12 implementation is authorized, but Contracts and Projection
+production changes are not required. Use the existing
 exact `MarketKey = (venue, market, exact symbol)` authority, support at most
 eight configured products, keep the process-global tracked-context cap at 48,
-and give each `MarketKey` one independent transport. Do not treat the target
-architecture as already implemented or jump ahead of the active milestone.
+and give each `MarketKey` one independent transport. Do not redo the G12-B
+ownership/registry/routing architecture. G12-C must build production
+configuration, metadata, and startup composition on the already implemented
+`ConfiguredProductRuntimeSet` and dynamic registry surface; do not treat
+G12-C or later target behavior as already implemented or jump ahead of the
+active milestone.
 
 ## Boundaries
 
@@ -112,22 +118,25 @@ architecture as already implemented or jump ahead of the active milestone.
   both products, G9 exposes only USD-M `DIFF_DEPTH`, status has two rows, and
   the G11-enabled streaming bound is 48 (the G11-off legacy bound is 24).
   There is no generic multi-market, event, plugin, or runtime framework.
-- G12 is the authorized configurable finite-product target, not current
-  behavior. It keeps exact `MarketKey` identity, permits 1..8 configured
-  products, uses one isolated `ProductRuntime` and independent transport per
-  `MarketKey`, and keeps the process-global tracked-context hard limit at 48.
-  Its startup-only authority is `bmd-gatewayd --config PATH`; all configured
-  products are required for initial readiness, and later failure is isolated
-  per product. Do not introduce shared WebSocket multiplexing, hot reload,
-  runtime add/remove, a second classifier, or a generic framework.
+- G12-B has implemented the reusable/internal configurable finite-product
+  owner set and dynamic serving surface. It keeps exact `MarketKey` identity,
+  permits 1..8 configured products at the lower-level set, uses one isolated
+  `ProductRuntime` and independent transport per `MarketKey`, and keeps the
+  process-global tracked-context hard limit at 48. G12-C remains the
+  authorized production target with startup-only authority
+  `bmd-gatewayd --config PATH`; all configured products are required for
+  initial readiness, and later failure is isolated per product. Do not
+  introduce shared WebSocket multiplexing, hot reload, runtime add/remove, a
+  second classifier, or a generic framework.
 - Post-G11 productization keeps exactly two production products, one runtime/
-  Projection owner/recovery instance per product, a fixed two-entry registry,
-  one transport per product and two total, and a 48-context streaming bound.
-  Projection remains the sole Spot/USD-M sequencing and USD-M `pu` authority.
-  Both products must be initial-Live before production readiness; a later
-  single-market failure does not globally stop service. Server handlers must
-  shut down before product graph destruction, the signal model must remain
-  async-safe, and production must not contain an acceptance-only hook.
+  Projection owner/recovery instance per product, and the G12-B configured
+  owner set with two current registry entries. It retains one transport per
+  product and two total, and a 48-context streaming bound. Projection remains
+  the sole Spot/USD-M sequencing and USD-M `pu` authority. Both products must
+  be initial-Live before production readiness; a later single-market failure
+  does not globally stop service. Server handlers must shut down before
+  product graph destruction, the signal model must remain async-safe, and
+  production must not contain an acceptance-only hook.
 - Do not copy Contracts `.proto` files or introduce floating FetchContent dependencies.
 
 ## Post-G11 performance phase

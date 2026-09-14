@@ -2,8 +2,8 @@
 
 This is the authoritative development plan for the Gateway. The latest
 behavior-changing implementation merge is
-`c846046a85027512e02516907b630ac9f2015146`, with implementation tree
-`1755513556e09abb080ffbcd4a41bec32668f8c0`. Live `main` is the branch
+`977be92d05f1f1926325609cfa5c609558666d5e`, with implementation tree
+`fdfb650e22f00557b0174606b50e4cf18b20aab1`. Live `main` is the branch
 authority; docs-only alignment commits may advance its SHA without changing
 implementation semantics. The related upstream authorities
 for the current productization closure are Contracts
@@ -11,7 +11,8 @@ for the current productization closure are Contracts
 `8621499cbeba0e42c409572ee3f209c32691698b`.
 
 The current implementation is G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, G7, G8,
-G9, G10, and G11 complete.
+G9, G10, and G11 complete, with G12-A and G12-B also complete in the G12
+campaign.
 The deterministic synthetic host, serialized `MarketRuntime`, first real Binance
 Spot BTCUSDT network/bootstrap runtime, bounded reconnect/resync recovery, and
 planned connection rotation are implemented. G7 adds bounded order-book
@@ -28,9 +29,9 @@ retained only as a closed, not-merged, abandoned implementation attempt.
 The current production implementation remains the fixed G11 two-product
 runtime. The G12 campaign is in progress and introduces a finite
 startup-configured product set without changing Contracts or Projection.
-G12-A exact single-product parameterization is complete; G12-B is the next
-technical stage. The reusable G12-A path does not change the current production
-composition.
+G12-A exact single-product parameterization and G12-B configured runtime
+serving are complete; G12-C is the next technical stage. The reusable G12-A
+and G12-B paths do not change the current production composition.
 
 ## Responsibility split
 
@@ -138,7 +139,7 @@ runtime framework.
 - `GW-PREQ-003=COMPLETE`.
 - `G12=IN_PROGRESS`.
 - `G12-A=COMPLETE`.
-- `G12-B=NOT_STARTED`.
+- `G12-B=COMPLETE`.
 - `G12-C=NOT_STARTED`.
 - `G12-D=NOT_STARTED`.
 - `G12-E=NOT_STARTED`.
@@ -151,8 +152,8 @@ runtime framework.
 - `G12_CONFIG_AUTHORITY=STARTUP_JSON_FILE`.
 - `G12_HOT_RELOAD=NO`.
 - `G12_INITIAL_ACCEPTANCE_PRODUCT_COUNT=4`.
-- `NEXT_TECHNICAL_STAGE=G12-B`.
-- `NEXT=G12-B`.
+- `NEXT_TECHNICAL_STAGE=G12-C`.
+- `NEXT=G12-C`.
 
 Gateway `main` currently has typed configuration, synchronous Foundation
 lifecycle, the historical/minimal Foundation CLI seam, Foundation tests,
@@ -794,8 +795,10 @@ The prerequisite freezes these G12 invariants:
 **STATUS=IN_PROGRESS**
 
 G12 is the current development campaign. G12-A has parameterized the existing
-single-product path; later stages compose a finite configured product set. It
-does not claim that the current production daemon already supports this model.
+single-product path and G12-B has implemented the reusable/internal configured
+runtime-serving surface. G12-C remains the later stage that composes this set
+into the ordinary production daemon; the current daemon does not yet support
+startup-configured products.
 
 ### Product identity
 
@@ -947,29 +950,61 @@ coverage joining the default production attempt factory to concrete transport
 construction across initial and retry generations is not yet present. Source
 review found no corresponding production defect; this does not block G12-B.
 
-G12-A does not add a dynamic product aggregate. The current production daemon
-remains fixed at Spot BTCUSDT and USD-M perpetual BTCUSDT; Contracts and
-Projection are unchanged.
+G12-A does not by itself add a dynamic product aggregate. The current
+production daemon remains fixed at Spot BTCUSDT and USD-M perpetual BTCUSDT;
+Contracts and Projection are unchanged.
 
 ## G12-B — Configured Product Runtime Set and Dynamic Serving Surface
 
-**STATUS=NOT_STARTED**
+**STATUS=COMPLETE**
 
-Replace the fixed two-product production aggregate with a finite configured
-owning set and do not leave an intermediate architecture whose registry is
-dynamic while status, routing, or observability remains fixed at two products.
-Use stable `ProductRuntime` object addresses and an immutable non-owning dynamic
-registry after construction, with deterministic product ordering and exact
-registry-membership routing. A small finite linear lookup is acceptable under
-the G12 bound; a generic registry framework or `unordered_map` is not required
-without evidence.
+Accepted implementation evidence:
 
-Make `SubscribeOrderBook`, `SubscribeEvents`, Gateway status market rows,
-Gateway observations, product recovery diagnostics, and shutdown aggregation
-dynamic over the configured set. Keep the global tracked-context bound exactly
-48, reject unconfigured `MarketKey` values, preserve `selectors_size == 1`,
-and preserve current stream support. Handlers must stop and drain before owners
-are destroyed; no relocating owner layout may invalidate registry references.
+- implementation PR: `#31`;
+- approved final head:
+  `35ecdf31901c3ffad6e99a526c2fb405d57afc3a`;
+- implementation merge:
+  `977be92d05f1f1926325609cfa5c609558666d5e`; and
+- implementation tree:
+  `fdfb650e22f00557b0174606b50e4cf18b20aab1`.
+
+G12-B implements the reusable/internal configured runtime and dynamic serving
+surface. `ProductRuntimeSpec` inputs are validated for configured cardinality
+`1..8`, sorted canonically by venue, market, and exact unsigned symbol bytes,
+and rejected on exact duplicate `MarketKey` values. The configured owner set
+uses stable `std::vector<std::unique_ptr<ProductRuntime>>` ownership and an
+immutable non-owning `MarketRuntimeRegistry` after construction. Exact product
+identity remains `MarketKey = (venue, market, exact symbol)`.
+
+The accepted configured-set serving surface provides stable owner addresses,
+dynamic exact registry-membership routing for `SubscribeOrderBook` and
+`SubscribeEvents`, dynamic Gateway status rows and observations, dynamic
+product recovery diagnostics, and dynamic shutdown/final aggregation. The
+streaming context bound remains exactly 48 process-wide rather than multiplying
+by configured product count. Existing selector and stream support boundaries
+remain unchanged, and handlers stop and drain before product owners are
+destroyed.
+
+The final independent review initially found `P0=0`, `P1=1`, and `P2=1`. The
+P1 was the generic arbitrary-N performance export path that could serialize
+ETH measurements with the legacy BTCUSDT performance identity. The targeted
+repair removed aggregate performance export from `ConfiguredProductRuntimeSet`
+and retained fixed-two export only for the exact Spot BTCUSDT and USD-M
+perpetual BTCUSDT products. Targeted re-review approved the repair:
+`G12_B_TARGETED_REREVIEW=APPROVE`, `PERFORMANCE_P1=CLOSED`,
+`MERGE_READY=YES`, with final `P0=0`, `P1=0`, and `P2=1` nonblocking.
+
+The retained G12-B P2 is absent direct deterministic coverage for
+`SpotStartFailed` / `UsdMStartFailed` `RecoveryCoordinator::start()` result
+classification. It is nonblocking. The historical
+`G12A-P2-DEFAULT-ATTEMPT-FACTORY-COVERAGE` finding is also retained and
+nonblocking.
+
+`TwoProductRuntime` remains only a thin historical fixed-G11 compatibility
+wrapper over the configured owner set. The ordinary `bmd-gatewayd` production
+composition remains exactly two products: Spot BTCUSDT and USD-M perpetual
+BTCUSDT. G12-B does not implement production JSON/config-driven metadata/startup
+composition; those remain G12-C.
 
 ## G12-C — Production Configuration, Metadata and Startup Composition
 

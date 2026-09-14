@@ -18,8 +18,8 @@ G10=COMPLETE
 G11=COMPLETE
 POST_G11_RUNTIME_PRODUCTIZATION=COMPLETE
 LIVE_BRANCH=main
-LATEST_BEHAVIOR_CHANGING_IMPLEMENTATION_MERGE=c846046a85027512e02516907b630ac9f2015146
-IMPLEMENTATION_TREE_AT_THAT_MERGE=1755513556e09abb080ffbcd4a41bec32668f8c0
+LATEST_BEHAVIOR_CHANGING_IMPLEMENTATION_MERGE=977be92d05f1f1926325609cfa5c609558666d5e
+IMPLEMENTATION_TREE_AT_THAT_MERGE=fdfb650e22f00557b0174606b50e4cf18b20aab1
 RECOVERY_OBSERVABILITY=COMPLETE
 RECOVERY_OBSERVABILITY_MERGE=72961563912f08541b311c09f77f49af1e03fd41
 RECOVERY_FAILURE_HISTORY_CAPACITY=7
@@ -52,7 +52,7 @@ DOC_ALIGN_01=COMPLETE_ON_MERGE
 GW-PREQ-003=COMPLETE
 G12=IN_PROGRESS
 G12-A=COMPLETE
-G12-B=NOT_STARTED
+G12-B=COMPLETE
 G12-C=NOT_STARTED
 G12-D=NOT_STARTED
 G12-E=NOT_STARTED
@@ -65,7 +65,7 @@ G12_TRANSPORT_MODEL=INDEPENDENT_PER_MARKET_KEY
 G12_CONFIG_AUTHORITY=STARTUP_JSON_FILE
 G12_HOT_RELOAD=NO
 G12_INITIAL_ACCEPTANCE_PRODUCT_COUNT=4
-NEXT_TECHNICAL_STAGE=G12-B
+NEXT_TECHNICAL_STAGE=G12-C
 G2_SYNTHETIC_HOST_IMPLEMENTED=YES
 G3_SERIALIZED_MARKET_RUNTIME_IMPLEMENTED=YES
 CURRENT_GATEWAY_RUNTIME_IMPLEMENTED=YES
@@ -121,7 +121,7 @@ MAX_G9_ACTIVE_TOTAL=16
 MAX_ACTIVE_TRANSPORTS_PER_MARKET=1
 MAX_ACTIVE_TRANSPORTS_TOTAL=2
 STATUS_MARKET_COUNT=2
-NEXT=G12-B
+NEXT=G12-C
 FIRST_RUNNABLE=G2
 FIRST_REAL_NETWORK=G4
 FIRST_GRPC=G7
@@ -157,11 +157,40 @@ The current production behavior remains exactly two products:
 `PRODUCTION_PRODUCT_COUNT=2`. G12-A now provides reusable, deterministic
 single-product parameterization for exact immutable `MarketKey` values covering
 Spot/USD-M BTCUSDT and ETHUSDT; it does not change this production composition.
-The remaining G12 fields above describe later authorized target architecture:
-a finite startup-configured set with a maximum of eight, one independent
-transport per `MarketKey`, and a process-wide tracked-context limit of 48.
-G12-B is the next technical stage. Contracts and Projection production changes
-are not required, and there is no G12 hot reload or runtime product mutation.
+G12-B now provides the reusable/internal configured owner set and dynamic
+serving surfaces described below; it does not change this production
+composition. The remaining G12 fields above describe the later authorized
+production target: a finite startup-configured set with a maximum of eight, one
+independent transport per `MarketKey`, and a process-wide tracked-context limit
+of 48. G12-C is the next technical stage. Contracts and Projection production
+changes are not required, and there is no G12 hot reload or runtime product
+mutation.
+
+## G12-B configured runtime-serving layer
+
+G12-B is complete in code. The reusable/internal `ConfiguredProductRuntimeSet`
+accepts `ProductRuntimeSpec` values, validates a lower-level configured count of
+`1..8`, sorts by canonical `MarketKey` order (venue, market, then exact
+unsigned symbol bytes), rejects exact duplicate keys, and owns stable
+`ProductRuntime` addresses through `std::vector<std::unique_ptr<ProductRuntime>>`.
+After construction it exposes an immutable non-owning dynamic
+`MarketRuntimeRegistry` with exact registry-membership lookup.
+
+The configured set now drives dynamic `SubscribeOrderBook` and
+`SubscribeEvents` routing, Gateway status market rows, `GatewayObservation`
+products, recovery diagnostics, and shutdown/final aggregation. The streaming
+context authority remains exactly 48 process-wide and is not multiplied by
+configured product count. `TwoProductRuntime` remains a thin fixed-G11
+compatibility wrapper over this owner set.
+
+The final G12-B review found `P0=0`, `P1=0`, and `P2=1` nonblocking after the
+targeted repair. The repaired P1 closed the generic arbitrary-N performance
+export path; the generic configured set does not export performance baselines,
+and the historical fixed-two export remains limited to exact Spot BTCUSDT and
+USD-M perpetual BTCUSDT evidence. The retained G12-B P2 covers absent direct
+deterministic `SpotStartFailed` / `UsdMStartFailed` start-result
+classification. The historical `G12A-P2-DEFAULT-ATTEMPT-FACTORY-COVERAGE`
+finding remains nonblocking.
 
 ## What is implemented
 
@@ -241,9 +270,10 @@ Post-G11 runtime productization is complete: the ordinary `bmd-gatewayd` is
 the installed long-running two-product daemon.
 `POST_G11_PERFORMANCE_BASELINE=COMPLETE`; the bounded recovery-observation
 campaign is complete. G12 is in progress: G12-A exact single-product
-parameterization is complete and `NEXT=G12-B`. The current daemon remains the
-fixed two-product G11 production composition; ETH support is reusable-path
-offline capability, not current production composition or qualification.
+parameterization and G12-B configured runtime serving are complete, and
+`NEXT=G12-C`. The current daemon remains the fixed two-product G11 production
+composition; ETH support is reusable-path offline capability, not current
+production composition or qualification.
 G5 recovers transport, snapshot, malformed-input, bounded-admission, bootstrap
 overflow, `serverShutdown`, and Projection `NeedsResync` failures through a new
 connection and the same conservative bootstrap path. Internal adapter,
