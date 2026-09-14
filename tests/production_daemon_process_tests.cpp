@@ -46,6 +46,39 @@ struct Child final {
   int output{-1};
 };
 
+class ConfigFile final {
+public:
+  explicit ConfigFile(std::string contents) {
+    std::string pattern{"/tmp/bmd-gateway-config-XXXXXX"};
+    const auto descriptor = mkstemp(pattern.data());
+    if (descriptor < 0) {
+      throw std::runtime_error{"mkstemp failed"};
+    }
+    path_ = pattern;
+    std::size_t offset = 0U;
+    while (offset < contents.size()) {
+      const auto written =
+          write(descriptor, contents.data() + offset, contents.size() - offset);
+      if (written < 0 && errno == EINTR) {
+        continue;
+      }
+      if (written <= 0) {
+        close(descriptor);
+        unlink(path_.c_str());
+        throw std::runtime_error{"config write failed"};
+      }
+      offset += static_cast<std::size_t>(written);
+    }
+    close(descriptor);
+  }
+
+  ~ConfigFile() { unlink(path_.c_str()); }
+  [[nodiscard]] const std::string &path() const noexcept { return path_; }
+
+private:
+  std::string path_;
+};
+
 [[nodiscard]] Child spawn(const std::string &path,
                           const std::vector<std::string> &arguments,
                           std::string_view scenario = {}) {
@@ -170,13 +203,24 @@ void cli_processes(const std::string &daemon) {
     const auto status = wait_bounded(child, output);
     REQUIRE(WIFEXITED(status));
     REQUIRE(WEXITSTATUS(status) == 0);
-    REQUIRE(output.find("BINANCE/SPOT/BTCUSDT") != std::string::npos);
-    REQUIRE(output.find("BINANCE/USD_M_PERPETUAL/BTCUSDT") !=
-            std::string::npos);
-    REQUIRE(output.find("--symbol") == std::string::npos);
+    REQUIRE(output.find("--config PATH") != std::string::npos);
+    REQUIRE(output.find("--grpc-listen") == std::string::npos);
   }
   {
-    auto child = spawn(daemon, {"--symbol", "BTCUSDT"});
+    auto child = spawn(daemon, {"--grpc-listen", "127.0.0.1:50051"});
+    std::string output;
+    const auto status = wait_bounded(child, output);
+    REQUIRE(WIFEXITED(status));
+    REQUIRE(WEXITSTATUS(status) == 2);
+    REQUIRE(output.find("configuration_error=") != std::string::npos);
+    REQUIRE(output.find("gateway_state=starting") == std::string::npos);
+  }
+  for (const auto &arguments : std::vector<std::vector<std::string>>{
+           {},
+           {"--config"},
+           {"--unknown"},
+           {"--config", "a", "--config", "b"}}) {
+    auto child = spawn(daemon, arguments);
     std::string output;
     const auto status = wait_bounded(child, output);
     REQUIRE(WIFEXITED(status));
@@ -189,7 +233,10 @@ void cli_processes(const std::string &daemon) {
 void signal_process(const std::string &fixture, int signal,
                     bool prove_still_running, std::string_view scenario = {}) {
   const auto endpoint = "127.0.0.1:" + std::to_string(available_port());
-  auto child = spawn(fixture, {"--grpc-listen", endpoint}, scenario);
+  ConfigFile config{"{\"grpc_listen\":\"" + endpoint +
+                    "\",\"spot_symbols\":[\"BTCUSDT\"],"
+                    "\"usdm_symbols\":[\"BTCUSDT\"]}"};
+  auto child = spawn(fixture, {"--config", config.path()}, scenario);
   std::string output;
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds{15};
@@ -205,6 +252,12 @@ void signal_process(const std::string &fixture, int signal,
     std::this_thread::sleep_for(std::chrono::milliseconds{5});
   }
   REQUIRE(serving);
+  REQUIRE(output.find("gateway_state=starting stage=runtime products=2 ") !=
+          std::string::npos);
+  REQUIRE(output.find("gateway_state=serving products=2 grpc_port=") !=
+          std::string::npos);
+  REQUIRE(output.find("spot_generation=") == std::string::npos);
+  REQUIRE(output.find("usdm_generation=") == std::string::npos);
   if (prove_still_running) {
     int status = 0;
     REQUIRE(waitpid(child.pid, &status, WNOHANG) == 0);
@@ -243,14 +296,18 @@ void signal_process(const std::string &fixture, int signal,
 
 void startup_failure_diagnostic(const std::string &fixture) {
   const auto endpoint = "127.0.0.1:" + std::to_string(available_port());
+  ConfigFile config{"{\"grpc_listen\":\"" + endpoint +
+                    "\",\"spot_symbols\":[\"BTCUSDT\"],"
+                    "\"usdm_symbols\":[\"BTCUSDT\"]}"};
   auto child =
-      spawn(fixture, {"--grpc-listen", endpoint}, "startup-spot-failure");
+      spawn(fixture, {"--config", config.path()}, "startup-spot-failure");
   std::string output;
   const auto status = wait_bounded(child, output);
   REQUIRE(WIFEXITED(status));
   REQUIRE(WEXITSTATUS(status) == 1);
-  REQUIRE(output.find("gateway_start=failed reason=spot-initial-failure") !=
-          std::string::npos);
+  REQUIRE(output.find("gateway_start=failed reason=product-initial-failure "
+                      "venue=VENUE_BINANCE market=MARKET_SPOT "
+                      "symbol=\"BTCUSDT\"") != std::string::npos);
   REQUIRE(output.find("gateway_recovery_failure venue=VENUE_BINANCE "
                       "market=MARKET_SPOT symbol=\"BTCUSDT\" "
                       "symbol_truncated=no index=0 generation=1 "

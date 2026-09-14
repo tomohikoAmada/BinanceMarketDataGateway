@@ -27,14 +27,23 @@ int main(int argc, char **argv) {
   }
 
   try {
+    const auto &config = std::get<production::DaemonConfig>(parsed);
+    if (!production::performance_baseline_preflight(config, std::cerr)) {
+      return EXIT_FAILURE;
+    }
     production::TerminationSignals signals;
-    std::cout << "gateway_state=starting stage=metadata products=2\n"
+    std::cout << "gateway_state=starting stage=metadata products="
+              << config.market_keys.size() << '\n'
               << std::flush;
-    const auto metadata = production::acquire_production_metadata();
+    const auto metadata =
+        production::acquire_production_metadata(config.market_keys);
     if (const auto *error = std::get_if<production::MetadataError>(&metadata)) {
       std::cerr << "metadata=failed stage="
-                << production::to_string(error->stage)
-                << " message=" << error->message << '\n';
+                << production::to_string(error->stage);
+      if (error->product.has_value()) {
+        production::write_product_identity(std::cerr, *error->product);
+      }
+      std::cerr << " message=" << error->message << '\n';
       return EXIT_FAILURE;
     }
     if (signals.requested()) {
@@ -44,9 +53,10 @@ int main(int argc, char **argv) {
       return EXIT_SUCCESS;
     }
     return production::run_production_service(
-        std::get<production::DaemonConfig>(parsed),
-        std::get<production::ProductionMetadata>(metadata), signals, std::cout,
-        std::cerr);
+        config,
+        production::make_product_runtime_specs(
+            std::get<production::ProductionMetadata>(metadata)),
+        signals, std::cout, std::cerr);
   } catch (const std::exception &error) {
     std::cerr << "gateway_fatal=" << error.what() << '\n';
     return EXIT_FAILURE;

@@ -1,7 +1,7 @@
 #include "production_gateway.hpp"
 
-#include <algorithm>
 #include <chrono>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -9,19 +9,6 @@
 namespace binance_market_data::gateway::production {
 
 namespace {
-
-[[nodiscard]] std::vector<g11::ProductRuntimeSpec>
-production_specs(projection::v1::NumericSpec spot_numeric_spec,
-                 projection::v1::NumericSpec usdm_numeric_spec,
-                 g11::TwoProductRuntimeOptions options) {
-  std::vector<g11::ProductRuntimeSpec> specifications;
-  specifications.reserve(2U);
-  specifications.push_back(
-      {g11::spot_btcusdt_key(), spot_numeric_spec, std::move(options.spot)});
-  specifications.push_back(
-      {g11::usdm_btcusdt_key(), usdm_numeric_spec, std::move(options.usdm)});
-  return specifications;
-}
 
 [[nodiscard]] bool initial_live(g11::ProductRuntime &product) {
   const auto recovery = product.recovery().observe();
@@ -59,8 +46,7 @@ observe_products(g11::ConfiguredProductRuntimeSet &products) {
 }
 
 ProductionGateway::ProductionGateway(
-    projection::v1::NumericSpec spot_numeric_spec,
-    projection::v1::NumericSpec usdm_numeric_spec, g3::RuntimeClock clock,
+    std::vector<g11::ProductRuntimeSpec> specifications, g3::RuntimeClock clock,
     std::string gateway_instance_id, std::string grpc_listen_address,
     GatewayOptions options)
     : gateway_instance_id_{std::move(gateway_instance_id)},
@@ -68,13 +54,15 @@ ProductionGateway::ProductionGateway(
       initial_startup_timeout_{options.initial_startup_timeout},
       allow_ephemeral_listen_for_testing_{
           options.allow_ephemeral_listen_for_testing},
-      products_{production_specs(spot_numeric_spec, usdm_numeric_spec,
-                                 std::move(options.products)),
-                clock, gateway_instance_id_},
+      startup_now_{std::move(options.startup_now)},
+      products_{std::move(specifications), clock, gateway_instance_id_},
       server_{products_.registry(), std::move(clock), gateway_instance_id_,
               std::move(options.grpc)} {
   if (initial_startup_timeout_ <= std::chrono::steady_clock::duration::zero()) {
     throw std::invalid_argument{"initial startup timeout must be positive"};
+  }
+  if (!startup_now_) {
+    throw std::invalid_argument{"startup monotonic-now function is required"};
   }
   if (grpc_listen_address_.empty()) {
     throw std::invalid_argument{"gRPC listen address must not be empty"};
@@ -94,50 +82,44 @@ ProductionGateway::start(const std::function<bool()> &external_stop_requested) {
   {
     std::lock_guard state_lock{state_mutex_};
     if (state_ != GatewayState::Constructed) {
-      return StartResult::AlreadyStarted;
+      return {StartCode::AlreadyStarted, std::nullopt};
     }
     state_ = GatewayState::Starting;
   }
 
   if (stop_requested(external_stop_requested)) {
-    rollback(StartResult::StopRequested);
-    return StartResult::StopRequested;
+    rollback();
+    return {StartCode::StopRequested, std::nullopt};
   }
 
+  const auto deadline = startup_now_() + initial_startup_timeout_;
   const auto starts = products_.start();
-  const auto start_for = [&starts](const g11::MarketKey &key) {
-    const auto found =
-        std::find_if(starts.begin(), starts.end(),
-                     [&key](const auto &entry) { return entry.key == key; });
-    return found == starts.end() ? g5::RecoveryStartResult::RuntimeStartFailed
-                                 : found->result;
-  };
-  if (start_for(g11::spot_btcusdt_key()) != g5::RecoveryStartResult::Started) {
-    rollback(StartResult::SpotStartFailed);
-    return StartResult::SpotStartFailed;
-  }
-  if (start_for(g11::usdm_btcusdt_key()) != g5::RecoveryStartResult::Started) {
-    rollback(StartResult::UsdMStartFailed);
-    return StartResult::UsdMStartFailed;
+  for (const auto &started : starts) {
+    if (started.result != g5::RecoveryStartResult::Started) {
+      const StartResult result{StartCode::ProductStartFailed, started.key};
+      rollback();
+      return result;
+    }
   }
 
-  const auto initial_result = wait_for_initial_live(external_stop_requested);
-  if (initial_result != StartResult::Serving) {
-    rollback(initial_result);
+  const auto initial_result =
+      wait_for_initial_live(external_stop_requested, deadline);
+  if (initial_result.code != StartCode::Serving) {
+    rollback();
     return initial_result;
   }
 
   if (stop_requested(external_stop_requested)) {
-    rollback(StartResult::StopRequested);
-    return StartResult::StopRequested;
+    rollback();
+    return {StartCode::StopRequested, std::nullopt};
   }
   if (!server_.start(grpc_listen_address_)) {
-    rollback(StartResult::GrpcBindFailed);
-    return StartResult::GrpcBindFailed;
+    rollback();
+    return {StartCode::GrpcBindFailed, std::nullopt};
   }
   if (stop_requested(external_stop_requested)) {
-    rollback(StartResult::StopRequested);
-    return StartResult::StopRequested;
+    rollback();
+    return {StartCode::StopRequested, std::nullopt};
   }
 
   {
@@ -145,7 +127,7 @@ ProductionGateway::start(const std::function<bool()> &external_stop_requested) {
     state_ = GatewayState::Serving;
   }
   state_condition_.notify_all();
-  return StartResult::Serving;
+  return {StartCode::Serving, std::nullopt};
 }
 
 void ProductionGateway::request_stop() noexcept {
@@ -229,40 +211,41 @@ bool ProductionGateway::stop_requested(
 }
 
 StartResult ProductionGateway::wait_for_initial_live(
-    const std::function<bool()> &external_stop_requested) {
-  const auto deadline =
-      std::chrono::steady_clock::now() + initial_startup_timeout_;
+    const std::function<bool()> &external_stop_requested,
+    std::chrono::steady_clock::time_point deadline) {
   for (;;) {
     if (stop_requested(external_stop_requested)) {
-      return StartResult::StopRequested;
+      return {StartCode::StopRequested, std::nullopt};
     }
-    auto *spot = products_.find(g11::spot_btcusdt_key());
-    auto *usdm = products_.find(g11::usdm_btcusdt_key());
-    if (spot == nullptr || usdm == nullptr) {
-      return StartResult::SpotInitialFailure;
+    for (const auto &product : products_.products()) {
+      if (initial_failure(*product)) {
+        return {StartCode::ProductInitialFailure, product->key()};
+      }
     }
-    if (initial_failure(*spot)) {
-      return StartResult::SpotInitialFailure;
+    bool all_live = true;
+    for (const auto &product : products_.products()) {
+      all_live = all_live && initial_live(*product);
     }
-    if (initial_failure(*usdm)) {
-      return StartResult::UsdMInitialFailure;
-    }
-    if (initial_live(*spot) && initial_live(*usdm)) {
-      return StartResult::Serving;
+    if (all_live) {
+      return {StartCode::Serving, std::nullopt};
     }
 
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = startup_now_();
     if (now >= deadline) {
-      return StartResult::InitialStartupTimeout;
+      return {StartCode::InitialStartupTimeout, std::nullopt};
     }
     std::unique_lock lock{state_mutex_};
-    static_cast<void>(state_condition_.wait_until(
-        lock, std::min(deadline, now + std::chrono::milliseconds{10}),
+    static_cast<void>(state_condition_.wait_for(
+        lock,
+        std::min(
+            deadline - now,
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::milliseconds{10})),
         [this] { return stop_requested_; }));
   }
 }
 
-void ProductionGateway::rollback(StartResult) noexcept {
+void ProductionGateway::rollback() noexcept {
   {
     std::lock_guard state_lock{state_mutex_};
     state_ = GatewayState::Stopping;
@@ -298,25 +281,21 @@ std::string_view to_string(GatewayState state) noexcept {
   return "unknown";
 }
 
-std::string_view to_string(StartResult result) noexcept {
-  switch (result) {
-  case StartResult::Serving:
+std::string_view to_string(StartCode code) noexcept {
+  switch (code) {
+  case StartCode::Serving:
     return "serving";
-  case StartResult::AlreadyStarted:
+  case StartCode::AlreadyStarted:
     return "already-started";
-  case StartResult::StopRequested:
+  case StartCode::StopRequested:
     return "stop-requested";
-  case StartResult::SpotStartFailed:
-    return "spot-start-failed";
-  case StartResult::UsdMStartFailed:
-    return "usdm-start-failed";
-  case StartResult::SpotInitialFailure:
-    return "spot-initial-failure";
-  case StartResult::UsdMInitialFailure:
-    return "usdm-initial-failure";
-  case StartResult::InitialStartupTimeout:
+  case StartCode::ProductStartFailed:
+    return "product-start-failed";
+  case StartCode::ProductInitialFailure:
+    return "product-initial-failure";
+  case StartCode::InitialStartupTimeout:
     return "initial-startup-timeout";
-  case StartResult::GrpcBindFailed:
+  case StartCode::GrpcBindFailed:
     return "grpc-bind-failed";
   }
   return "unknown";

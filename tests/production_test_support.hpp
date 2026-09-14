@@ -1,7 +1,6 @@
 #pragma once
 
 #include "production_gateway.hpp"
-#include "production_metadata.hpp"
 
 #include <binance_market_data/common/v1/enums.pb.h>
 #include <binance_market_data/market/v1/market_events.pb.h>
@@ -15,6 +14,8 @@
 #include <stdexcept>
 #include <stop_token>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace binance_market_data::gateway::production::test_support {
 
@@ -51,17 +52,17 @@ struct AttemptState final {
 }
 
 [[nodiscard]] inline market::DepthUpdate
-make_update(common::Market product, std::uint64_t generation,
+make_update(const g11::MarketKey &key, std::uint64_t generation,
             std::uint64_t final_id = 101U, bool wrong_symbol = false) {
   market::DepthUpdate update;
   auto *metadata = update.mutable_metadata();
-  metadata->set_venue(common::VENUE_BINANCE);
-  metadata->set_market(product);
-  metadata->set_symbol(wrong_symbol ? "ETHUSDT" : "BTCUSDT");
+  metadata->set_venue(key.venue);
+  metadata->set_market(key.market);
+  metadata->set_symbol(wrong_symbol ? key.symbol + "-wrong" : key.symbol);
   metadata->set_producer("gateway-production-test");
   metadata->set_producer_version("1.0.0");
   metadata->set_connection_id(
-      (product == common::MARKET_SPOT ? "spot-test-g" : "usdm-test-g") +
+      (key.market == common::MARKET_SPOT ? "spot-test-g" : "usdm-test-g") +
       std::to_string(generation));
   metadata->set_stream(common::STREAM_DIFF_DEPTH);
   metadata->set_schema_version("depth-update.v1");
@@ -69,9 +70,9 @@ make_update(common::Market product, std::uint64_t generation,
   metadata->set_receive_time_utc_ns(1700000000002000000ULL + final_id);
   metadata->set_receive_monotonic_ns(9000000000002ULL + final_id);
   update.set_first_update_id(
-      product == common::MARKET_USD_M_PERPETUAL ? final_id - 1U : final_id);
+      key.market == common::MARKET_USD_M_PERPETUAL ? final_id - 1U : final_id);
   update.set_final_update_id(final_id);
-  if (product == common::MARKET_USD_M_PERPETUAL) {
+  if (key.market == common::MARKET_USD_M_PERPETUAL) {
     update.set_previous_final_update_id(final_id - 1U);
   }
   auto *bid = update.add_bids();
@@ -81,17 +82,18 @@ make_update(common::Market product, std::uint64_t generation,
 }
 
 [[nodiscard]] inline market::ExchangeDepthSnapshot
-make_snapshot(common::Market product, std::uint64_t generation) {
+make_snapshot(const g11::MarketKey &key, std::uint64_t generation) {
   market::ExchangeDepthSnapshot snapshot;
-  snapshot.set_venue(common::VENUE_BINANCE);
-  snapshot.set_market(product);
-  snapshot.set_symbol("BTCUSDT");
+  snapshot.set_venue(key.venue);
+  snapshot.set_market(key.market);
+  snapshot.set_symbol(key.symbol);
   snapshot.set_schema_version("exchange-depth-snapshot.v1");
   snapshot.set_producer("gateway-production-test");
   snapshot.set_producer_version("1.0.0");
-  snapshot.set_request_id(
-      (product == common::MARKET_SPOT ? "spot-snapshot-g" : "usdm-snapshot-g") +
-      std::to_string(generation));
+  snapshot.set_request_id((key.market == common::MARKET_SPOT
+                               ? "spot-snapshot-g"
+                               : "usdm-snapshot-g") +
+                          std::to_string(generation));
   snapshot.set_last_update_id(100U);
   snapshot.set_exchange_transaction_time_ms(1700000000001ULL);
   snapshot.set_receive_time_utc_ns(1700000000001000000ULL);
@@ -105,17 +107,25 @@ make_snapshot(common::Market product, std::uint64_t generation) {
   return snapshot;
 }
 
+[[nodiscard]] inline market::DepthUpdate
+make_update(common::Market product, std::uint64_t generation,
+            std::uint64_t final_id = 101U, bool wrong_symbol = false) {
+  const auto key = product == common::MARKET_SPOT ? g11::spot_btcusdt_key()
+                                                  : g11::usdm_btcusdt_key();
+  return make_update(key, generation, final_id, wrong_symbol);
+}
+
 class TestAttempt final : public g5::detail::RecoveryAttempt {
 public:
-  TestAttempt(g3::MarketRuntime &runtime, common::Market product,
+  TestAttempt(g3::MarketRuntime &runtime, g11::MarketKey key,
               std::uint64_t generation, AttemptMode mode,
               std::shared_ptr<AttemptState> state)
-      : runtime_{runtime}, product_{product}, generation_{generation},
+      : runtime_{runtime}, key_{std::move(key)}, generation_{generation},
         mode_{mode}, state_{std::move(state)} {
     state_->active_attempt.store(this);
     observation_.connection_generation = generation_;
     observation_.connection_id =
-        (product_ == common::MARKET_SPOT ? "spot-test-g" : "usdm-test-g") +
+        (key_.market == common::MARKET_SPOT ? "spot-test-g" : "usdm-test-g") +
         std::to_string(generation_);
     const auto active = state_->active.fetch_add(1U) + 1U;
     auto maximum = state_->maximum_active.load();
@@ -139,18 +149,18 @@ public:
       std::lock_guard lock{mutex_};
       observation_.terminal_error = g4::NetworkError{
           g4::NetworkErrorCode::Internal,
-          product_ == common::MARKET_SPOT ? "spot-test-terminal"
-                                          : "usdm-test-terminal",
+          key_.market == common::MARKET_SPOT ? "spot-test-terminal"
+                                             : "usdm-test-terminal",
           "deterministic terminal startup failure", std::nullopt, std::nullopt};
       return g4::TransportStartResult::Failed;
     }
     if (mode_ == AttemptMode::NeverLive) {
       return g4::TransportStartResult::Started;
     }
-    if (runtime_.submit_depth_update(make_update(product_, generation_),
+    if (runtime_.submit_depth_update(make_update(key_, generation_),
                                      g3::SourceProvenance{generation_}) !=
             g3::AdmissionResult::Accepted ||
-        runtime_.submit_snapshot(make_snapshot(product_, generation_),
+        runtime_.submit_snapshot(make_snapshot(key_, generation_),
                                  g3::SourceProvenance{generation_}) !=
             g3::AdmissionResult::Accepted) {
       return g4::TransportStartResult::Failed;
@@ -199,7 +209,7 @@ public:
 
 private:
   g3::MarketRuntime &runtime_;
-  const common::Market product_;
+  const g11::MarketKey key_;
   const std::uint64_t generation_;
   const AttemptMode mode_;
   std::shared_ptr<AttemptState> state_;
@@ -209,14 +219,14 @@ private:
 };
 
 [[nodiscard]] inline g5::detail::RecoveryTestOptions
-attempt_options(common::Market product, AttemptMode mode,
+attempt_options(g11::MarketKey key, AttemptMode mode,
                 const std::shared_ptr<AttemptState> &state) {
   g5::detail::RecoveryTestOptions options;
-  options.attempt_factory = [product, mode, state](g3::MarketRuntime &runtime,
-                                                   const g3::RuntimeClock &,
-                                                   std::uint64_t generation) {
-    return std::make_unique<TestAttempt>(runtime, product, generation, mode,
-                                         state);
+  options.attempt_factory = [key = std::move(key), mode,
+                             state](g3::MarketRuntime &runtime,
+                                    const g3::RuntimeClock &,
+                                    std::uint64_t generation) {
+    return std::make_unique<TestAttempt>(runtime, key, generation, mode, state);
   };
   options.backoff_waiter = [](std::chrono::seconds,
                               std::stop_token stop_token) {
@@ -225,27 +235,32 @@ attempt_options(common::Market product, AttemptMode mode,
   return options;
 }
 
-struct LiveOptions final {
+[[nodiscard]] inline g11::ProductRuntimeSpec
+make_test_product_spec(g11::MarketKey key, AttemptMode mode,
+                       const std::shared_ptr<AttemptState> &state) {
+  g11::ProductRuntimeOptions options;
+  options.recovery_test = attempt_options(key, mode, state);
+  return {std::move(key), numeric_spec(), std::move(options)};
+}
+
+struct LiveConfiguration final {
   GatewayOptions gateway;
+  std::vector<g11::ProductRuntimeSpec> specifications;
   std::shared_ptr<AttemptState> spot{std::make_shared<AttemptState>()};
   std::shared_ptr<AttemptState> usdm{std::make_shared<AttemptState>()};
 };
 
-[[nodiscard]] inline LiveOptions
-gateway_options(AttemptMode spot_mode = AttemptMode::Live,
-                AttemptMode usdm_mode = AttemptMode::Live) {
-  LiveOptions result;
+[[nodiscard]] inline LiveConfiguration
+gateway_products(AttemptMode spot_mode = AttemptMode::Live,
+                 AttemptMode usdm_mode = AttemptMode::Live) {
+  LiveConfiguration result;
   result.gateway.initial_startup_timeout = std::chrono::seconds{2};
   result.gateway.allow_ephemeral_listen_for_testing = true;
-  result.gateway.products.spot.recovery_test =
-      attempt_options(common::MARKET_SPOT, spot_mode, result.spot);
-  result.gateway.products.usdm.recovery_test =
-      attempt_options(common::MARKET_USD_M_PERPETUAL, usdm_mode, result.usdm);
+  result.specifications.push_back(
+      make_test_product_spec(g11::spot_btcusdt_key(), spot_mode, result.spot));
+  result.specifications.push_back(
+      make_test_product_spec(g11::usdm_btcusdt_key(), usdm_mode, result.usdm));
   return result;
-}
-
-[[nodiscard]] inline ProductionMetadata metadata() {
-  return {numeric_spec(), numeric_spec()};
 }
 
 } // namespace binance_market_data::gateway::production::test_support

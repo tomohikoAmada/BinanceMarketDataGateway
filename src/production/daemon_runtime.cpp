@@ -436,12 +436,11 @@ struct GatewayTotals final {
   return result;
 }
 
-[[nodiscard]] const ProductObservation *
-find_product(const GatewayObservation &observation, const g11::MarketKey &key) {
-  const auto found =
-      std::find_if(observation.products.begin(), observation.products.end(),
-                   [&key](const auto &product) { return product.key == key; });
-  return found == observation.products.end() ? nullptr : &*found;
+[[nodiscard]] bool
+legacy_performance_composition(const std::vector<g11::MarketKey> &market_keys) {
+  return market_keys.size() == 2U &&
+         market_keys[0] == g11::spot_btcusdt_key() &&
+         market_keys[1] == g11::usdm_btcusdt_key();
 }
 
 } // namespace
@@ -451,6 +450,23 @@ void write_recovery_failure_diagnostics(std::ostream &output,
   for (const auto &product : observation.products) {
     write_product_failures(output, product.key, product.recovery);
   }
+}
+
+void write_product_identity(std::ostream &output, const g11::MarketKey &key) {
+  output << " venue=" << g11::common_wire::Venue_Name(key.venue)
+         << " market=" << g11::common_wire::Market_Name(key.market);
+  write_bounded_string(output, "symbol", key.symbol);
+}
+
+bool performance_baseline_preflight(const DaemonConfig &config,
+                                    std::ostream &errors) {
+  const auto *path = std::getenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT");
+  if (path != nullptr && *path != '\0' &&
+      !legacy_performance_composition(config.market_keys)) {
+    errors << "performance_baseline_export=unsupported reason=composition\n";
+    return false;
+  }
+  return true;
 }
 
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
@@ -481,28 +497,32 @@ namespace {
 #endif
 
 int run_production_service(const DaemonConfig &config,
-                           const ProductionMetadata &metadata,
+                           std::vector<g11::ProductRuntimeSpec> specifications,
                            TerminationSignals &signals, std::ostream &output,
                            std::ostream &errors, GatewayOptions options) {
+  if (!performance_baseline_preflight(config, errors)) {
+    return EXIT_FAILURE;
+  }
   const auto instance_id = g7::generate_gateway_instance_id();
-  output << "gateway_state=starting products=2 grpc_listen="
-         << config.grpc_listen << '\n'
+  const auto product_count = specifications.size();
+  output << "gateway_state=starting stage=runtime products=" << product_count
+         << " grpc_listen=" << config.grpc_listen << '\n'
          << std::flush;
 
-  ProductionGateway gateway{
-      metadata.spot_numeric_spec, metadata.usdm_numeric_spec,
-      g4::sample_real_clock,      instance_id,
-      config.grpc_listen,         std::move(options)};
+  ProductionGateway gateway{std::move(specifications), g4::sample_real_clock,
+                            instance_id, config.grpc_listen,
+                            std::move(options)};
   const auto started =
       gateway.start([&signals] { return signals.requested(); });
-  if (started != StartResult::Serving) {
+  if (started.code != StartCode::Serving) {
     const auto final = gateway.observe();
     const auto final_totals = totals(final);
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
     const auto exported = export_performance_baseline(gateway, errors);
 #endif
-    if (started == StartResult::StopRequested) {
-      output << "gateway_state=stopped startup_result=" << to_string(started)
+    if (started.code == StartCode::StopRequested) {
+      output << "gateway_state=stopped startup_result="
+             << to_string(started.code)
              << " contexts=" << final.tracked_contexts
              << " transports=" << final_totals.transports
              << " subscriptions=" << final_totals.subscriptions
@@ -515,19 +535,18 @@ int run_production_service(const DaemonConfig &config,
           EXIT_SUCCESS;
 #endif
     }
-    errors << "gateway_start=failed reason=" << to_string(started) << '\n';
+    errors << "gateway_start=failed reason=" << to_string(started.code);
+    if (started.product.has_value()) {
+      write_product_identity(errors, *started.product);
+    }
+    errors << '\n';
     write_recovery_failure_diagnostics(errors, final);
     return EXIT_FAILURE;
   }
 
   const auto serving = gateway.observe();
-  const auto *spot = find_product(serving, g11::spot_btcusdt_key());
-  const auto *usdm = find_product(serving, g11::usdm_btcusdt_key());
-  output << "gateway_state=serving products=2 grpc_port="
-         << serving.selected_port << " spot_generation="
-         << (spot == nullptr ? 0U : spot->recovery.connection_generation)
-         << " usdm_generation="
-         << (usdm == nullptr ? 0U : usdm->recovery.connection_generation)
+  output << "gateway_state=serving products=" << product_count
+         << " grpc_port=" << serving.selected_port
          << " context_limit=" << serving.context_limit
          << " gateway_instance_id=" << gateway.gateway_instance_id() << '\n'
          << std::flush;
