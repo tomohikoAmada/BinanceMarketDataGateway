@@ -2,14 +2,14 @@
 
 The detailed, ordered development authority is
 [docs/MILESTONES.md](docs/MILESTONES.md). This document records only the
-responsibility split, the current foundation/G11 boundary, and the accepted
-post-G11 production host.
+responsibility split, the current foundation/G11 production boundary, the
+G12-B runtime-serving layer, and the accepted post-G11 production host.
 
 Current project state: `POST_G11_PERFORMANCE_BASELINE=COMPLETE`.
 The current production implementation remains the fixed G11 two-product
 runtime. Production Qualification and optimization are not authorized. G12 is
-the frozen, authorized development campaign; G12-A is complete and G12-B is
-next. Current production remains the fixed G11 two-product daemon.
+the frozen, authorized development campaign; G12-A and G12-B are complete and
+G12-C is next. Current production remains the fixed G11 two-product daemon.
 
 ## Dependency direction
 
@@ -63,11 +63,18 @@ The ordinary `bmd-gatewayd` is the production two-product host:
 ```text
 process
 ├── TerminationSignals
-├── Spot BTCUSDT ProductRuntime
-├── USD-M perpetual BTCUSDT ProductRuntime
-├── fixed two-entry registry
+├── ConfiguredProductRuntimeSet
+│   ├── Spot BTCUSDT ProductRuntime
+│   └── USD-M perpetual BTCUSDT ProductRuntime
+├── immutable non-owning registry (two current entries)
 └── synchronous Gateway gRPC server
 ```
+
+The current `ProductionGateway` composition still supplies exactly two resolved
+`ProductRuntimeSpec` entries for the frozen BTC products. The
+`ConfiguredProductRuntimeSet` owner and registry are the reusable G12-B
+runtime-serving layer; the two-entry production composition is a current
+production choice, not a fixed-two limit of that layer.
 
 It has one process-global `gateway_instance_id`. Both product runtimes must
 reach initial Live/Synchronized before server readiness; there is no self-test
@@ -301,7 +308,7 @@ for the server, then stops and joins both recovery/transport lifecycles and
 both `MarketRuntime` owners before destroying non-owning routing/service
 references. No new lifecycle framework is introduced.
 
-## G12 target architecture (G12-A implemented; G12-B/C/D/E pending)
+## G12 target architecture (G12-A and G12-B implemented; G12-C/D/E pending)
 
 G12 keeps the current G11 implementation as the production baseline while
 authorizing a finite startup-configured product set. Its exact product identity
@@ -334,6 +341,20 @@ identity, and diagnostics derive from that authority. G12 does not authorize a
 shared multiplexed WebSocket, a cross-product `RecoveryCoordinator`,
 `MultiSymbolProjection`, `ProjectionManager`, or a second sequence classifier.
 
+G12-B is implemented as the reusable/runtime-serving layer over this graph:
+
+```text
+ConfiguredProductRuntimeSet
+├── ProductRuntime[1..8], stable heap-owned
+├── immutable dynamic MarketRuntimeRegistry
+└── shared synchronous Gateway gRPC server
+```
+
+It provides exact registry-membership routing, dynamic status rows,
+observations, recovery diagnostics, and shutdown aggregation while preserving
+the process-wide 48-context bound. The ordinary production composition remains
+the two resolved BTC products described above until G12-C.
+
 The configured product count is `1..8`. Eight is the frozen
 `G12_MAX_CONFIGURED_PRODUCTS` configuration/resource bound and configuration
 envelope, not a demonstrated throughput capacity, real-network-qualified
@@ -344,7 +365,8 @@ configured-product-count multiplication of a per-product limit. Existing
 G7/G9 publication and admission bounds remain product-local unless a later
 milestone changes them.
 
-The target production configuration authority is startup-only JSON:
+G12-C's target production configuration authority is startup-only JSON; it is
+not implemented by G12-B:
 
 ```text
 bmd-gatewayd --config PATH
@@ -390,9 +412,8 @@ The G12 implementation sequence is frozen in [docs/MILESTONES.md](docs/MILESTONE
 `G12-A` exact single-product parameterization, `G12-B` configured runtime set
 and dynamic serving surface, `G12-C` configuration/metadata/startup
 composition, `G12-D` deterministic four-product acceptance, and `G12-E` real
-network bounded qualification. `G12-A` is implemented for the reusable
-single-product path; `G12-B` is the next stage, and no later stage may be
-implemented ahead of it.
+network bounded qualification. `G12-A` and `G12-B` are implemented;
+`G12-C` is the next stage, and no later stage may be implemented ahead of it.
 
 ## MarketRuntime Projection boundary
 
@@ -421,5 +442,6 @@ post-G11 performance baseline are complete. The baseline is descriptive
 evidence rather than a hard SLA, capacity guarantee, or infinite-duration RSS
 claim. The accepted baseline is evidence for the fixed two-product G11 daemon,
 not G12 multi-product capacity evidence. Production Qualification and
-optimization are not authorized. G12 is in progress: G12-A is complete and
-G12-B is next. The current daemon remains fixed at two production products.
+optimization are not authorized. G12 is in progress: G12-A and G12-B are
+complete and G12-C is next. The current daemon remains fixed at two production
+products.
