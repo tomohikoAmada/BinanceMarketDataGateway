@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -73,18 +74,24 @@ void require_equal(const Actual &actual, const Expected &expected,
   return {*price, *quantity};
 }
 
-[[nodiscard]] market_wire::DepthUpdate make_update(common_wire::Market market,
+[[nodiscard]] g11::MarketKey fixed_key_for(common_wire::Market market) {
+  return market == common_wire::MARKET_SPOT ? g11::spot_btcusdt_key()
+                                            : g11::usdm_btcusdt_key();
+}
+
+[[nodiscard]] market_wire::DepthUpdate make_update(const g11::MarketKey &key,
                                                    std::uint64_t generation) {
+  const auto market = key.market;
   market_wire::DepthUpdate update;
   auto *metadata = update.mutable_metadata();
   metadata->set_venue(common_wire::VENUE_BINANCE);
   metadata->set_market(market);
-  metadata->set_symbol("BTCUSDT");
+  metadata->set_symbol(key.symbol);
   metadata->set_producer("gateway-g11-test");
   metadata->set_producer_version("1.0.0");
   metadata->set_connection_id(
-      (market == common_wire::MARKET_SPOT ? "spot-g" : "usdm-g") +
-      std::to_string(generation));
+      (market == common_wire::MARKET_SPOT ? "spot-g" : "usdm-g") + key.symbol +
+      "-" + std::to_string(generation));
   metadata->set_stream(common_wire::STREAM_DIFF_DEPTH);
   metadata->set_schema_version("depth-update.v1");
   metadata->set_exchange_event_time_ms(1700000000002ULL);
@@ -103,11 +110,12 @@ void require_equal(const Actual &actual, const Expected &expected,
 }
 
 [[nodiscard]] market_wire::ExchangeDepthSnapshot
-make_snapshot(common_wire::Market market, std::uint64_t generation) {
+make_snapshot(const g11::MarketKey &key, std::uint64_t generation) {
+  const auto market = key.market;
   market_wire::ExchangeDepthSnapshot snapshot;
   snapshot.set_venue(common_wire::VENUE_BINANCE);
   snapshot.set_market(market);
-  snapshot.set_symbol("BTCUSDT");
+  snapshot.set_symbol(key.symbol);
   snapshot.set_schema_version("exchange-depth-snapshot.v1");
   snapshot.set_producer("gateway-g11-test");
   snapshot.set_producer_version("1.0.0");
@@ -130,20 +138,21 @@ make_snapshot(common_wire::Market market, std::uint64_t generation) {
 
 class SyntheticLiveAttempt final : public g5::detail::RecoveryAttempt {
 public:
-  SyntheticLiveAttempt(g3::MarketRuntime &runtime, common_wire::Market market,
+  SyntheticLiveAttempt(g3::MarketRuntime &runtime, g11::MarketKey key,
                        std::uint64_t generation)
-      : runtime_{runtime}, market_{market}, generation_{generation} {
+      : runtime_{runtime}, key_{std::move(key)}, generation_{generation} {
     observation_.connection_generation = generation;
     observation_.connection_id =
-        (market == common_wire::MARKET_SPOT ? "spot-test-g" : "usdm-test-g") +
-        std::to_string(generation);
+        (key_.market == common_wire::MARKET_SPOT ? "spot-test-g"
+                                                 : "usdm-test-g") +
+        key_.symbol + "-" + std::to_string(generation);
   }
 
   [[nodiscard]] g4::TransportStartResult start() override {
-    if (runtime_.submit_depth_update(make_update(market_, generation_),
+    if (runtime_.submit_depth_update(make_update(key_, generation_),
                                      g3::SourceProvenance{generation_}) !=
             g3::AdmissionResult::Accepted ||
-        runtime_.submit_snapshot(make_snapshot(market_, generation_),
+        runtime_.submit_snapshot(make_snapshot(key_, generation_),
                                  g3::SourceProvenance{generation_}) !=
             g3::AdmissionResult::Accepted) {
       return g4::TransportStartResult::Failed;
@@ -172,7 +181,7 @@ public:
 
 private:
   g3::MarketRuntime &runtime_;
-  const common_wire::Market market_;
+  const g11::MarketKey key_;
   const std::uint64_t generation_;
   mutable std::mutex mutex_;
   g4::TransportObservation observation_;
@@ -248,18 +257,23 @@ private:
 };
 
 [[nodiscard]] g5::detail::RecoveryTestOptions
-live_test_options(common_wire::Market market) {
+live_test_options(g11::MarketKey key) {
   g5::detail::RecoveryTestOptions options;
-  options.attempt_factory = [market](g3::MarketRuntime &runtime,
-                                     const g3::RuntimeClock &,
-                                     std::uint64_t generation) {
-    return std::make_unique<SyntheticLiveAttempt>(runtime, market, generation);
+  options.attempt_factory = [key = std::move(key)](g3::MarketRuntime &runtime,
+                                                   const g3::RuntimeClock &,
+                                                   std::uint64_t generation) {
+    return std::make_unique<SyntheticLiveAttempt>(runtime, key, generation);
   };
   options.backoff_waiter = [](std::chrono::seconds,
                               std::stop_token stop_token) {
     return !stop_token.stop_requested();
   };
   return options;
+}
+
+[[nodiscard]] g5::detail::RecoveryTestOptions
+live_test_options(common_wire::Market market) {
+  return live_test_options(fixed_key_for(market));
 }
 
 [[nodiscard]] g11::TwoProductRuntimeOptions live_two_product_options() {
@@ -283,6 +297,8 @@ void two_product_ownership_and_projection_policy() {
   const auto spot_runtime = products.spot().runtime().observe();
   const auto usdm_runtime = products.usdm().runtime().observe();
 
+  REQUIRE(products.spot().key() == g11::spot_btcusdt_key());
+  REQUIRE(products.usdm().key() == g11::usdm_btcusdt_key());
   REQUIRE(spot_live.state == g5::RecoveryState::Live);
   REQUIRE(usdm_live.state == g5::RecoveryState::Live);
   REQUIRE(spot_runtime.state == g3::RuntimeState::Live);
@@ -412,6 +428,60 @@ void one_market_terminal_failure_does_not_stop_other() {
   products.stop();
 }
 
+void product_runtime_uses_exact_market_key_identity() {
+  const g11::MarketKey spot_eth{common_wire::VENUE_BINANCE,
+                                common_wire::MARKET_SPOT, "ETHUSDT"};
+  const g11::MarketKey usdm_eth{common_wire::VENUE_BINANCE,
+                                common_wire::MARKET_USD_M_PERPETUAL, "ETHUSDT"};
+  g11::ProductRuntimeOptions spot_options;
+  spot_options.recovery_test = live_test_options(spot_eth);
+  g11::ProductRuntimeOptions usdm_options;
+  usdm_options.recovery_test = live_test_options(usdm_eth);
+  g11::ProductRuntime spot{spot_eth, numeric_spec(), fixed_clock(),
+                           "gw-spot-eth", std::move(spot_options)};
+  g11::ProductRuntime usdm{usdm_eth, numeric_spec(), fixed_clock(),
+                           "gw-usdm-eth", std::move(usdm_options)};
+
+  REQUIRE(spot.key() == spot_eth);
+  REQUIRE(usdm.key() == usdm_eth);
+  REQUIRE(spot.kind() == g11::ProductKind::Spot);
+  REQUIRE(usdm.kind() == g11::ProductKind::UsdMPerpetual);
+  REQUIRE(spot.start() == g5::RecoveryStartResult::Started);
+  REQUIRE(usdm.start() == g5::RecoveryStartResult::Started);
+
+  const auto spot_live = spot.recovery().wait_for_generation_live(1U);
+  const auto usdm_live = usdm.recovery().wait_for_generation_live(1U);
+  const auto spot_observation = spot.runtime().observe();
+  const auto usdm_observation = usdm.runtime().observe();
+  REQUIRE(spot_live.state == g5::RecoveryState::Live);
+  REQUIRE(usdm_live.state == g5::RecoveryState::Live);
+  REQUIRE(spot_observation.state == g3::RuntimeState::Live);
+  REQUIRE(usdm_observation.state == g3::RuntimeState::Live);
+  REQUIRE_EQ(spot_observation.last_update_id,
+             std::optional<std::uint64_t>{101U});
+  REQUIRE_EQ(usdm_observation.last_update_id,
+             std::optional<std::uint64_t>{101U});
+  spot.stop();
+  usdm.stop();
+
+  const auto rejects = [](g11::MarketKey key) {
+    try {
+      g11::ProductRuntime runtime{std::move(key), numeric_spec(), fixed_clock(),
+                                  "invalid"};
+      return false;
+    } catch (const std::invalid_argument &) {
+      return true;
+    }
+  };
+  REQUIRE(rejects(
+      {common_wire::VENUE_UNSPECIFIED, common_wire::MARKET_SPOT, "ETHUSDT"}));
+  REQUIRE(rejects({common_wire::VENUE_BINANCE, common_wire::MARKET_UNSPECIFIED,
+                   "ETHUSDT"}));
+  REQUIRE(rejects({common_wire::VENUE_BINANCE, common_wire::MARKET_SPOT, ""}));
+  REQUIRE(rejects(
+      {common_wire::VENUE_BINANCE, common_wire::MARKET_SPOT, "ethusdt"}));
+}
+
 } // namespace
 
 int main() {
@@ -423,6 +493,8 @@ int main() {
       {"PLANNED_ROTATION_IS_PRODUCT_LOCAL", planned_rotation_is_product_local},
       {"ONE_MARKET_TERMINAL_FAILURE_DOES_NOT_STOP_OTHER",
        one_market_terminal_failure_does_not_stop_other},
+      {"PRODUCT_RUNTIME_USES_EXACT_MARKET_KEY_IDENTITY",
+       product_runtime_uses_exact_market_key_identity},
   };
 
   for (const auto &[name, test] : tests) {

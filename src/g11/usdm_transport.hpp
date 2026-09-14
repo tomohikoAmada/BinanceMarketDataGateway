@@ -7,23 +7,27 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
 
 namespace binance_market_data::gateway::g11 {
 
 struct UsdMTransportRoutes final {
-  std::string_view rest_host;
-  std::string_view rest_port;
-  std::string_view exchange_info_target;
-  std::string_view depth_target;
-  std::string_view websocket_host;
-  std::string_view websocket_port;
-  std::string_view websocket_target;
-  std::string_view diff_depth_stream;
-  std::size_t snapshot_limit;
+  std::string rest_host;
+  std::string rest_port;
+  std::string exchange_info_target;
+  std::string depth_target;
+  std::string websocket_host;
+  std::string websocket_port;
+  std::string websocket_target;
+  std::string diff_depth_stream;
+  std::size_t snapshot_limit{1000U};
+  std::string connection_id_prefix;
+  std::string snapshot_request_id;
 };
 
-inline constexpr UsdMTransportRoutes kUsdMTransportRoutes{
+inline const UsdMTransportRoutes kUsdMTransportRoutes{
     "fapi.binance.com",
     "443",
     "/fapi/v1/exchangeInfo",
@@ -33,7 +37,12 @@ inline constexpr UsdMTransportRoutes kUsdMTransportRoutes{
     "/public/ws/btcusdt@depth@100ms",
     "btcusdt@depth@100ms",
     1000U,
+    "binance-usdm-btcusdt-g",
+    "g11-usdm-btcusdt-depth-request-1",
 };
+
+[[nodiscard]] std::optional<UsdMTransportRoutes>
+make_usdm_transport_routes(std::string_view exact_symbol);
 
 [[nodiscard]] g4::ExchangeInfoResult fetch_usdm_exchange_info_https();
 
@@ -47,6 +56,11 @@ struct UsdMTransportOptions final {
 class UsdMTransport final {
 public:
   UsdMTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                std::uint64_t connection_generation = 1U,
+                UsdMTransportOptions options = {},
+                g4::detail::TransportTestOptions test_options = {});
+  UsdMTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                std::string exact_symbol,
                 std::uint64_t connection_generation = 1U,
                 UsdMTransportOptions options = {},
                 g4::detail::TransportTestOptions test_options = {});

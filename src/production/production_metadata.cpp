@@ -18,7 +18,7 @@ namespace {
 
 ProductionMetadataResult acquire_production_metadata(MetadataSources sources) {
   if (!sources.spot_fetch) {
-    sources.spot_fetch = g4::fetch_exchange_info_https;
+    sources.spot_fetch = [] { return g4::fetch_exchange_info_https(); };
   }
   if (!sources.usdm_fetch) {
     sources.usdm_fetch = g11::fetch_usdm_exchange_info_https;

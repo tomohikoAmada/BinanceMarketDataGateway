@@ -33,6 +33,11 @@ struct ProductRuntimeOptions final {
 // Owns exactly one single-product runtime graph.
 class ProductRuntime final {
 public:
+  ProductRuntime(MarketKey key, core::NumericSpec numeric_spec,
+                 g3::RuntimeClock clock, std::string gateway_instance_id,
+                 ProductRuntimeOptions options = {});
+  // Historical single-product compatibility seam. New reusable construction
+  // must pass an exact MarketKey explicitly.
   ProductRuntime(ProductKind kind, core::NumericSpec numeric_spec,
                  g3::RuntimeClock clock, std::string gateway_instance_id,
                  ProductRuntimeOptions options = {});
@@ -47,6 +52,7 @@ public:
   void shutdown_publications() noexcept;
   void stop() noexcept;
 
+  [[nodiscard]] const MarketKey &key() const noexcept;
   [[nodiscard]] ProductKind kind() const noexcept;
   [[nodiscard]] g3::MarketRuntime &runtime() noexcept;
   [[nodiscard]] g5::RecoveryCoordinator &recovery() noexcept;
@@ -57,7 +63,7 @@ public:
 #endif
 
 private:
-  const ProductKind kind_;
+  const MarketKey key_;
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
   std::shared_ptr<performance::ProductTraceBuffer> performance_baseline_;
 #endif

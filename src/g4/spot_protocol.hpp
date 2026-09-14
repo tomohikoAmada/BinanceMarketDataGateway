@@ -61,18 +61,38 @@ decimal_scale_from_quantum(std::string_view quantum);
 
 [[nodiscard]] SpotMetadataResult parse_exchange_info(std::string_view payload);
 
+// Exact-symbol parser used by the reusable single-product path. The
+// three-argument overloads below remain the historical BTCUSDT seam.
+[[nodiscard]] SpotMetadataResult
+parse_exchange_info(std::string_view payload,
+                    std::string_view requested_symbol);
+
 [[nodiscard]] DepthFrameResult
 parse_depth_frame(std::string_view payload, g3::ClockSample received_at,
                   std::string_view connection_id);
+
+[[nodiscard]] DepthFrameResult
+parse_depth_frame(std::string_view payload, g3::ClockSample received_at,
+                  std::string_view connection_id,
+                  std::string_view requested_symbol);
 
 [[nodiscard]] CombinedFrameResult
 parse_combined_event_frame(std::string_view payload,
                            g3::ClockSample received_at,
                            std::string_view connection_id);
 
+[[nodiscard]] CombinedFrameResult parse_combined_event_frame(
+    std::string_view payload, g3::ClockSample received_at,
+    std::string_view connection_id, std::string_view requested_symbol);
+
 [[nodiscard]] DepthSnapshotResult
 parse_depth_snapshot(std::string_view payload, g3::ClockSample received_at,
                      std::string_view request_id);
+
+[[nodiscard]] DepthSnapshotResult
+parse_depth_snapshot(std::string_view payload, g3::ClockSample received_at,
+                     std::string_view request_id,
+                     std::string_view requested_symbol);
 
 [[nodiscard]] std::optional<std::string>
 spot_stream_symbol(std::string_view canonical_symbol);

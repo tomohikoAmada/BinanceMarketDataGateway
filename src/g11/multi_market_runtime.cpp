@@ -14,13 +14,14 @@ class SpotProductAttempt final : public g5::detail::RecoveryAttempt {
 public:
   SpotProductAttempt(
       g3::MarketRuntime &runtime, const g3::RuntimeClock &clock,
-      std::uint64_t generation, g9::EventPublication &publication
+      std::uint64_t generation, std::string exact_symbol,
+      g9::EventPublication &publication
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
       ,
       std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
 #endif
       )
-      : transport_{runtime, clock, generation,
+      : transport_{runtime, clock, std::move(exact_symbol), generation,
                    make_options(publication
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
                                 ,
@@ -80,13 +81,14 @@ class UsdMProductAttempt final : public g5::detail::RecoveryAttempt {
 public:
   UsdMProductAttempt(
       g3::MarketRuntime &runtime, const g3::RuntimeClock &clock,
-      std::uint64_t generation, g9::EventPublication &publication
+      std::uint64_t generation, std::string exact_symbol,
+      g9::EventPublication &publication
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
       ,
       std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
 #endif
       )
-      : transport_{runtime, clock, generation,
+      : transport_{runtime, clock, std::move(exact_symbol), generation,
                    make_options(publication
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
                                 ,
@@ -141,25 +143,43 @@ private:
   UsdMTransport transport_;
 };
 
-[[nodiscard]] g3::adapter::ExpectedIdentity identity_for(ProductKind kind) {
-  switch (kind) {
-  case ProductKind::Spot:
-    return {"BTCUSDT", core::SequencePolicyKind::Spot};
-  case ProductKind::UsdMPerpetual:
-    return {"BTCUSDT", core::SequencePolicyKind::UsdMPerpetual};
+[[nodiscard]] MarketKey validate_product_key(MarketKey key) {
+  if (key.venue != common_wire::VENUE_BINANCE) {
+    throw std::invalid_argument{"ProductRuntime requires Binance venue"};
   }
-  throw std::invalid_argument{"unsupported G11 product kind"};
+  if (key.symbol.empty()) {
+    throw std::invalid_argument{"ProductRuntime symbol must be non-empty"};
+  }
+
+  switch (key.market) {
+  case common_wire::MARKET_SPOT:
+    if (!g4::spot_stream_symbol(key.symbol).has_value()) {
+      throw std::invalid_argument{"ProductRuntime Spot symbol cannot be "
+                                  "represented by a Binance route"};
+    }
+    break;
+  case common_wire::MARKET_USD_M_PERPETUAL:
+    if (!usdm_stream_symbol(key.symbol).has_value()) {
+      throw std::invalid_argument{"ProductRuntime USD-M symbol cannot be "
+                                  "represented by a Binance route"};
+    }
+    break;
+  default:
+    throw std::invalid_argument{
+        "ProductRuntime requires Spot or USD-M perpetual market"};
+  }
+  return key;
 }
 
 [[nodiscard]] g5::RecoveryCoordinatorOptions coordinator_options(
-    ProductKind kind, g9::EventPublication &publication
+    MarketKey key, g9::EventPublication &publication
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
     ,
     std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
 #endif
 ) {
   g5::RecoveryCoordinatorOptions options;
-  options.attempt_factory = [kind, &publication
+  options.attempt_factory = [key = std::move(key), &publication
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
                              ,
                              performance_baseline
@@ -167,9 +187,9 @@ private:
   ](g3::MarketRuntime &runtime, const g3::RuntimeClock &clock,
                             std::uint64_t generation)
       -> std::unique_ptr<g5::detail::RecoveryAttempt> {
-    if (kind == ProductKind::Spot) {
+    if (key.market == common_wire::MARKET_SPOT) {
       return std::make_unique<SpotProductAttempt>(runtime, clock, generation,
-                                                  publication
+                                                  key.symbol, publication
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
                                                   ,
                                                   performance_baseline
@@ -177,7 +197,7 @@ private:
       );
     }
     return std::make_unique<UsdMProductAttempt>(runtime, clock, generation,
-                                                publication
+                                                key.symbol, publication
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
                                                 ,
                                                 performance_baseline
@@ -211,16 +231,17 @@ private:
 }
 
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
-[[nodiscard]] performance::Product measurement_product(ProductKind kind) {
-  return kind == ProductKind::Spot ? performance::Product::Spot
-                                   : performance::Product::UsdMPerpetual;
+[[nodiscard]] performance::Product measurement_product(const MarketKey &key) {
+  return key.market == common_wire::MARKET_SPOT
+             ? performance::Product::Spot
+             : performance::Product::UsdMPerpetual;
 }
 
 [[nodiscard]] std::shared_ptr<performance::ProductTraceBuffer>
-make_performance_baseline(ProductKind kind, const g3::RuntimeClock &clock,
+make_performance_baseline(const MarketKey &key, const g3::RuntimeClock &clock,
                           performance::PerformanceBaselineLimits limits) {
   return std::make_shared<performance::ProductTraceBuffer>(
-      measurement_product(kind), [clock] { return clock().monotonic_ns; },
+      measurement_product(key), [clock] { return clock().monotonic_ns; },
       limits);
 }
 
@@ -232,40 +253,79 @@ make_performance_baseline(ProductKind kind, const g3::RuntimeClock &clock,
 }
 #endif
 
+[[nodiscard]] ProductKind product_kind_for(const MarketKey &key) {
+  switch (key.market) {
+  case common_wire::MARKET_SPOT:
+    return ProductKind::Spot;
+  case common_wire::MARKET_USD_M_PERPETUAL:
+    return ProductKind::UsdMPerpetual;
+  default:
+    throw std::logic_error{"ProductRuntime has an unsupported market"};
+  }
+}
+
+[[nodiscard]] g3::adapter::ExpectedIdentity identity_for(const MarketKey &key) {
+  switch (key.market) {
+  case common_wire::MARKET_SPOT:
+    return {key.symbol, core::SequencePolicyKind::Spot};
+  case common_wire::MARKET_USD_M_PERPETUAL:
+    return {key.symbol, core::SequencePolicyKind::UsdMPerpetual};
+  default:
+    throw std::logic_error{"ProductRuntime has an unsupported market"};
+  }
+}
+
+[[nodiscard]] MarketKey legacy_key_for(ProductKind kind) {
+  switch (kind) {
+  case ProductKind::Spot:
+    return spot_btcusdt_key();
+  case ProductKind::UsdMPerpetual:
+    return usdm_btcusdt_key();
+  }
+  throw std::invalid_argument{"unsupported legacy product kind"};
+}
+
 } // namespace
 
-ProductRuntime::ProductRuntime(ProductKind kind, core::NumericSpec numeric_spec,
+ProductRuntime::ProductRuntime(MarketKey key, core::NumericSpec numeric_spec,
                                g3::RuntimeClock clock,
                                std::string gateway_instance_id,
                                ProductRuntimeOptions options)
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
-    : kind_{kind}, performance_baseline_{make_performance_baseline(
-                       kind, clock, options.performance_baseline_limits)},
+    : key_{validate_product_key(std::move(key))},
+      performance_baseline_{make_performance_baseline(
+          key_, clock, options.performance_baseline_limits)},
       runtime_{runtime_limits_with_baseline(options.runtime_limits,
                                             performance_baseline_),
-               clock, numeric_spec, identity_for(kind),
+               clock, numeric_spec, identity_for(key_),
                std::move(options.runtime_test)},
       event_publication_{std::move(gateway_instance_id), clock,
                          options.event_limits, performance_baseline_},
       recovery_{
           runtime_, std::move(clock), options.planned_rotation,
-          coordinator_options(kind, event_publication_, performance_baseline_),
+          coordinator_options(key_, event_publication_, performance_baseline_),
           std::move(options.recovery_test)} {}
 #else
-    : kind_{kind},
-      runtime_{options.runtime_limits, clock, numeric_spec, identity_for(kind),
+    : key_{validate_product_key(std::move(key))},
+      runtime_{options.runtime_limits, clock, numeric_spec, identity_for(key_),
                std::move(options.runtime_test)},
       event_publication_{std::move(gateway_instance_id), clock,
                          options.event_limits},
       recovery_{runtime_, std::move(clock), options.planned_rotation,
-                coordinator_options(kind, event_publication_),
+                coordinator_options(key_, event_publication_),
                 std::move(options.recovery_test)} {
 }
 #endif
 
-      ProductRuntime::~ProductRuntime() {
-  stop();
+      ProductRuntime::ProductRuntime(
+          ProductKind kind, core::NumericSpec numeric_spec,
+          g3::RuntimeClock clock, std::string gateway_instance_id,
+          ProductRuntimeOptions options)
+    : ProductRuntime(legacy_key_for(kind), numeric_spec, std::move(clock),
+                     std::move(gateway_instance_id), std::move(options)) {
 }
+
+ProductRuntime::~ProductRuntime() { stop(); }
 
 g5::RecoveryStartResult ProductRuntime::start() { return recovery_.start(); }
 
@@ -280,7 +340,11 @@ void ProductRuntime::stop() noexcept {
   recovery_.stop();
 }
 
-ProductKind ProductRuntime::kind() const noexcept { return kind_; }
+const MarketKey &ProductRuntime::key() const noexcept { return key_; }
+
+ProductKind ProductRuntime::kind() const noexcept {
+  return product_kind_for(key_);
+}
 
 g3::MarketRuntime &ProductRuntime::runtime() noexcept { return runtime_; }
 
@@ -304,13 +368,13 @@ TwoProductRuntime::TwoProductRuntime(core::NumericSpec spot_numeric_spec,
                                      g3::RuntimeClock clock,
                                      std::string gateway_instance_id,
                                      TwoProductRuntimeOptions options)
-    : spot_{ProductKind::Spot, spot_numeric_spec, clock, gateway_instance_id,
+    : spot_{spot_btcusdt_key(), spot_numeric_spec, clock, gateway_instance_id,
             std::move(options.spot)},
-      usdm_{ProductKind::UsdMPerpetual, usdm_numeric_spec, std::move(clock),
+      usdm_{usdm_btcusdt_key(), usdm_numeric_spec, std::move(clock),
             std::move(gateway_instance_id), std::move(options.usdm)},
-      registry_{{spot_btcusdt_key(), &spot_.runtime(), &spot_.recovery(),
+      registry_{{spot_.key(), &spot_.runtime(), &spot_.recovery(),
                  &spot_.event_publication()},
-                {usdm_btcusdt_key(), &usdm_.runtime(), &usdm_.recovery(),
+                {usdm_.key(), &usdm_.runtime(), &usdm_.recovery(),
                  &usdm_.event_publication()}} {}
 
 TwoProductRuntime::~TwoProductRuntime() { stop(); }

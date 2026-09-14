@@ -46,7 +46,32 @@ struct ExchangeInfoResponse final {
 
 using ExchangeInfoResult = std::variant<ExchangeInfoResponse, NetworkError>;
 
+// All strings in this route description own their storage. The exact symbol
+// remains the caller's MarketKey identity; lowercase text is only Binance
+// transport encoding.
+struct SpotTransportRoutes final {
+  std::string rest_host;
+  std::string rest_port;
+  std::string exchange_info_target;
+  std::string depth_target;
+  std::string websocket_host;
+  std::string websocket_port;
+  std::string websocket_target;
+  std::string combined_websocket_target;
+  std::string diff_depth_stream;
+  std::string agg_trade_stream;
+  std::string book_ticker_stream;
+  std::size_t snapshot_limit{5000U};
+  std::string connection_id_prefix;
+  std::string snapshot_request_id;
+};
+
+[[nodiscard]] std::optional<SpotTransportRoutes>
+make_spot_transport_routes(std::string_view exact_symbol);
+
 [[nodiscard]] ExchangeInfoResult fetch_exchange_info_https();
+[[nodiscard]] ExchangeInfoResult
+fetch_exchange_info_https(std::string_view exact_symbol);
 [[nodiscard]] g3::ClockSample sample_real_clock() noexcept;
 
 enum class TransportStartResult : std::uint8_t {
@@ -193,8 +218,8 @@ live_acceptance_ready(const TransportObservation &transport,
 
 } // namespace detail
 
-// One concrete Binance Spot BTCUSDT transport. start(), stop(), and destruction
-// are coordinated by the same external lifecycle owner as MarketRuntime.
+// One concrete Binance Spot transport. start(), stop(), and destruction are
+// coordinated by the same external lifecycle owner as MarketRuntime.
 class SpotTransport final {
 public:
   SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
@@ -204,6 +229,16 @@ public:
                 detail::TransportTestOptions test_options = {});
   SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                 std::uint64_t connection_generation,
+                SpotTransportOptions options,
+                detail::TransportTestOptions test_options = {});
+  SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                std::string exact_symbol,
+                detail::TransportTestOptions test_options = {});
+  SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                std::string exact_symbol, std::uint64_t connection_generation,
+                detail::TransportTestOptions test_options = {});
+  SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                std::string exact_symbol, std::uint64_t connection_generation,
                 SpotTransportOptions options,
                 detail::TransportTestOptions test_options = {});
   ~SpotTransport();
