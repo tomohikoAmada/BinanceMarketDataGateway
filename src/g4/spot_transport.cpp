@@ -42,41 +42,52 @@ using ErrorCode = boost::system::error_code;
 
 constexpr std::string_view kRestHost = "api.binance.com";
 constexpr std::string_view kRestPort = "443";
-constexpr std::string_view kExchangeInfoTarget =
-    "/api/v3/exchangeInfo?symbol=BTCUSDT";
-constexpr std::string_view kDepthTarget =
-    "/api/v3/depth?symbol=BTCUSDT&limit=5000";
 constexpr std::string_view kWebSocketHost = "stream.binance.com";
 constexpr std::string_view kWebSocketPort = "9443";
-constexpr std::string_view kWebSocketTarget = "/ws/btcusdt@depth@100ms";
-constexpr std::string_view kCombinedWebSocketTarget =
-    "/stream?streams=btcusdt@depth@100ms/btcusdt@aggTrade/"
-    "btcusdt@bookTicker";
 constexpr auto kStageTimeout = std::chrono::seconds{10};
 
 [[nodiscard]] detail::BinanceTransportConfig
-spot_transport_config(SpotTransportOptions options) {
+spot_transport_config(std::string exact_symbol, SpotTransportOptions options) {
+  const auto routes = make_spot_transport_routes(exact_symbol);
+  if (!routes.has_value()) {
+    throw std::invalid_argument{
+        "Spot symbol cannot be represented by a Binance route"};
+  }
   const auto combined =
       options.profile == SpotTransportProfile::G9CombinedEvents;
+  const std::string symbol{exact_symbol};
   detail::BinanceTransportConfig config;
-  config.rest_host = kRestHost;
-  config.rest_port = kRestPort;
-  config.depth_target = kDepthTarget;
-  config.websocket_host = kWebSocketHost;
-  config.websocket_port = kWebSocketPort;
-  config.websocket_target = combined ? std::string{kCombinedWebSocketTarget}
-                                     : std::string{kWebSocketTarget};
-  config.connection_id_prefix = "binance-spot-btcusdt-g";
-  config.snapshot_request_id = "g4-depth-request-1";
+  config.rest_host = routes->rest_host;
+  config.rest_port = routes->rest_port;
+  config.depth_target = routes->depth_target;
+  config.websocket_host = routes->websocket_host;
+  config.websocket_port = routes->websocket_port;
+  config.websocket_target =
+      combined ? routes->combined_websocket_target : routes->websocket_target;
+  config.connection_id_prefix = routes->connection_id_prefix;
+  config.snapshot_request_id = routes->snapshot_request_id;
   config.user_agent = "bmd-gateway-g4/1.0.0";
   config.profile = options.profile;
   config.normalized_event_sink = std::move(options.normalized_event_sink);
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
   config.performance_baseline = std::move(options.performance_baseline);
 #endif
-  config.depth_frame_parser = parse_depth_frame;
-  config.combined_frame_parser = parse_combined_event_frame;
-  config.depth_snapshot_parser = parse_depth_snapshot;
+  config.depth_frame_parser = [symbol](std::string_view payload,
+                                       g3::ClockSample received_at,
+                                       std::string_view connection_id) {
+    return parse_depth_frame(payload, received_at, connection_id, symbol);
+  };
+  config.combined_frame_parser = [symbol](std::string_view payload,
+                                          g3::ClockSample received_at,
+                                          std::string_view connection_id) {
+    return parse_combined_event_frame(payload, received_at, connection_id,
+                                      symbol);
+  };
+  config.depth_snapshot_parser = [symbol](std::string_view payload,
+                                          g3::ClockSample received_at,
+                                          std::string_view request_id) {
+    return parse_depth_snapshot(payload, received_at, request_id, symbol);
+  };
   return config;
 }
 
@@ -958,6 +969,35 @@ private:
 
 } // namespace
 
+std::optional<SpotTransportRoutes>
+make_spot_transport_routes(std::string_view exact_symbol) {
+  const auto encoded_symbol = spot_stream_symbol(exact_symbol);
+  if (!encoded_symbol.has_value()) {
+    return std::nullopt;
+  }
+
+  const auto &stream_symbol = *encoded_symbol;
+  SpotTransportRoutes routes;
+  routes.rest_host = std::string{kRestHost};
+  routes.rest_port = std::string{kRestPort};
+  routes.exchange_info_target =
+      "/api/v3/exchangeInfo?symbol=" + std::string{exact_symbol};
+  routes.depth_target =
+      "/api/v3/depth?symbol=" + std::string{exact_symbol} + "&limit=5000";
+  routes.websocket_host = std::string{kWebSocketHost};
+  routes.websocket_port = std::string{kWebSocketPort};
+  routes.websocket_target = "/ws/" + stream_symbol + "@depth@100ms";
+  routes.diff_depth_stream = stream_symbol + "@depth@100ms";
+  routes.agg_trade_stream = stream_symbol + "@aggTrade";
+  routes.book_ticker_stream = stream_symbol + "@bookTicker";
+  routes.combined_websocket_target =
+      "/stream?streams=" + routes.diff_depth_stream + "/" +
+      routes.agg_trade_stream + "/" + routes.book_ticker_stream;
+  routes.connection_id_prefix = "binance-spot-" + stream_symbol + "-g";
+  routes.snapshot_request_id = "g4-spot-" + stream_symbol + "-depth-request-1";
+  return routes;
+}
+
 g3::ClockSample sample_real_clock() noexcept {
   const auto utc = std::chrono::duration_cast<std::chrono::nanoseconds>(
                        std::chrono::system_clock::now().time_since_epoch())
@@ -1018,10 +1058,20 @@ detail::fetch_exchange_info_https(const ExchangeInfoEndpoint &endpoint) {
   }
 }
 
-ExchangeInfoResult fetch_exchange_info_https() {
+ExchangeInfoResult fetch_exchange_info_https(std::string_view exact_symbol) {
+  const auto routes = make_spot_transport_routes(exact_symbol);
+  if (!routes.has_value()) {
+    return NetworkError{NetworkErrorCode::Protocol, "exchange-info-config",
+                        "Spot symbol cannot be represented by a Binance route",
+                        std::nullopt, std::nullopt};
+  }
   return detail::fetch_exchange_info_https(
-      {std::string{kRestHost}, std::string{kRestPort},
-       std::string{kExchangeInfoTarget}, kStageTimeout});
+      {routes->rest_host, routes->rest_port, routes->exchange_info_target,
+       kStageTimeout});
+}
+
+ExchangeInfoResult fetch_exchange_info_https() {
+  return fetch_exchange_info_https("BTCUSDT");
 }
 
 bool detail::live_acceptance_ready(
@@ -1595,23 +1645,47 @@ TransportObservation detail::BinanceTransport::observe() const {
 
 SpotTransport::SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                              detail::TransportTestOptions test_options)
-    : SpotTransport(runtime, std::move(clock), 1U, SpotTransportOptions{},
-                    test_options) {}
+    : SpotTransport(runtime, std::move(clock), std::string{"BTCUSDT"}, 1U,
+                    SpotTransportOptions{}, test_options) {}
 
 SpotTransport::SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                              std::uint64_t connection_generation,
                              detail::TransportTestOptions test_options)
-    : SpotTransport(runtime, std::move(clock), connection_generation,
-                    SpotTransportOptions{}, test_options) {}
+    : SpotTransport(runtime, std::move(clock), std::string{"BTCUSDT"},
+                    connection_generation, SpotTransportOptions{},
+                    test_options) {}
 
 SpotTransport::SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
                              std::uint64_t connection_generation,
                              SpotTransportOptions options,
                              detail::TransportTestOptions test_options)
+    : SpotTransport(runtime, std::move(clock), std::string{"BTCUSDT"},
+                    connection_generation, std::move(options),
+                    std::move(test_options)) {}
+
+SpotTransport::SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                             std::string exact_symbol,
+                             detail::TransportTestOptions test_options)
+    : SpotTransport(runtime, std::move(clock), std::move(exact_symbol), 1U,
+                    SpotTransportOptions{}, std::move(test_options)) {}
+
+SpotTransport::SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                             std::string exact_symbol,
+                             std::uint64_t connection_generation,
+                             detail::TransportTestOptions test_options)
+    : SpotTransport(runtime, std::move(clock), std::move(exact_symbol),
+                    connection_generation, SpotTransportOptions{},
+                    std::move(test_options)) {}
+
+SpotTransport::SpotTransport(g3::MarketRuntime &runtime, g3::RuntimeClock clock,
+                             std::string exact_symbol,
+                             std::uint64_t connection_generation,
+                             SpotTransportOptions options,
+                             detail::TransportTestOptions test_options)
     : transport_{std::make_unique<detail::BinanceTransport>(
           runtime, std::move(clock), connection_generation,
-          spot_transport_config(std::move(options)), std::move(test_options))} {
-}
+          spot_transport_config(std::move(exact_symbol), std::move(options)),
+          std::move(test_options))} {}
 
 SpotTransport::~SpotTransport() = default;
 

@@ -185,6 +185,29 @@ void set_idle_timeout(LocalWebSocketPair::Stream &stream,
          !g4::detail::kWebSocketKeepAlivePings;
 }
 
+[[nodiscard]] bool exact_spot_routes_are_product_bound() {
+  const auto btc = g4::make_spot_transport_routes("BTCUSDT");
+  const auto eth = g4::make_spot_transport_routes("ETHUSDT");
+  if (!btc.has_value() || !eth.has_value()) {
+    return false;
+  }
+  return btc->exchange_info_target == "/api/v3/exchangeInfo?symbol=BTCUSDT" &&
+         eth->exchange_info_target == "/api/v3/exchangeInfo?symbol=ETHUSDT" &&
+         btc->depth_target == "/api/v3/depth?symbol=BTCUSDT&limit=5000" &&
+         eth->depth_target == "/api/v3/depth?symbol=ETHUSDT&limit=5000" &&
+         btc->websocket_target == "/ws/btcusdt@depth@100ms" &&
+         eth->websocket_target == "/ws/ethusdt@depth@100ms" &&
+         btc->combined_websocket_target ==
+             "/stream?streams=btcusdt@depth@100ms/btcusdt@aggTrade/"
+             "btcusdt@bookTicker" &&
+         eth->combined_websocket_target ==
+             "/stream?streams=ethusdt@depth@100ms/ethusdt@aggTrade/"
+             "ethusdt@bookTicker" &&
+         btc->connection_id_prefix != eth->connection_id_prefix &&
+         btc->snapshot_request_id != eth->snapshot_request_id &&
+         !g4::make_spot_transport_routes("ethusdt").has_value();
+}
+
 [[nodiscard]] bool exchange_info_tls_stall_times_out() {
   asio::io_context server_context;
   tcp::acceptor acceptor{server_context, {tcp::v4(), 0U}};
@@ -412,6 +435,9 @@ start_pending_is_woken_by_stop(const g3::RuntimeClock &clock) {
 
 int main() {
   if (!websocket_policy_is_conservative()) {
+    return EXIT_FAILURE;
+  }
+  if (!exact_spot_routes_are_product_bound()) {
     return EXIT_FAILURE;
   }
   if (!exchange_info_tls_stall_times_out()) {

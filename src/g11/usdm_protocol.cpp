@@ -93,6 +93,7 @@ append_levels(const Json &levels, RepeatedLevels *output,
 }
 
 void populate_depth_metadata(market::DepthUpdate &event,
+                             std::string_view symbol,
                              std::string_view connection_id,
                              g3::ClockSample received_at,
                              std::uint64_t exchange_event_time_ms,
@@ -100,7 +101,7 @@ void populate_depth_metadata(market::DepthUpdate &event,
   auto *metadata = event.mutable_metadata();
   metadata->set_venue(common_wire::VENUE_BINANCE);
   metadata->set_market(common_wire::MARKET_USD_M_PERPETUAL);
-  metadata->set_symbol("BTCUSDT");
+  metadata->set_symbol(std::string{symbol});
   metadata->set_producer("gateway-g11-usdm");
   metadata->set_producer_version("1.0.0");
   metadata->set_connection_id(std::string{connection_id});
@@ -116,14 +117,24 @@ void populate_depth_metadata(market::DepthUpdate &event,
 
 } // namespace
 
-UsdMMetadataResult parse_usdm_exchange_info(std::string_view payload) {
+UsdMMetadataResult parse_usdm_exchange_info(std::string_view payload,
+                                            std::string_view requested_symbol) {
   const auto decoded = parse_json(payload);
   if (const auto *failure = std::get_if<g4::ProtocolError>(&decoded)) {
     return *failure;
   }
   const auto &root = std::get<Json>(decoded);
+  if (!usdm_stream_symbol(requested_symbol).has_value()) {
+    return error(g4::ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                 "requested USD-M symbol cannot be represented by a Binance "
+                 "route");
+  }
+  if (!root.is_object()) {
+    return error(g4::ProtocolErrorCode::InvalidMarketMetadata, "symbols",
+                 "exchangeInfo symbols must be an array");
+  }
   const auto symbols = root.find("symbols");
-  if (!root.is_object() || symbols == root.end() || !symbols->is_array()) {
+  if (symbols == root.end() || !symbols->is_array()) {
     return error(g4::ProtocolErrorCode::InvalidMarketMetadata, "symbols",
                  "exchangeInfo symbols must be an array");
   }
@@ -135,34 +146,38 @@ UsdMMetadataResult parse_usdm_exchange_info(std::string_view payload) {
                    "each exchangeInfo symbol must be an object");
     }
     const auto symbol = string_field(candidate, "symbol");
-    if (symbol.has_value() && *symbol == "BTCUSDT") {
+    if (!symbol.has_value()) {
+      return error(g4::ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                   "each exchangeInfo symbol needs a string symbol");
+    }
+    if (*symbol == requested_symbol) {
       if (selected != nullptr) {
         return error(g4::ProtocolErrorCode::InvalidMarketMetadata, "symbol",
-                     "exchangeInfo contains duplicate BTCUSDT entries");
+                     "exchangeInfo contains a duplicate requested symbol");
       }
       selected = &candidate;
     }
   }
   if (selected == nullptr) {
     return error(g4::ProtocolErrorCode::InvalidMarketMetadata, "symbol",
-                 "exchangeInfo must contain BTCUSDT");
+                 "exchangeInfo must contain the requested USD-M symbol");
   }
 
   const auto contract_type = string_field(*selected, "contractType");
   if (!contract_type.has_value() || *contract_type != "PERPETUAL") {
     return error(g4::ProtocolErrorCode::InvalidMarketMetadata, "contractType",
-                 "BTCUSDT contractType must be PERPETUAL");
+                 "requested USD-M symbol contractType must be PERPETUAL");
   }
   const auto status = string_field(*selected, "status");
   if (!status.has_value() || *status != "TRADING") {
     return error(g4::ProtocolErrorCode::InvalidMarketMetadata, "status",
-                 "BTCUSDT USD-M perpetual must be TRADING");
+                 "requested USD-M perpetual symbol must be TRADING");
   }
 
   const auto filters = selected->find("filters");
   if (filters == selected->end() || !filters->is_array()) {
     return error(g4::ProtocolErrorCode::InvalidMarketMetadata, "filters",
-                 "BTCUSDT filters must be an array");
+                 "requested USD-M symbol filters must be an array");
   }
   std::optional<std::string> tick_size;
   std::optional<std::string> step_size;
@@ -212,14 +227,24 @@ UsdMMetadataResult parse_usdm_exchange_info(std::string_view payload) {
                        std::get<core::DecimalScale>(quantity_scale)}};
 }
 
+UsdMMetadataResult parse_usdm_exchange_info(std::string_view payload) {
+  return parse_usdm_exchange_info(payload, "BTCUSDT");
+}
+
 UsdMDepthFrameResult parse_usdm_depth_frame(std::string_view payload,
                                             g3::ClockSample received_at,
-                                            std::string_view connection_id) {
+                                            std::string_view connection_id,
+                                            std::string_view requested_symbol) {
   const auto decoded = parse_json(payload);
   if (const auto *failure = std::get_if<g4::ProtocolError>(&decoded)) {
     return *failure;
   }
   const auto &root = std::get<Json>(decoded);
+  if (!usdm_stream_symbol(requested_symbol).has_value()) {
+    return error(g4::ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                 "requested USD-M symbol cannot be represented by a Binance "
+                 "route");
+  }
   const auto event = string_field(root, "e");
   if (!event.has_value()) {
     return error(g4::ProtocolErrorCode::InvalidField, "e",
@@ -249,15 +274,15 @@ UsdMDepthFrameResult parse_usdm_depth_frame(std::string_view payload,
                  "USD-M depthUpdate has an unexpected shape");
   }
   const auto symbol = string_field(root, "s");
-  if (!symbol.has_value() || *symbol != "BTCUSDT") {
-    return error(g4::ProtocolErrorCode::WrongSymbol, "s",
-                 "USD-M depthUpdate symbol must be BTCUSDT");
+  if (!symbol.has_value() || *symbol != requested_symbol) {
+    return error(
+        g4::ProtocolErrorCode::WrongSymbol, "s",
+        "USD-M depthUpdate symbol does not match the configured symbol");
   }
   if (root.contains("ps")) {
-    const auto pair = string_field(root, "ps");
-    if (!pair.has_value() || *pair != "BTCUSDT") {
-      return error(g4::ProtocolErrorCode::WrongSymbol, "ps",
-                   "USD-M depthUpdate pair must be BTCUSDT");
+    if (!string_field(root, "ps").has_value()) {
+      return error(g4::ProtocolErrorCode::InvalidField, "ps",
+                   "USD-M depthUpdate pair must be a string when present");
     }
   }
   if (root.contains("st")) {
@@ -298,8 +323,8 @@ UsdMDepthFrameResult parse_usdm_depth_frame(std::string_view payload,
   }
 
   market::DepthUpdate update;
-  populate_depth_metadata(update, connection_id, received_at, *event_time,
-                          transaction_time);
+  populate_depth_metadata(update, requested_symbol, connection_id, received_at,
+                          *event_time, transaction_time);
   update.set_first_update_id(*first);
   update.set_final_update_id(*final);
   if (previous_final.has_value()) {
@@ -316,14 +341,26 @@ UsdMDepthFrameResult parse_usdm_depth_frame(std::string_view payload,
   return update;
 }
 
-UsdMDepthSnapshotResult parse_usdm_depth_snapshot(std::string_view payload,
-                                                  g3::ClockSample received_at,
-                                                  std::string_view request_id) {
+UsdMDepthFrameResult parse_usdm_depth_frame(std::string_view payload,
+                                            g3::ClockSample received_at,
+                                            std::string_view connection_id) {
+  return parse_usdm_depth_frame(payload, received_at, connection_id, "BTCUSDT");
+}
+
+UsdMDepthSnapshotResult
+parse_usdm_depth_snapshot(std::string_view payload, g3::ClockSample received_at,
+                          std::string_view request_id,
+                          std::string_view requested_symbol) {
   const auto decoded = parse_json(payload);
   if (const auto *failure = std::get_if<g4::ProtocolError>(&decoded)) {
     return *failure;
   }
   const auto &root = std::get<Json>(decoded);
+  if (!usdm_stream_symbol(requested_symbol).has_value()) {
+    return error(g4::ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                 "requested USD-M symbol cannot be represented by a Binance "
+                 "route");
+  }
   if (!has_only_keys(root, {"lastUpdateId", "E", "T", "bids", "asks"}) ||
       !root.contains("lastUpdateId") || !root.contains("bids") ||
       !root.contains("asks")) {
@@ -351,7 +388,7 @@ UsdMDepthSnapshotResult parse_usdm_depth_snapshot(std::string_view payload,
   market::ExchangeDepthSnapshot snapshot;
   snapshot.set_venue(common_wire::VENUE_BINANCE);
   snapshot.set_market(common_wire::MARKET_USD_M_PERPETUAL);
-  snapshot.set_symbol("BTCUSDT");
+  snapshot.set_symbol(std::string{requested_symbol});
   snapshot.set_schema_version("exchange-depth-snapshot.v1");
   snapshot.set_producer("gateway-g11-usdm");
   snapshot.set_producer_version("1.0.0");
@@ -373,12 +410,15 @@ UsdMDepthSnapshotResult parse_usdm_depth_snapshot(std::string_view payload,
   return snapshot;
 }
 
+UsdMDepthSnapshotResult parse_usdm_depth_snapshot(std::string_view payload,
+                                                  g3::ClockSample received_at,
+                                                  std::string_view request_id) {
+  return parse_usdm_depth_snapshot(payload, received_at, request_id, "BTCUSDT");
+}
+
 std::optional<std::string>
 usdm_stream_symbol(std::string_view canonical_symbol) {
-  if (canonical_symbol != "BTCUSDT") {
-    return std::nullopt;
-  }
-  return std::string{"btcusdt"};
+  return g4::spot_stream_symbol(canonical_symbol);
 }
 
 } // namespace binance_market_data::gateway::g11

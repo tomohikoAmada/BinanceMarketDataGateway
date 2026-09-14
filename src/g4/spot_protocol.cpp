@@ -90,13 +90,14 @@ string_field(const Json &object, std::string_view name) {
 }
 
 void populate_event_metadata(market::DepthUpdate &event,
+                             std::string_view symbol,
                              std::string_view connection_id,
                              g3::ClockSample received_at,
                              std::uint64_t exchange_event_time_ms) {
   auto *metadata = event.mutable_metadata();
   metadata->set_venue(common_wire::VENUE_BINANCE);
   metadata->set_market(common_wire::MARKET_SPOT);
-  metadata->set_symbol("BTCUSDT");
+  metadata->set_symbol(std::string{symbol});
   metadata->set_producer("gateway-g4-spot");
   metadata->set_producer_version("1.0.0");
   metadata->set_connection_id(std::string{connection_id});
@@ -107,7 +108,7 @@ void populate_event_metadata(market::DepthUpdate &event,
   metadata->set_receive_monotonic_ns(received_at.monotonic_ns);
 }
 
-void populate_event_metadata(market::AggTrade &event,
+void populate_event_metadata(market::AggTrade &event, std::string_view symbol,
                              std::string_view connection_id,
                              g3::ClockSample received_at,
                              std::uint64_t exchange_event_time_ms,
@@ -115,7 +116,7 @@ void populate_event_metadata(market::AggTrade &event,
   auto *metadata = event.mutable_metadata();
   metadata->set_venue(common_wire::VENUE_BINANCE);
   metadata->set_market(common_wire::MARKET_SPOT);
-  metadata->set_symbol("BTCUSDT");
+  metadata->set_symbol(std::string{symbol});
   metadata->set_producer("gateway-g4-spot");
   metadata->set_producer_version("1.0.0");
   metadata->set_connection_id(std::string{connection_id});
@@ -127,13 +128,13 @@ void populate_event_metadata(market::AggTrade &event,
   metadata->set_receive_monotonic_ns(received_at.monotonic_ns);
 }
 
-void populate_event_metadata(market::BookTicker &event,
+void populate_event_metadata(market::BookTicker &event, std::string_view symbol,
                              std::string_view connection_id,
                              g3::ClockSample received_at) {
   auto *metadata = event.mutable_metadata();
   metadata->set_venue(common_wire::VENUE_BINANCE);
   metadata->set_market(common_wire::MARKET_SPOT);
-  metadata->set_symbol("BTCUSDT");
+  metadata->set_symbol(std::string{symbol});
   metadata->set_producer("gateway-g4-spot");
   metadata->set_producer_version("1.0.0");
   metadata->set_connection_id(std::string{connection_id});
@@ -230,42 +231,69 @@ DecimalScaleResult decimal_scale_from_quantum(std::string_view quantum) {
   return *created;
 }
 
-SpotMetadataResult parse_exchange_info(std::string_view payload) {
+SpotMetadataResult parse_exchange_info(std::string_view payload,
+                                       std::string_view requested_symbol) {
   const auto decoded = parse_json(payload);
   if (const auto *failure = std::get_if<ProtocolError>(&decoded)) {
     return *failure;
   }
   const auto &root = std::get<Json>(decoded);
-  const auto symbols = root.find("symbols");
-  if (!root.is_object() || symbols == root.end() || !symbols->is_array() ||
-      symbols->size() != 1U || !symbols->at(0).is_object()) {
+  if (!spot_stream_symbol(requested_symbol).has_value()) {
+    return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                 "requested Spot symbol cannot be represented by a Binance "
+                 "route");
+  }
+  if (!root.is_object()) {
     return error(ProtocolErrorCode::InvalidMarketMetadata, "symbols",
-                 "exchangeInfo must contain exactly one symbol object");
+                 "exchangeInfo symbols must be an array");
+  }
+  const auto symbols = root.find("symbols");
+  if (symbols == root.end() || !symbols->is_array()) {
+    return error(ProtocolErrorCode::InvalidMarketMetadata, "symbols",
+                 "exchangeInfo symbols must be an array");
   }
 
-  const auto &symbol = symbols->at(0);
-  const auto symbol_name = string_field(symbol, "symbol");
-  if (!symbol_name.has_value() || *symbol_name != "BTCUSDT") {
-    return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
-                 "exchangeInfo symbol must be BTCUSDT");
+  const Json *selected = nullptr;
+  for (const auto &candidate : *symbols) {
+    if (!candidate.is_object()) {
+      return error(ProtocolErrorCode::InvalidMarketMetadata, "symbols",
+                   "each exchangeInfo symbol must be an object");
+    }
+    const auto symbol_name = string_field(candidate, "symbol");
+    if (!symbol_name.has_value()) {
+      return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                   "each exchangeInfo symbol needs a string symbol");
+    }
+    if (*symbol_name == requested_symbol) {
+      if (selected != nullptr) {
+        return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                     "exchangeInfo contains a duplicate requested symbol");
+      }
+      selected = &candidate;
+    }
   }
-  const auto status = string_field(symbol, "status");
+  if (selected == nullptr) {
+    return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                 "exchangeInfo must contain the requested Spot symbol");
+  }
+
+  const auto status = string_field(*selected, "status");
   if (!status.has_value() || *status != "TRADING") {
     return error(ProtocolErrorCode::InvalidMarketMetadata, "status",
-                 "BTCUSDT must be TRADING");
+                 "requested Spot symbol must be TRADING");
   }
-  const auto spot_allowed = symbol.find("isSpotTradingAllowed");
-  if (spot_allowed == symbol.end() || !spot_allowed->is_boolean() ||
+  const auto spot_allowed = selected->find("isSpotTradingAllowed");
+  if (spot_allowed == selected->end() || !spot_allowed->is_boolean() ||
       !spot_allowed->get<bool>()) {
     return error(ProtocolErrorCode::InvalidMarketMetadata,
                  "isSpotTradingAllowed",
-                 "BTCUSDT Spot trading must be allowed");
+                 "requested Spot symbol trading must be allowed");
   }
 
-  const auto filters = symbol.find("filters");
-  if (filters == symbol.end() || !filters->is_array()) {
+  const auto filters = selected->find("filters");
+  if (filters == selected->end() || !filters->is_array()) {
     return error(ProtocolErrorCode::InvalidMarketMetadata, "filters",
-                 "BTCUSDT filters must be an array");
+                 "requested Spot symbol filters must be an array");
   }
   std::optional<std::string> tick_size;
   std::optional<std::string> step_size;
@@ -314,14 +342,24 @@ SpotMetadataResult parse_exchange_info(std::string_view payload) {
                        std::get<core::DecimalScale>(quantity_scale)}};
 }
 
+SpotMetadataResult parse_exchange_info(std::string_view payload) {
+  return parse_exchange_info(payload, "BTCUSDT");
+}
+
 DepthFrameResult parse_depth_frame(std::string_view payload,
                                    g3::ClockSample received_at,
-                                   std::string_view connection_id) {
+                                   std::string_view connection_id,
+                                   std::string_view requested_symbol) {
   const auto decoded = parse_json(payload);
   if (const auto *failure = std::get_if<ProtocolError>(&decoded)) {
     return *failure;
   }
   const auto &root = std::get<Json>(decoded);
+  if (!spot_stream_symbol(requested_symbol).has_value()) {
+    return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                 "requested Spot symbol cannot be represented by a Binance "
+                 "route");
+  }
   const auto event = string_field(root, "e");
   if (!event.has_value()) {
     return error(ProtocolErrorCode::InvalidField, "e",
@@ -348,9 +386,9 @@ DepthFrameResult parse_depth_frame(std::string_view payload,
                  "depthUpdate has an unexpected shape");
   }
   const auto symbol = string_field(root, "s");
-  if (!symbol.has_value() || *symbol != "BTCUSDT") {
+  if (!symbol.has_value() || *symbol != requested_symbol) {
     return error(ProtocolErrorCode::WrongSymbol, "s",
-                 "depthUpdate symbol must be BTCUSDT");
+                 "depthUpdate symbol does not match the configured symbol");
   }
   const auto event_time = unsigned_field(root, "E");
   const auto first = unsigned_field(root, "U");
@@ -365,7 +403,8 @@ DepthFrameResult parse_depth_frame(std::string_view payload,
   }
 
   market::DepthUpdate update;
-  populate_event_metadata(update, connection_id, received_at, *event_time);
+  populate_event_metadata(update, requested_symbol, connection_id, received_at,
+                          *event_time);
   update.set_first_update_id(*first);
   update.set_final_update_id(*final);
   if (const auto failure =
@@ -379,14 +418,25 @@ DepthFrameResult parse_depth_frame(std::string_view payload,
   return update;
 }
 
-CombinedFrameResult parse_combined_event_frame(std::string_view payload,
-                                               g3::ClockSample received_at,
-                                               std::string_view connection_id) {
+DepthFrameResult parse_depth_frame(std::string_view payload,
+                                   g3::ClockSample received_at,
+                                   std::string_view connection_id) {
+  return parse_depth_frame(payload, received_at, connection_id, "BTCUSDT");
+}
+
+CombinedFrameResult parse_combined_event_frame(
+    std::string_view payload, g3::ClockSample received_at,
+    std::string_view connection_id, std::string_view requested_symbol) {
   const auto decoded = parse_json(payload);
   if (const auto *failure = std::get_if<ProtocolError>(&decoded)) {
     return *failure;
   }
   const auto &root = std::get<Json>(decoded);
+  if (!spot_stream_symbol(requested_symbol).has_value()) {
+    return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                 "requested Spot symbol cannot be represented by a Binance "
+                 "route");
+  }
   if (!has_exact_keys(root, {"stream", "data"})) {
     return error(ProtocolErrorCode::InvalidShape, "payload",
                  "combined stream envelope has an unexpected shape");
@@ -402,9 +452,19 @@ CombinedFrameResult parse_combined_event_frame(std::string_view payload,
                  "connection_id must be non-empty");
   }
 
-  if (*stream == "btcusdt@depth@100ms") {
-    const auto nested =
-        parse_depth_frame(data->dump(), received_at, connection_id);
+  const auto stream_symbol = spot_stream_symbol(requested_symbol);
+  if (!stream_symbol.has_value()) {
+    return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                 "configured Spot symbol cannot be represented as a Binance "
+                 "stream symbol");
+  }
+  const auto depth_stream = *stream_symbol + "@depth@100ms";
+  const auto agg_trade_stream = *stream_symbol + "@aggTrade";
+  const auto book_ticker_stream = *stream_symbol + "@bookTicker";
+
+  if (*stream == depth_stream) {
+    const auto nested = parse_depth_frame(data->dump(), received_at,
+                                          connection_id, requested_symbol);
     if (const auto *shutdown = std::get_if<ServerShutdown>(&nested)) {
       return *shutdown;
     }
@@ -415,7 +475,7 @@ CombinedFrameResult parse_combined_event_frame(std::string_view payload,
         std::get<market::DepthUpdate>(std::move(nested))};
   }
 
-  if (*stream == "btcusdt@aggTrade") {
+  if (*stream == agg_trade_stream) {
     if (!has_exact_keys(
             *data, {"e", "E", "s", "a", "p", "q", "f", "l", "T", "m", "M"})) {
       return error(ProtocolErrorCode::InvalidShape, "data",
@@ -436,9 +496,9 @@ CombinedFrameResult parse_combined_event_frame(std::string_view payload,
       return error(ProtocolErrorCode::WrongEvent, "e",
                    "combined stream payload is not aggTrade");
     }
-    if (!symbol.has_value() || *symbol != "BTCUSDT") {
+    if (!symbol.has_value() || *symbol != requested_symbol) {
       return error(ProtocolErrorCode::WrongSymbol, "s",
-                   "aggTrade symbol must be BTCUSDT");
+                   "aggTrade symbol does not match the configured symbol");
     }
     if (!aggregate_id.has_value() || !price.has_value() ||
         !plain_decimal(*price, false) || !quantity.has_value() ||
@@ -450,8 +510,8 @@ CombinedFrameResult parse_combined_event_frame(std::string_view payload,
                    "aggTrade fields have invalid types or decimal values");
     }
     market::AggTrade trade;
-    populate_event_metadata(trade, connection_id, received_at, *event_time,
-                            *trade_time);
+    populate_event_metadata(trade, requested_symbol, connection_id, received_at,
+                            *event_time, *trade_time);
     trade.set_aggregate_trade_id(*aggregate_id);
     trade.set_price(std::string{*price});
     trade.set_quantity(std::string{*quantity});
@@ -462,7 +522,7 @@ CombinedFrameResult parse_combined_event_frame(std::string_view payload,
     return NormalizedSpotEvent{std::move(trade)};
   }
 
-  if (*stream == "btcusdt@bookTicker") {
+  if (*stream == book_ticker_stream) {
     if (!has_exact_keys(*data, {"u", "s", "b", "B", "a", "A"})) {
       return error(ProtocolErrorCode::InvalidShape, "data",
                    "bookTicker has an unexpected shape");
@@ -473,9 +533,9 @@ CombinedFrameResult parse_combined_event_frame(std::string_view payload,
     const auto bid_quantity = string_field(*data, "B");
     const auto ask_price = string_field(*data, "a");
     const auto ask_quantity = string_field(*data, "A");
-    if (!symbol.has_value() || *symbol != "BTCUSDT") {
+    if (!symbol.has_value() || *symbol != requested_symbol) {
       return error(ProtocolErrorCode::WrongSymbol, "s",
-                   "bookTicker symbol must be BTCUSDT");
+                   "bookTicker symbol does not match the configured symbol");
     }
     if (!update_id.has_value() || !bid_price.has_value() ||
         !plain_decimal(*bid_price, false) || !bid_quantity.has_value() ||
@@ -486,7 +546,8 @@ CombinedFrameResult parse_combined_event_frame(std::string_view payload,
                    "bookTicker fields have invalid types or decimal values");
     }
     market::BookTicker ticker;
-    populate_event_metadata(ticker, connection_id, received_at);
+    populate_event_metadata(ticker, requested_symbol, connection_id,
+                            received_at);
     ticker.set_update_id(*update_id);
     ticker.set_best_bid_price(std::string{*bid_price});
     ticker.set_best_bid_quantity(std::string{*bid_quantity});
@@ -499,14 +560,27 @@ CombinedFrameResult parse_combined_event_frame(std::string_view payload,
                "combined stream is not configured for G9");
 }
 
+CombinedFrameResult parse_combined_event_frame(std::string_view payload,
+                                               g3::ClockSample received_at,
+                                               std::string_view connection_id) {
+  return parse_combined_event_frame(payload, received_at, connection_id,
+                                    "BTCUSDT");
+}
+
 DepthSnapshotResult parse_depth_snapshot(std::string_view payload,
                                          g3::ClockSample received_at,
-                                         std::string_view request_id) {
+                                         std::string_view request_id,
+                                         std::string_view requested_symbol) {
   const auto decoded = parse_json(payload);
   if (const auto *failure = std::get_if<ProtocolError>(&decoded)) {
     return *failure;
   }
   const auto &root = std::get<Json>(decoded);
+  if (!spot_stream_symbol(requested_symbol).has_value()) {
+    return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                 "requested Spot symbol cannot be represented by a Binance "
+                 "route");
+  }
   if (!has_exact_keys(root, {"lastUpdateId", "bids", "asks"})) {
     return error(ProtocolErrorCode::InvalidShape, "payload",
                  "depth snapshot has an unexpected shape");
@@ -520,7 +594,7 @@ DepthSnapshotResult parse_depth_snapshot(std::string_view payload,
   market::ExchangeDepthSnapshot snapshot;
   snapshot.set_venue(common_wire::VENUE_BINANCE);
   snapshot.set_market(common_wire::MARKET_SPOT);
-  snapshot.set_symbol("BTCUSDT");
+  snapshot.set_symbol(std::string{requested_symbol});
   snapshot.set_schema_version("exchange-depth-snapshot.v1");
   snapshot.set_producer("gateway-g4-spot");
   snapshot.set_producer_version("1.0.0");
@@ -539,12 +613,29 @@ DepthSnapshotResult parse_depth_snapshot(std::string_view payload,
   return snapshot;
 }
 
+DepthSnapshotResult parse_depth_snapshot(std::string_view payload,
+                                         g3::ClockSample received_at,
+                                         std::string_view request_id) {
+  return parse_depth_snapshot(payload, received_at, request_id, "BTCUSDT");
+}
+
 std::optional<std::string>
 spot_stream_symbol(std::string_view canonical_symbol) {
-  if (canonical_symbol != "BTCUSDT") {
+  if (canonical_symbol.empty()) {
     return std::nullopt;
   }
-  return std::string{"btcusdt"};
+  std::string encoded;
+  encoded.reserve(canonical_symbol.size());
+  for (const auto character : canonical_symbol) {
+    if (character >= 'A' && character <= 'Z') {
+      encoded.push_back(static_cast<char>(character - 'A' + 'a'));
+    } else if (character >= '0' && character <= '9') {
+      encoded.push_back(character);
+    } else {
+      return std::nullopt;
+    }
+  }
+  return encoded;
 }
 
 } // namespace binance_market_data::gateway::g4

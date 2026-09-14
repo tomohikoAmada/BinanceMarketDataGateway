@@ -55,23 +55,27 @@ target_symbol(std::string_view contract_type = "PERPETUAL",
       {"filterType":"MAX_NUM_ORDERS","limit":200},
       {"filterType":"LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
       {"filterType":"PRICE_FILTER","minPrice":"0.10","maxPrice":"1000000","tickSize":"0.10"}
-    )json") {
-  return std::string{
-             R"json({"symbol":"BTCUSDT","pair":"BTCUSDT","contractType":")json"} +
-         std::string{contract_type} + R"json(","status":")json" +
-         std::string{status} +
+    )json",
+              std::string_view symbol = "BTCUSDT") {
+  return std::string{R"json({"symbol":")json"} + std::string{symbol} +
+         R"json(","pair":")json" + std::string{symbol} +
+         R"json(","contractType":")json" + std::string{contract_type} +
+         R"json(","status":")json" + std::string{status} +
          R"json(","pricePrecision":17,"quantityPrecision":19,"filters":[)json" +
          std::string{filters} + "]}";
 }
 
-[[nodiscard]] std::string exchange_info(std::string target) {
-  return std::string{R"json({"timezone":"UTC","symbols":[
-    {"symbol":"ETHUSDT","contractType":"PERPETUAL","status":"TRADING","filters":[]},
-  )json"} +
+[[nodiscard]] std::string exchange_info_for(std::string target,
+                                            std::string_view unrelated_symbol) {
+  return std::string{R"json({"timezone":"UTC","symbols":[{"symbol":")json"} +
+         std::string{unrelated_symbol} +
+         R"json(","contractType":"PERPETUAL","status":"TRADING","filters":[]},)json" +
          std::move(target) +
-         R"json(,
-    {"symbol":"BTCUSDC","contractType":"PERPETUAL","status":"TRADING","filters":[]}
-  ]})json";
+         R"json(,{"symbol":"BTCUSDC","contractType":"PERPETUAL","status":"TRADING","filters":[]}]})json";
+}
+
+[[nodiscard]] std::string exchange_info(std::string target) {
+  return exchange_info_for(std::move(target), "ETHUSDT");
 }
 
 [[nodiscard]] const g4::ProtocolError &
@@ -101,6 +105,34 @@ void exchange_info_selects_exact_perpetual() {
                                  target_symbol("PERPETUAL", "SETTLING"))))
           .field,
       "status");
+}
+
+void exact_symbol_metadata_selection() {
+  const auto eth = g11::parse_usdm_exchange_info(
+      exchange_info_for(target_symbol("PERPETUAL", "TRADING",
+                                      R"json(
+      {"filterType":"LOT_SIZE","stepSize":"0.001"},
+      {"filterType":"PRICE_FILTER","tickSize":"0.10"}
+    )json",
+                                      "ETHUSDT"),
+                        "BTCUSDT"),
+      "ETHUSDT");
+  REQUIRE(std::holds_alternative<g11::UsdMMetadata>(eth));
+  const auto &eth_metadata = std::get<g11::UsdMMetadata>(eth);
+  REQUIRE_EQ(eth_metadata.numeric_spec.price_scale.value(), 1U);
+  REQUIRE_EQ(eth_metadata.numeric_spec.quantity_scale.value(), 3U);
+
+  const auto btc =
+      g11::parse_usdm_exchange_info(exchange_info(target_symbol()), "BTCUSDT");
+  REQUIRE(std::holds_alternative<g11::UsdMMetadata>(btc));
+  REQUIRE_EQ(std::get<g11::UsdMMetadata>(btc).numeric_spec.price_scale.value(),
+             1U);
+
+  REQUIRE_EQ(
+      require_metadata_error(g11::parse_usdm_exchange_info(
+                                 exchange_info(target_symbol()), "XRPUSDT"))
+          .code,
+      g4::ProtocolErrorCode::InvalidMarketMetadata);
 }
 
 void exchange_info_filter_validation() {
@@ -155,6 +187,37 @@ void diff_depth_present_and_absent_pu() {
                .has_previous_final_update_id());
 }
 
+void exact_symbol_events_and_snapshot_identity() {
+  constexpr auto received_at =
+      binance_market_data::gateway::g3::ClockSample{10U, 20U};
+  const auto parsed = g11::parse_usdm_depth_frame(
+      R"json({"e":"depthUpdate","E":1,"T":2,"s":"ETHUSDT","U":501,"u":504,"pu":499,"b":[],"a":[],"ps":"BTCUSDT","st":1})json",
+      received_at, "eth-usdm-connection", "ETHUSDT");
+  REQUIRE(std::holds_alternative<g11::market::DepthUpdate>(parsed));
+  const auto &update = std::get<g11::market::DepthUpdate>(parsed);
+  REQUIRE_EQ(update.metadata().symbol(), "ETHUSDT");
+  REQUIRE(update.has_previous_final_update_id());
+  REQUIRE_EQ(update.previous_final_update_id(), 499U);
+
+  REQUIRE(std::holds_alternative<g4::ProtocolError>(g11::parse_usdm_depth_frame(
+      R"json({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":1,"u":2,"pu":0,"b":[],"a":[]})json",
+      received_at, "eth-usdm-connection", "ETHUSDT")));
+  const auto invalid_pair = g11::parse_usdm_depth_frame(
+      R"json({"e":"depthUpdate","E":1,"s":"ETHUSDT","U":1,"u":2,"pu":0,"b":[],"a":[],"ps":123})json",
+      received_at, "eth-usdm-connection", "ETHUSDT");
+  REQUIRE(std::holds_alternative<g4::ProtocolError>(invalid_pair));
+  const auto &invalid_pair_error = std::get<g4::ProtocolError>(invalid_pair);
+  REQUIRE_EQ(invalid_pair_error.code, g4::ProtocolErrorCode::InvalidField);
+  REQUIRE_EQ(invalid_pair_error.field, "ps");
+
+  const auto snapshot = g11::parse_usdm_depth_snapshot(
+      R"json({"lastUpdateId":504,"E":1,"T":2,"bids":[],"asks":[]})json",
+      received_at, "eth-usdm-snapshot", "ETHUSDT");
+  REQUIRE(std::holds_alternative<g11::market::ExchangeDepthSnapshot>(snapshot));
+  REQUIRE_EQ(std::get<g11::market::ExchangeDepthSnapshot>(snapshot).symbol(),
+             "ETHUSDT");
+}
+
 void diff_depth_has_no_prior_u_classifier() {
   const auto first = g11::parse_usdm_depth_frame(
       R"json({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":100,"u":110,"pu":7,"b":[],"a":[]})json",
@@ -174,7 +237,6 @@ void diff_depth_identity_and_type_rejection() {
       R"json({"e":"depthUpdate","E":1,"s":"ETHUSDT","U":1,"u":2,"pu":0,"b":[],"a":[]})json",
       R"json({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":1,"u":2,"pu":"0","b":[],"a":[]})json",
       R"json({"e":"depthUpdate","E":1,"T":"1","s":"BTCUSDT","U":1,"u":2,"b":[],"a":[]})json",
-      R"json({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":1,"u":2,"b":[],"a":[],"ps":"BTCUSD"})json",
       R"json({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":1,"u":2,"b":[],"a":[],"st":2})json",
       R"json({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":1,"u":2,"b":[["1"]],"a":[]})json",
       R"json({"e":"aggTrade","E":1,"s":"BTCUSDT","U":1,"u":2,"b":[],"a":[]})json",
@@ -214,8 +276,10 @@ void snapshot_parse_and_validation() {
 void stream_symbol_and_shutdown() {
   REQUIRE_EQ(g11::usdm_stream_symbol("BTCUSDT"),
              std::optional<std::string>{"btcusdt"});
+  REQUIRE_EQ(g11::usdm_stream_symbol("ETHUSDT"),
+             std::optional<std::string>{"ethusdt"});
   REQUIRE(!g11::usdm_stream_symbol("btcusdt").has_value());
-  REQUIRE(!g11::usdm_stream_symbol("ETHUSDT").has_value());
+  REQUIRE(!g11::usdm_stream_symbol("ETH-USDT").has_value());
 
   const auto shutdown = g11::parse_usdm_depth_frame(
       R"json({"e":"serverShutdown","E":1770123456789})json", {1U, 2U},
@@ -229,8 +293,11 @@ int main() {
   const std::vector<std::pair<std::string_view, std::function<void()>>> tests{
       {"EXCHANGEINFO_SELECTS_EXACT_PERPETUAL",
        exchange_info_selects_exact_perpetual},
+      {"EXACT_SYMBOL_METADATA_SELECTION", exact_symbol_metadata_selection},
       {"EXCHANGEINFO_FILTER_VALIDATION", exchange_info_filter_validation},
       {"DIFF_DEPTH_PRESENT_AND_ABSENT_PU", diff_depth_present_and_absent_pu},
+      {"EXACT_SYMBOL_EVENTS_AND_SNAPSHOT_IDENTITY",
+       exact_symbol_events_and_snapshot_identity},
       {"DIFF_DEPTH_HAS_NO_PRIOR_U_CLASSIFIER",
        diff_depth_has_no_prior_u_classifier},
       {"DIFF_DEPTH_IDENTITY_AND_TYPE_REJECTION",

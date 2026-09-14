@@ -69,6 +69,22 @@ void official_routes_are_frozen() {
   REQUIRE(g11::kUsdMTransportRoutes.snapshot_limit == 1000U);
 }
 
+void exact_usdm_routes_are_product_bound() {
+  const auto btc = g11::make_usdm_transport_routes("BTCUSDT");
+  const auto eth = g11::make_usdm_transport_routes("ETHUSDT");
+  REQUIRE(btc.has_value());
+  REQUIRE(eth.has_value());
+  REQUIRE(btc->depth_target == "/fapi/v1/depth?symbol=BTCUSDT&limit=1000");
+  REQUIRE(eth->depth_target == "/fapi/v1/depth?symbol=ETHUSDT&limit=1000");
+  REQUIRE(btc->websocket_target == "/public/ws/btcusdt@depth@100ms");
+  REQUIRE(eth->websocket_target == "/public/ws/ethusdt@depth@100ms");
+  REQUIRE(btc->diff_depth_stream == "btcusdt@depth@100ms");
+  REQUIRE(eth->diff_depth_stream == "ethusdt@depth@100ms");
+  REQUIRE(btc->connection_id_prefix != eth->connection_id_prefix);
+  REQUIRE(btc->snapshot_request_id != eth->snapshot_request_id);
+  REQUIRE(!g11::make_usdm_transport_routes("ethusdt").has_value());
+}
+
 void clean_stop_preserves_shared_network_semantics() {
   const auto clock = deterministic_clock();
   g3::MarketRuntime runtime{{4U, 4U}, clock, numeric_spec()};
@@ -122,15 +138,39 @@ void event_profile_is_closed_depth_only_publication() {
   REQUIRE(active.book_ticker_frame_count == 0U);
 }
 
+void eth_transport_identity_is_deterministic() {
+  const auto clock = deterministic_clock();
+  g3::MarketRuntime runtime{{4U, 4U}, clock, numeric_spec()};
+  REQUIRE(runtime.start() == g3::StartResult::Started);
+
+  g4::detail::TransportTestOptions test_options;
+  test_options.stop_cut_mode =
+      g4::detail::TransportStopCutTestMode::CleanCancellation;
+  g11::UsdMTransport transport{runtime, clock, std::string{"ETHUSDT"},
+                               9U,      {},    std::move(test_options)};
+  REQUIRE(transport.start() == g4::TransportStartResult::Started);
+  const auto observation = transport.observe();
+  transport.stop();
+  runtime.stop();
+
+  REQUIRE(observation.connection_id ==
+          "binance-usdm-ethusdt-g9-1700000000000000000");
+  REQUIRE(observation.connection_generation == 9U);
+}
+
 } // namespace
 
 int main() {
   const std::vector<std::pair<std::string_view, std::function<void()>>> tests{
       {"OFFICIAL_ROUTES_ARE_FROZEN", official_routes_are_frozen},
+      {"EXACT_USDM_ROUTES_ARE_PRODUCT_BOUND",
+       exact_usdm_routes_are_product_bound},
       {"CLEAN_STOP_PRESERVES_SHARED_NETWORK_SEMANTICS",
        clean_stop_preserves_shared_network_semantics},
       {"EVENT_PROFILE_IS_CLOSED_DEPTH_ONLY_PUBLICATION",
        event_profile_is_closed_depth_only_publication},
+      {"ETH_TRANSPORT_IDENTITY_IS_DETERMINISTIC",
+       eth_transport_identity_is_deterministic},
   };
 
   for (const auto &[name, test] : tests) {

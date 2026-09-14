@@ -66,6 +66,32 @@ void require_equal(const Actual &actual, const Expected &expected,
          std::string{filters} + R"json(]}]})json";
 }
 
+[[nodiscard]] std::string exchange_info_record(
+    std::string_view symbol, std::string_view status = "TRADING",
+    std::string_view spot_allowed = "true", std::string_view filters = R"json(
+      {"filterType":"PRICE_FILTER","tickSize":"0.01"},
+      {"filterType":"LOT_SIZE","stepSize":"0.001"}
+    )json") {
+  return std::string{R"json({"symbol":")json"} + std::string{symbol} +
+         R"json(","status":")json" + std::string{status} +
+         R"json(","isSpotTradingAllowed":)json" + std::string{spot_allowed} +
+         R"json(,"filters":[)json" + std::string{filters} + R"json(]})json";
+}
+
+[[nodiscard]] std::string
+exchange_info_multi(std::string_view first_symbol = "BTCUSDT",
+                    std::string_view second_symbol = "ETHUSDT") {
+  return std::string{R"json({"timezone":"UTC","symbols":[)json"} +
+         exchange_info_record(
+             first_symbol, "TRADING", "true",
+             R"json({"filterType":"PRICE_FILTER","tickSize":"0.01"}, {"filterType":"LOT_SIZE","stepSize":"0.00001"})json") +
+         "," +
+         exchange_info_record(
+             second_symbol, "TRADING", "true",
+             R"json({"filterType":"PRICE_FILTER","tickSize":"0.10"}, {"filterType":"LOT_SIZE","stepSize":"0.001"})json") +
+         "]}";
+}
+
 [[nodiscard]] const g4::ProtocolError &
 require_error(const g4::SpotMetadataResult &result) {
   REQUIRE(std::holds_alternative<g4::ProtocolError>(result));
@@ -131,6 +157,41 @@ void exchange_info_validation_and_precision_sources() {
              {"filterType":"LOT_SIZE","stepSize":"0.001"})json"))));
 }
 
+void exact_symbol_metadata_selection() {
+  const auto parsed = g4::parse_exchange_info(exchange_info_multi(), "ETHUSDT");
+  REQUIRE(std::holds_alternative<g4::SpotMetadata>(parsed));
+  const auto &metadata = std::get<g4::SpotMetadata>(parsed);
+  REQUIRE_EQ(metadata.numeric_spec.price_scale.value(), 1U);
+  REQUIRE_EQ(metadata.numeric_spec.quantity_scale.value(), 3U);
+
+  REQUIRE(std::holds_alternative<g4::SpotMetadata>(
+      g4::parse_exchange_info(exchange_info_multi(), "BTCUSDT")));
+  REQUIRE_EQ(std::get<g4::SpotMetadata>(
+                 g4::parse_exchange_info(exchange_info_multi(), "BTCUSDT"))
+                 .numeric_spec.quantity_scale.value(),
+             5U);
+
+  REQUIRE_EQ(
+      require_error(g4::parse_exchange_info(exchange_info_multi(), "XRPUSDT"))
+          .code,
+      g4::ProtocolErrorCode::InvalidMarketMetadata);
+
+  const auto duplicate = std::string{
+      R"json({"symbols":[{"symbol":"ETHUSDT","status":"TRADING","isSpotTradingAllowed":true,"filters":[{"filterType":"PRICE_FILTER","tickSize":"0.10"},{"filterType":"LOT_SIZE","stepSize":"0.001"}]},{"symbol":"ETHUSDT","status":"TRADING","isSpotTradingAllowed":true,"filters":[{"filterType":"PRICE_FILTER","tickSize":"0.10"},{"filterType":"LOT_SIZE","stepSize":"0.001"}]}]})json"};
+  REQUIRE_EQ(require_error(g4::parse_exchange_info(duplicate, "ETHUSDT")).code,
+             g4::ProtocolErrorCode::InvalidMarketMetadata);
+
+  REQUIRE(std::holds_alternative<g4::ProtocolError>(
+      g4::parse_exchange_info(exchange_info("ETHUSDT", "BREAK"), "ETHUSDT")));
+  REQUIRE(std::holds_alternative<g4::ProtocolError>(g4::parse_exchange_info(
+      exchange_info("ETHUSDT", "TRADING", "false"), "ETHUSDT")));
+  REQUIRE(std::holds_alternative<g4::ProtocolError>(g4::parse_exchange_info(
+      exchange_info(
+          "ETHUSDT", "TRADING", "true",
+          R"json({"filterType":"PRICE_FILTER","tickSize":"0"},{"filterType":"LOT_SIZE","stepSize":"0.001"})json"),
+      "ETHUSDT")));
+}
+
 void depth_frame_parse() {
   constexpr std::string_view payload = R"json({
     "e":"depthUpdate","E":1672515782136,"s":"BTCUSDT",
@@ -159,6 +220,60 @@ void depth_frame_parse() {
   REQUIRE_EQ(update.bids(0).price(), "0.00240000");
   REQUIRE_EQ(update.bids(0).quantity(), "10.00000000");
   REQUIRE_EQ(update.asks_size(), 1);
+}
+
+void exact_symbol_events_and_combined_identity() {
+  constexpr auto received_at =
+      g3::ClockSample{1700000000123456000ULL, 9000000000999ULL};
+  const auto depth = g4::parse_depth_frame(
+      R"json({"e":"depthUpdate","E":1,"s":"ETHUSDT","U":157,"u":160,"b":[],"a":[]})json",
+      received_at, "eth-connection", "ETHUSDT");
+  REQUIRE(std::holds_alternative<g4::market::DepthUpdate>(depth));
+  REQUIRE_EQ(std::get<g4::market::DepthUpdate>(depth).metadata().symbol(),
+             "ETHUSDT");
+
+  REQUIRE(std::holds_alternative<g4::ProtocolError>(g4::parse_depth_frame(
+      R"json({"e":"depthUpdate","E":1,"s":"ETHUSDT","U":157,"u":160,"b":[],"a":[]})json",
+      received_at, "btc-connection", "BTCUSDT")));
+  REQUIRE(std::holds_alternative<g4::ProtocolError>(g4::parse_depth_frame(
+      R"json({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":157,"u":160,"b":[],"a":[]})json",
+      received_at, "eth-connection", "ETHUSDT")));
+
+  const auto snapshot = g4::parse_depth_snapshot(
+      R"json({"lastUpdateId":160,"bids":[],"asks":[]})json", received_at,
+      "eth-snapshot", "ETHUSDT");
+  REQUIRE(std::holds_alternative<g4::market::ExchangeDepthSnapshot>(snapshot));
+  REQUIRE_EQ(std::get<g4::market::ExchangeDepthSnapshot>(snapshot).symbol(),
+             "ETHUSDT");
+
+  const auto trade = g4::parse_combined_event_frame(
+      R"json({"stream":"ethusdt@aggTrade","data":{"e":"aggTrade","E":1,"s":"ETHUSDT","a":1,"p":"100.25","q":"0.125","f":100,"l":105,"T":2,"m":true,"M":true}})json",
+      received_at, "eth-connection", "ETHUSDT");
+  REQUIRE(std::holds_alternative<g4::NormalizedSpotEvent>(trade));
+  REQUIRE_EQ(
+      std::get<g4::market::AggTrade>(std::get<g4::NormalizedSpotEvent>(trade))
+          .metadata()
+          .symbol(),
+      "ETHUSDT");
+
+  const auto ticker = g4::parse_combined_event_frame(
+      R"json({"stream":"ethusdt@bookTicker","data":{"u":1,"s":"ETHUSDT","b":"100.00","B":"1.500","a":"100.01","A":"0.000"}})json",
+      received_at, "eth-connection", "ETHUSDT");
+  REQUIRE(std::holds_alternative<g4::NormalizedSpotEvent>(ticker));
+  REQUIRE_EQ(std::get<g4::market::BookTicker>(
+                 std::get<g4::NormalizedSpotEvent>(ticker))
+                 .metadata()
+                 .symbol(),
+             "ETHUSDT");
+
+  const auto outer_inner_conflict = g4::parse_combined_event_frame(
+      R"json({"stream":"ethusdt@depth@100ms","data":{"e":"depthUpdate","E":1,"s":"BTCUSDT","U":1,"u":1,"b":[],"a":[]}})json",
+      received_at, "eth-connection", "ETHUSDT");
+  REQUIRE(std::holds_alternative<g4::ProtocolError>(outer_inner_conflict));
+  const auto wrong_outer = g4::parse_combined_event_frame(
+      R"json({"stream":"btcusdt@depth@100ms","data":{"e":"depthUpdate","E":1,"s":"ETHUSDT","U":1,"u":1,"b":[],"a":[]}})json",
+      received_at, "eth-connection", "ETHUSDT");
+  REQUIRE(std::holds_alternative<g4::ProtocolError>(wrong_outer));
 }
 
 void wrong_symbol_and_malformed_depth() {
@@ -211,8 +326,10 @@ void snapshot_json_parse() {
 void stream_name_and_server_shutdown() {
   REQUIRE_EQ(g4::spot_stream_symbol("BTCUSDT"),
              std::optional<std::string>{"btcusdt"});
+  REQUIRE_EQ(g4::spot_stream_symbol("ETHUSDT"),
+             std::optional<std::string>{"ethusdt"});
   REQUIRE(!g4::spot_stream_symbol("btcusdt").has_value());
-  REQUIRE(!g4::spot_stream_symbol("ETHUSDT").has_value());
+  REQUIRE(!g4::spot_stream_symbol("ETH-USDT").has_value());
 
   const auto shutdown = g4::parse_depth_frame(
       R"json({"e":"serverShutdown","E":1770123456789})json", {1U, 2U},
@@ -307,7 +424,10 @@ int main() {
       {"NUMERIC_SPEC_FROM_FILTERS", numeric_spec_from_filters},
       {"EXCHANGEINFO_VALIDATION_AND_WRONG_PRECISION_SOURCES",
        exchange_info_validation_and_precision_sources},
+      {"EXACT_SYMBOL_METADATA_SELECTION", exact_symbol_metadata_selection},
       {"DEPTH_FRAME_PARSE", depth_frame_parse},
+      {"EXACT_SYMBOL_EVENTS_AND_COMBINED_IDENTITY",
+       exact_symbol_events_and_combined_identity},
       {"WRONG_SYMBOL_AND_MALFORMED_DEPTH", wrong_symbol_and_malformed_depth},
       {"SNAPSHOT_JSON_PARSE", snapshot_json_parse},
       {"STREAM_NAME_AND_SERVER_SHUTDOWN", stream_name_and_server_shutdown},
