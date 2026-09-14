@@ -280,11 +280,9 @@ UsdMDepthFrameResult parse_usdm_depth_frame(std::string_view payload,
         "USD-M depthUpdate symbol does not match the configured symbol");
   }
   if (root.contains("ps")) {
-    const auto pair = string_field(root, "ps");
-    if (!pair.has_value() || *pair != requested_symbol) {
-      return error(
-          g4::ProtocolErrorCode::WrongSymbol, "ps",
-          "USD-M depthUpdate pair does not match the configured symbol");
+    if (!string_field(root, "ps").has_value()) {
+      return error(g4::ProtocolErrorCode::InvalidField, "ps",
+                   "USD-M depthUpdate pair must be a string when present");
     }
   }
   if (root.contains("st")) {

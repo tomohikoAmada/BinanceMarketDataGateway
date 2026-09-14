@@ -191,7 +191,7 @@ void exact_symbol_events_and_snapshot_identity() {
   constexpr auto received_at =
       binance_market_data::gateway::g3::ClockSample{10U, 20U};
   const auto parsed = g11::parse_usdm_depth_frame(
-      R"json({"e":"depthUpdate","E":1,"T":2,"s":"ETHUSDT","U":501,"u":504,"pu":499,"b":[],"a":[],"ps":"ETHUSDT","st":1})json",
+      R"json({"e":"depthUpdate","E":1,"T":2,"s":"ETHUSDT","U":501,"u":504,"pu":499,"b":[],"a":[],"ps":"BTCUSDT","st":1})json",
       received_at, "eth-usdm-connection", "ETHUSDT");
   REQUIRE(std::holds_alternative<g11::market::DepthUpdate>(parsed));
   const auto &update = std::get<g11::market::DepthUpdate>(parsed);
@@ -202,9 +202,13 @@ void exact_symbol_events_and_snapshot_identity() {
   REQUIRE(std::holds_alternative<g4::ProtocolError>(g11::parse_usdm_depth_frame(
       R"json({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":1,"u":2,"pu":0,"b":[],"a":[]})json",
       received_at, "eth-usdm-connection", "ETHUSDT")));
-  REQUIRE(std::holds_alternative<g4::ProtocolError>(g11::parse_usdm_depth_frame(
-      R"json({"e":"depthUpdate","E":1,"s":"ETHUSDT","U":1,"u":2,"pu":0,"b":[],"a":[],"ps":"BTCUSDT"})json",
-      received_at, "eth-usdm-connection", "ETHUSDT")));
+  const auto invalid_pair = g11::parse_usdm_depth_frame(
+      R"json({"e":"depthUpdate","E":1,"s":"ETHUSDT","U":1,"u":2,"pu":0,"b":[],"a":[],"ps":123})json",
+      received_at, "eth-usdm-connection", "ETHUSDT");
+  REQUIRE(std::holds_alternative<g4::ProtocolError>(invalid_pair));
+  const auto &invalid_pair_error = std::get<g4::ProtocolError>(invalid_pair);
+  REQUIRE_EQ(invalid_pair_error.code, g4::ProtocolErrorCode::InvalidField);
+  REQUIRE_EQ(invalid_pair_error.field, "ps");
 
   const auto snapshot = g11::parse_usdm_depth_snapshot(
       R"json({"lastUpdateId":504,"E":1,"T":2,"bids":[],"asks":[]})json",
@@ -233,7 +237,6 @@ void diff_depth_identity_and_type_rejection() {
       R"json({"e":"depthUpdate","E":1,"s":"ETHUSDT","U":1,"u":2,"pu":0,"b":[],"a":[]})json",
       R"json({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":1,"u":2,"pu":"0","b":[],"a":[]})json",
       R"json({"e":"depthUpdate","E":1,"T":"1","s":"BTCUSDT","U":1,"u":2,"b":[],"a":[]})json",
-      R"json({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":1,"u":2,"b":[],"a":[],"ps":"BTCUSD"})json",
       R"json({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":1,"u":2,"b":[],"a":[],"st":2})json",
       R"json({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":1,"u":2,"b":[["1"]],"a":[]})json",
       R"json({"e":"aggTrade","E":1,"s":"BTCUSDT","U":1,"u":2,"b":[],"a":[]})json",
