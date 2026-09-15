@@ -194,6 +194,7 @@ public:
   }
 
   [[nodiscard]] bool make_live_for_testing() {
+    std::lock_guard lock{mutex_};
     if (mode_ != AttemptMode::NeverLive || stopped_.load() ||
         made_live_.exchange(true)) {
       return false;
@@ -204,10 +205,6 @@ public:
         runtime_.submit_snapshot(make_snapshot(key_, generation_),
                                  g3::SourceProvenance{generation_}) !=
             g3::AdmissionResult::Accepted) {
-      return false;
-    }
-    std::lock_guard lock{mutex_};
-    if (stopped_.load()) {
       return false;
     }
     observation_.rest_depth_fetched = true;
