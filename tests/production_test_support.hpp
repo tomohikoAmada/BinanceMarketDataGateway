@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -35,6 +36,22 @@ struct AttemptState final {
   std::atomic<std::size_t> maximum_active{0U};
   std::atomic<std::size_t> starts{0U};
   std::atomic<TestAttempt *> active_attempt{nullptr};
+  std::mutex start_mutex;
+  std::condition_variable start_condition;
+  std::size_t completed_starts{0U};
+
+  void mark_start_completed() {
+    {
+      std::lock_guard lock{start_mutex};
+      ++completed_starts;
+    }
+    start_condition.notify_all();
+  }
+
+  void wait_for_first_start_completion() {
+    std::unique_lock lock{start_mutex};
+    start_condition.wait(lock, [this] { return completed_starts != 0U; });
+  }
 };
 
 [[nodiscard]] inline g3::RuntimeClock fixed_clock() {
@@ -152,9 +169,11 @@ public:
           key_.market == common::MARKET_SPOT ? "spot-test-terminal"
                                              : "usdm-test-terminal",
           "deterministic terminal startup failure", std::nullopt, std::nullopt};
+      state_->mark_start_completed();
       return g4::TransportStartResult::Failed;
     }
     if (mode_ == AttemptMode::NeverLive) {
+      state_->mark_start_completed();
       return g4::TransportStartResult::Started;
     }
     if (runtime_.submit_depth_update(make_update(key_, generation_),
@@ -163,13 +182,38 @@ public:
         runtime_.submit_snapshot(make_snapshot(key_, generation_),
                                  g3::SourceProvenance{generation_}) !=
             g3::AdmissionResult::Accepted) {
+      state_->mark_start_completed();
       return g4::TransportStartResult::Failed;
     }
     std::lock_guard lock{mutex_};
     observation_.rest_depth_fetched = true;
     observation_.depth_frame_count = 1U;
     observation_.last_event_utc_ns = 1700000000002000000ULL + generation_;
+    state_->mark_start_completed();
     return g4::TransportStartResult::Started;
+  }
+
+  [[nodiscard]] bool make_live_for_testing() {
+    if (mode_ != AttemptMode::NeverLive || stopped_.load() ||
+        made_live_.exchange(true)) {
+      return false;
+    }
+    if (runtime_.submit_depth_update(make_update(key_, generation_),
+                                     g3::SourceProvenance{generation_}) !=
+            g3::AdmissionResult::Accepted ||
+        runtime_.submit_snapshot(make_snapshot(key_, generation_),
+                                 g3::SourceProvenance{generation_}) !=
+            g3::AdmissionResult::Accepted) {
+      return false;
+    }
+    std::lock_guard lock{mutex_};
+    if (stopped_.load()) {
+      return false;
+    }
+    observation_.rest_depth_fetched = true;
+    observation_.depth_frame_count = 1U;
+    observation_.last_event_utc_ns = 1700000000002000000ULL + generation_;
+    return true;
   }
 
   void stop() noexcept override {
@@ -216,6 +260,7 @@ private:
   mutable std::mutex mutex_;
   g4::TransportObservation observation_;
   std::atomic<bool> stopped_{false};
+  std::atomic<bool> made_live_{false};
 };
 
 [[nodiscard]] inline g5::detail::RecoveryTestOptions

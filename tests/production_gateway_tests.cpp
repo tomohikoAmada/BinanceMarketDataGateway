@@ -37,6 +37,7 @@ namespace g9 = binance_market_data::gateway::g9;
 namespace g10 = binance_market_data::gateway::g10;
 namespace g11 = binance_market_data::gateway::g11;
 namespace production = binance_market_data::gateway::production;
+namespace projection = binance_market_data::projection::v1;
 namespace support = production::test_support;
 namespace wire = binance_market_data::gateway::v1;
 
@@ -349,6 +350,88 @@ void shared_deadline_is_captured_before_product_start() {
   REQUIRE(checked_after_start);
   REQUIRE(calls == 2U);
   require_fully_stopped(gateway);
+}
+
+void late_initial_live_does_not_bypass_absolute_deadline() {
+  const auto key = g11::spot_btcusdt_key();
+  auto state = std::make_shared<support::AttemptState>();
+  std::vector<g11::ProductRuntimeSpec> specifications;
+  specifications.push_back(support::make_test_product_spec(
+      key, support::AttemptMode::NeverLive, state));
+  production::GatewayOptions options;
+  options.initial_startup_timeout = std::chrono::seconds{1};
+  options.allow_ephemeral_listen_for_testing = true;
+
+  const auto origin = std::chrono::steady_clock::time_point{};
+  const auto deadline = origin + options.initial_startup_timeout;
+  std::atomic<bool> clock_expired{false};
+  std::size_t clock_calls = 0U;
+  bool deadline_captured_before_start = false;
+  bool readiness_checked_before_deadline = false;
+  production::ProductionGateway *gateway_ptr = nullptr;
+  options.startup_now = [&] {
+    ++clock_calls;
+    if (clock_calls == 1U) {
+      deadline_captured_before_start =
+          state->starts.load() == 0U &&
+          product(*gateway_ptr, key).runtime().observe().state ==
+              g3::RuntimeState::Constructed;
+      return origin;
+    }
+    if (clock_calls == 2U) {
+      state->wait_for_first_start_completion();
+      readiness_checked_before_deadline = true;
+      return origin;
+    }
+    return clock_expired.load(std::memory_order_acquire) ? deadline : origin;
+  };
+
+  auto gateway = make_gateway(std::move(specifications), std::move(options));
+  gateway_ptr = &gateway;
+  std::size_t stop_checks = 0U;
+  bool product_was_not_live_at_expiry = false;
+  bool late_live_transition_succeeded = false;
+  bool recovery_confirmed_live_after_expiry = false;
+  const auto started = gateway.start([&] {
+    ++stop_checks;
+    if (stop_checks < 3U) {
+      return false;
+    }
+    if (stop_checks == 3U) {
+      auto &owner = product(*gateway_ptr, key);
+      product_was_not_live_at_expiry =
+          owner.runtime().observe().state != g3::RuntimeState::Live &&
+          owner.recovery().observe().state != g5::RecoveryState::Live;
+      clock_expired.store(true, std::memory_order_release);
+      auto *attempt = state->active_attempt.load(std::memory_order_acquire);
+      late_live_transition_succeeded =
+          attempt != nullptr && attempt->make_live_for_testing();
+      if (late_live_transition_succeeded) {
+        const auto recovery = owner.recovery().wait_for_generation_live(1U);
+        recovery_confirmed_live_after_expiry =
+            recovery.state == g5::RecoveryState::Live &&
+            owner.runtime().observe().state == g3::RuntimeState::Live &&
+            owner.runtime().observe().projection_status ==
+                projection::ProjectionStatus::Synchronized;
+      }
+    }
+    return false;
+  });
+
+  const auto final = gateway.observe();
+  REQUIRE(started.code == production::StartCode::InitialStartupTimeout);
+  REQUIRE(!started.product.has_value());
+  REQUIRE(deadline_captured_before_start);
+  REQUIRE(readiness_checked_before_deadline);
+  REQUIRE(product_was_not_live_at_expiry);
+  REQUIRE(late_live_transition_succeeded);
+  REQUIRE(recovery_confirmed_live_after_expiry);
+  REQUIRE(clock_calls == 3U);
+  REQUIRE(final.state == production::GatewayState::Stopped);
+  REQUIRE(final.selected_port == 0);
+  REQUIRE(final.tracked_contexts == 0U);
+  require_fully_stopped(gateway);
+  REQUIRE(state->active.load() == 0U);
 }
 
 void initial_spot_failure_rolls_back() {
@@ -751,6 +834,8 @@ int main() {
       {"INITIAL_STARTUP_DEADLINE_BOUNDED", initial_startup_deadline_is_bounded},
       {"SHARED_DEADLINE_CAPTURED_BEFORE_PRODUCT_START",
        shared_deadline_is_captured_before_product_start},
+      {"LATE_INITIAL_LIVE_DOES_NOT_BYPASS_ABSOLUTE_DEADLINE",
+       late_initial_live_does_not_bypass_absolute_deadline},
       {"CONTEXT_48_PRESERVED", context_bound_preserved},
       {"DYNAMIC_GATEWAY_OBSERVATION_IS_CANONICAL",
        dynamic_gateway_observation_is_canonical},

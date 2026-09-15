@@ -226,13 +226,12 @@ StartResult ProductionGateway::wait_for_initial_live(
     for (const auto &product : products_.products()) {
       all_live = all_live && initial_live(*product);
     }
-    if (all_live) {
-      return {StartCode::Serving, std::nullopt};
-    }
-
     const auto now = startup_now_();
     if (now >= deadline) {
       return {StartCode::InitialStartupTimeout, std::nullopt};
+    }
+    if (all_live) {
+      return {StartCode::Serving, std::nullopt};
     }
     std::unique_lock lock{state_mutex_};
     static_cast<void>(state_condition_.wait_for(
