@@ -12,6 +12,7 @@
 #include <functional>
 #include <iosfwd>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -28,28 +29,33 @@ enum class GatewayState : std::uint8_t {
   Stopped,
 };
 
-enum class StartResult : std::uint8_t {
+enum class StartCode : std::uint8_t {
   Serving,
   AlreadyStarted,
   StopRequested,
-  SpotStartFailed,
-  UsdMStartFailed,
-  SpotInitialFailure,
-  UsdMInitialFailure,
+  ProductStartFailed,
+  ProductInitialFailure,
   InitialStartupTimeout,
   GrpcBindFailed,
+};
+
+struct StartResult final {
+  StartCode code{StartCode::AlreadyStarted};
+  std::optional<g11::MarketKey> product;
+
+  friend bool operator==(const StartResult &, const StartResult &) = default;
 };
 
 struct GatewayOptions final {
   std::chrono::steady_clock::duration initial_startup_timeout{
       kInitialStartupTimeout};
-  // The production daemon intentionally retains the accepted bounded
-  // RuntimeLimits defaults (64 ingress / 64 bootstrap) for both products.
-  g11::TwoProductRuntimeOptions products;
   g7::GrpcServiceOptions grpc;
   // Port zero is unavailable to the production CLI. This seam only avoids a
   // loopback port reservation race in deterministic in-process tests.
   bool allow_ephemeral_listen_for_testing{false};
+  // Narrow deterministic seam for the set-wide startup deadline only.
+  std::function<std::chrono::steady_clock::time_point()> startup_now{
+      std::chrono::steady_clock::now};
 };
 
 struct ProductObservation final {
@@ -70,12 +76,9 @@ struct GatewayObservation final {
 [[nodiscard]] std::vector<ProductObservation>
 observe_products(g11::ConfiguredProductRuntimeSet &products);
 
-// Concrete production composition. Its compatibility constructor still creates
-// exactly the two frozen BTCUSDT products until G12-C.
 class ProductionGateway final {
 public:
-  ProductionGateway(projection::v1::NumericSpec spot_numeric_spec,
-                    projection::v1::NumericSpec usdm_numeric_spec,
+  ProductionGateway(std::vector<g11::ProductRuntimeSpec> specifications,
                     g3::RuntimeClock clock, std::string gateway_instance_id,
                     std::string grpc_listen_address,
                     GatewayOptions options = {});
@@ -107,14 +110,16 @@ private:
   [[nodiscard]] bool
   stop_requested(const std::function<bool()> &external_stop_requested) const;
   [[nodiscard]] StartResult
-  wait_for_initial_live(const std::function<bool()> &external_stop_requested);
-  void rollback(StartResult result) noexcept;
+  wait_for_initial_live(const std::function<bool()> &external_stop_requested,
+                        std::chrono::steady_clock::time_point deadline);
+  void rollback() noexcept;
   void shutdown_graph() noexcept;
 
   const std::string gateway_instance_id_;
   const std::string grpc_listen_address_;
   const std::chrono::steady_clock::duration initial_startup_timeout_;
   const bool allow_ephemeral_listen_for_testing_;
+  const std::function<std::chrono::steady_clock::time_point()> startup_now_;
 
   // Declaration order is the lifetime proof: server_ is destroyed before its
   // non-owning registry/status references in products_.
@@ -129,6 +134,6 @@ private:
 };
 
 [[nodiscard]] std::string_view to_string(GatewayState state) noexcept;
-[[nodiscard]] std::string_view to_string(StartResult result) noexcept;
+[[nodiscard]] std::string_view to_string(StartCode code) noexcept;
 
 } // namespace binance_market_data::gateway::production
