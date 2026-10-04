@@ -1,48 +1,32 @@
 # Binance Market Data Gateway
 
-This repository contains the C++20 Binance Market Data Gateway. G0, G1,
-GW-PREQ-002, and G2 through G11 are complete, and post-G11 runtime
-productization is complete.
+C++20 币安实时行情网关。通过启动配置选择多个 Spot / USD-M 永续交易对，获取行情、维护 Projection 订单簿、处理恢复与连接轮换，并通过 gRPC 向下游提供数据。Gateway 不负责历史存储，也不依赖 Recorder。
 
-The ordinary `bmd-gatewayd` is the long-running production host for exactly
-these two products:
+当前支持 1..8 个精确产品，每产品独立 transport/owner/Projection/recovery，共享一个 gRPC 服务。自选交易对的生产入口已经实现；完整四产品离线验收、生产 CI 和真实网络交付仍按 [milestone plan](docs/MILESTONES.md) 推进。
 
-- `BINANCE / SPOT / BTCUSDT`;
-- `BINANCE / USD_M_PERPETUAL / BTCUSDT`.
+## 配置与运行
 
-Projection owns fixed-point numeric semantics, deterministic order-book state,
-sequence/gap classification, and reset/resync semantics. Gateway owns Binance
-transport and metadata acquisition, recovery and rotation orchestration,
-bounded publication, subscriber sessions, and gRPC. The ordinary production
-daemon does not yet expose arbitrary multi-symbol serving.
+```json
+{
+  "grpc_listen": "127.0.0.1:50051",
+  "spot_symbols": ["BTCUSDT", "ETHUSDT"],
+  "usdm_symbols": ["BTCUSDT", "ETHUSDT"]
+}
+```
 
-The accepted current state is `POST_G11_PERFORMANCE_BASELINE=COMPLETE`.
-Recovery observability and the bounded recovery-observation campaign are
-complete. The accepted baseline is descriptive evidence, not a hard SLA,
-capacity guarantee, or Production Qualification. It describes the fixed
-two-product G11 daemon and is not G12 multi-product capacity evidence.
-Production qualification and optimization are not authorized. The G12 campaign
-is in progress: G12-A exact single-product parameterization and G12-B
-configured runtime serving are complete, and G12-C is next. Current production
-remains the fixed G11 two-product daemon; G12-A's ETH support is reusable
-offline path capability, not current production composition.
+```sh
+bmd-gatewayd --config examples/gateway.json
+```
 
-G12-B provides a finite stable configured owner set and immutable dynamic
-registry for reusable/internal serving: exact `MarketKey` membership drives
-dynamic routing, status, observations, diagnostics, and shutdown aggregation.
-The ordinary `bmd-gatewayd` still serves only the two BTC products above.
-`--config PATH`, configured metadata acquisition, and arbitrary-N production
-startup remain G12-C responsibilities.
+可以只配置其中一个市场；总数必须为 1..8，同一 symbol 的现货和永续是不同产品。symbol 使用币安的精确大写标识，不自动修正大小写，且需要通过 exchangeInfo 交易资格与精度验证。配置变更后重启。
 
-G12 targets a startup-configured finite set of Binance Spot and USD-M
-perpetual products, identified by exact `MarketKey` values, with one
-independent transport per product and a maximum of eight configured products.
-Its target configuration authority is `bmd-gatewayd --config PATH`; the current
-G11 daemon and its `--grpc-listen` seam remain unchanged until G12-C production
-configuration and startup composition are implemented. Contracts and
-Projection production changes are not required.
+全部配置产品首次同步成功后才开始服务；启动失败会回滚，运行后单个产品故障独立恢复。SIGINT/SIGTERM 会停止订阅和 transport，并清理 owner。进程流式 context 总上限为 48。默认 endpoint 是 loopback，公网部署应使用已有认证保护边界。
 
-## Build and test
+提供 `SubscribeOrderBook`、`SubscribeEvents` 和 `GetGatewayStatus`。Spot 事件为 DIFF_DEPTH / AGG_TRADE / BOOK_TICKER，USD-M 事件仅 DIFF_DEPTH。`SubscribeMarketState` 尚未实现。
+
+## 构建与验证
+
+独立 Foundation（不包含生产 daemon）：
 
 ```sh
 cmake --preset gcc-debug
@@ -51,25 +35,29 @@ ctest --preset gcc-debug
 scripts/format-check.sh
 ```
 
-The equivalent Clang preset is `clang-debug`. The full production graph is an
-explicit CMake opt-in through `BMD_GATEWAY_BUILD_PRODUCTION_DAEMON=ON` and
-requires the configured Contracts/Projection dependencies. The production
-daemon requires `--grpc-listen HOST:PORT` and also supports `--help`:
+生产图需要固定版本 Contracts/Projection 和 Conan 依赖，显式启用：
 
 ```sh
-bmd-gatewayd --grpc-listen HOST:PORT
+cmake -S . -B build/production \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE=/absolute/path/to/conan_toolchain.cmake \
+  -DBMD_GATEWAY_BUILD_PRODUCTION_DAEMON=ON \
+  -DBMD_GATEWAY_BUILD_G2_SYNTHETIC_HOST=ON \
+  -DBMD_GATEWAY_BUILD_G8_INTEGRATION_ACCEPTANCE=ON \
+  -DBMD_GATEWAY_BUILD_TESTS=ON
+cmake --build build/production --parallel 4
+ctest --test-dir build/production --output-on-failure
 ```
 
-It waits for both fixed products to reach initial Live/Synchronized before
-serving, handles SIGINT/SIGTERM, rolls back startup failures, isolates a later
-single-market failure, and shuts down server handlers before destroying the
-product graph.
+依赖配方见 [conanfile.py](conanfile.py)。完整的无开发机缓存构建/CI 是 M3/M4 的交付项，不能把 Foundation 默认构建当作生产构建成功。ASan、UBSan、TSan 可分别启用 `BMD_GATEWAY_ENABLE_ASAN` / `BMD_GATEWAY_ENABLE_UBSAN` / `BMD_GATEWAY_ENABLE_TSAN`。
 
-## Project authority
+保留的双 BTC 生命周期验收客户端须使用双 BTC 配置，与 daemon 使用同一个文件；它不证明四产品验收：
 
-- [Current state](docs/CURRENT_STATE.md)
-- [Milestones](docs/MILESTONES.md)
-- [Architecture](ARCHITECTURE.md)
-- [Performance-baseline instrumentation](docs/PERFORMANCE_BASELINE_INSTRUMENTATION.md)
+```sh
+bmd-gateway-production-acceptance-client \
+  --daemon /absolute/path/to/bmd-gatewayd \
+  --config /absolute/path/to/two-btc-products.json \
+  --grpc-target 127.0.0.1:50051
+```
 
-Historical evidence is retained in [docs/HANDOFF_2026-08-23.md](docs/HANDOFF_2026-08-23.md).
+[当前状态](docs/CURRENT_STATE.md) · [开发计划](docs/MILESTONES.md) · [架构](ARCHITECTURE.md) · [代码审查](docs/CODE_REVIEW_2026-10-04.md)
