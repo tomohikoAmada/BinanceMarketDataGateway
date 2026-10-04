@@ -1,7 +1,9 @@
 # Post-G11 performance-baseline instrumentation
 
-This facility measures the existing fixed two-product `bmd-gatewayd`. The
-instrumentation facility is complete. It does not add a benchmark host, an RPC,
+This facility was introduced for the fixed two-product `bmd-gatewayd`. The
+current configured daemon retains one measurement buffer per product; the
+instrumentation facility is implemented, while multi-product performance
+acceptance remains pending under [MILESTONES.md](MILESTONES.md). It does not add a benchmark host, an RPC,
 a public API, a wire field, or an optimization. The original internal A/B/C
 campaign has been run and independently reviewed; its latency, queue, delivery,
 and overflow evidence remains reusable with a scope note because the recovery
@@ -14,8 +16,9 @@ are descriptive baseline evidence, not a hard SLA, capacity guarantee, exact
 causal subscriber-cost decomposition, infinite-duration RSS proof, or
 zero-observer production truth. They are evidence for the fixed two-product
 G11 daemon only, not capacity evidence for the authorized G12 configurable
-multi-product target. Production qualification and optimization are not
-authorized.
+multi-product daemon. The current milestone plan requires explicit performance
+and resource budgets plus measured, regression-tested improvements where needed;
+this historical baseline is not current multi-product qualification.
 
 ## Build and export
 
@@ -34,13 +37,13 @@ cmake --build build/performance-baseline --target bmd-gatewayd
 Set `BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT` to the desired artifact path
 before starting the daemon. The process retains evidence in memory and writes
 one JSON Lines artifact only after orderly shutdown has drained synchronous
-gRPC handlers and stopped both product graphs. No path means no artifact; the
+gRPC handlers and stopped all configured product graphs. No path means no artifact; the
 instrumented daemon reports that export was skipped. An explicitly requested
 export failure makes the daemon exit unsuccessfully.
 
 ```sh
 BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT=build/evidence/baseline.jsonl \
-  build/performance-baseline/bmd-gatewayd --grpc-listen 127.0.0.1:50051
+  build/performance-baseline/bmd-gatewayd --config examples/gateway.json
 ```
 
 ## Measurement points

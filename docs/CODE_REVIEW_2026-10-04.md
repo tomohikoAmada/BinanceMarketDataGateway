@@ -60,3 +60,5 @@
 ## 完成边界
 
 本次关闭 M1 的已复现缺陷和 M2/G12-C 配置生产实现。下一步是 M3/G12-D 四产品生产组合验收与生产 CI；随后 M4/G12-E 真实有界验收。`SubscribeMarketState` 仍未实现，不宣称完整 V1 服务或生产资格全部完成。
+
+后续质量目标补充：用户要求高性能、安全稳定、低延迟、低 CPU/内存消耗，已纳入当前计划的 M3/M4 验收。Projection 实际调用与全簿事务复制的配套评估见 [PROJECTION_INTEGRATION_REVIEW](PROJECTION_INTEGRATION_REVIEW_2026-10-04.md)；该补充没有改变本次修复的离线测试证据。

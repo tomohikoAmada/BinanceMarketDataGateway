@@ -64,3 +64,9 @@ Foundation 是独立、无网络无线程的历史最小配置/生命周期 seam
 依赖不使用 floating FetchContent。Gateway 的 offline runtime 测试和 sanitizer 图已经可以本机构建；GitHub 现有默认 CI 只覆盖 Foundation，补生产 CI 是 M3 的要求。
 
 旧 fixed-two 的 recovery 和 performance 记录保留为历史事实。当前配置生产代码的完成，不等同于四产品真实验收或容量证明。性能改动必须由实际瓶颈和同条件前后测量支持，不引入 speculative lock-free、busy polling、affinity、自定义 allocator 或 worker framework。
+
+## 性能与质量目标
+
+高性能、安全稳定、低延迟、低 CPU/内存消耗是交付要求。M3 准备可重复负载与正确性/稳定性回归，M4 定义硬件、负载和数值预算，完成完整链路性能验收。复用已有 instrumentation / Projection benchmark，不新增通用测量框架；阶段延迟、吞吐、分配、CPU/RSS 与队列指标共同评估。
+
+Projection 当前为强异常保证在每个 accepted depth batch 中复制全簿并重建 candidate。这是性能候选路径；若实测影响预算，配套做局部事务更新优化并保留状态/序列/异常安全。多产品通过现有独立 Projection 实例组合，无需新增多 symbol API。详细证据见 [配套评估](docs/PROJECTION_INTEGRATION_REVIEW_2026-10-04.md)。

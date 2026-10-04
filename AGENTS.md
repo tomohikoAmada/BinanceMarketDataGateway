@@ -14,8 +14,10 @@ permission steps inferred from old milestone freezes.
 
 G0-G11, G12-A and G12-B are complete. This merge completes G12-C configured
 production composition and the review fixes. M3 / G12-D four-product offline
-production acceptance and production CI is next; M4 / G12-E bounded live
-acceptance and delivery follows it. Do not label future acceptance complete
+production acceptance and production CI is next; M4 / G12-E performance/stability budget acceptance, bounded live
+acceptance and delivery follows it. High performance, low latency, low CPU/RSS
+and safe stable behavior are delivery requirements; no multi-product performance
+budget has yet been established. Do not label future acceptance complete
 because configurable code exists. Keep Foundation independently buildable.
 
 ## Boundaries
