@@ -1,8 +1,8 @@
 # Binance Market Data Gateway
 
-C++20 币安实时行情网关。通过启动配置选择多个 Spot / USD-M 永续交易对，获取行情、维护 Projection 订单簿、处理恢复与连接轮换，并通过 gRPC 向下游提供数据。Gateway 不负责历史存储，也不依赖 Recorder。
+以高性能、安全稳定、低延迟、低 CPU/内存消耗为目标的 C++20 币安实时行情网关。通过启动配置选择多个 Spot / USD-M 永续交易对，获取行情、维护 Projection 订单簿、处理恢复与连接轮换，并通过 gRPC 向下游提供数据。Gateway 不负责历史存储，也不依赖 Recorder。
 
-当前支持 1..8 个精确产品，每产品独立 transport/owner/Projection/recovery，共享一个 gRPC 服务。自选交易对的生产入口已经实现；完整四产品离线验收、生产 CI 和真实网络交付仍按 [milestone plan](docs/MILESTONES.md) 推进。
+当前支持 1..8 个精确产品，每产品独立 transport/owner/Projection/recovery，共享一个 gRPC 服务。自选交易对的生产入口已经实现；完整四产品离线验收、生产 CI、性能/稳定性预算验收和真实网络交付仍按 [milestone plan](docs/MILESTONES.md) 推进。
 
 ## 配置与运行
 
