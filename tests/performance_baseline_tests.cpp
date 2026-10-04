@@ -1,3 +1,4 @@
+#include "daemon_runtime.hpp"
 #include "event_publication.hpp"
 #include "grpc_service.hpp"
 #include "market_runtime.hpp"
@@ -12,6 +13,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <exception>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -25,6 +27,8 @@
 #include <utility>
 #include <variant>
 #include <vector>
+
+#include <unistd.h>
 
 namespace {
 
@@ -536,12 +540,12 @@ void storage_exhaustion_and_queue_evidence_are_measurement_only() {
 }
 
 void production_shutdown_precedes_bounded_export() {
-  auto options = support::gateway_options();
+  auto configured = support::gateway_products();
   production::ProductionGateway gateway{
-      support::numeric_spec(), support::numeric_spec(),
-      support::fixed_clock(),  "gw-performance-production",
-      "127.0.0.1:0",           std::move(options.gateway)};
-  REQUIRE_EQ(gateway.start(), production::StartResult::Serving);
+      std::move(configured.specifications), support::fixed_clock(),
+      "gw-performance-production", "127.0.0.1:0",
+      std::move(configured.gateway)};
+  REQUIRE_EQ(gateway.start().code, production::StartCode::Serving);
   gateway.stop();
   const auto final = gateway.observe();
   REQUIRE_EQ(final.state, production::GatewayState::Stopped);
@@ -576,6 +580,49 @@ void production_shutdown_precedes_bounded_export() {
   REQUIRE(trailing_campaign == std::string::npos);
 }
 
+void unsupported_composition_preflight_preserves_artifact() {
+  std::string pattern{"/tmp/bmd-gateway-performance-preflight-XXXXXX"};
+  const auto descriptor = mkstemp(pattern.data());
+  REQUIRE(descriptor >= 0);
+  constexpr std::string_view sentinel{"existing-evidence"};
+  REQUIRE(write(descriptor, sentinel.data(), sentinel.size()) ==
+          static_cast<ssize_t>(sentinel.size()));
+  close(descriptor);
+
+  const auto *previous = std::getenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT");
+  const std::optional<std::string> saved =
+      previous == nullptr ? std::nullopt : std::optional<std::string>{previous};
+  REQUIRE(setenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT", pattern.c_str(),
+                 1) == 0);
+
+  production::DaemonConfig unsupported{
+      "127.0.0.1:50051",
+      {{common::VENUE_BINANCE, common::MARKET_SPOT, "ETHUSDT"}}};
+  std::ostringstream diagnostics;
+  REQUIRE(
+      !production::performance_baseline_preflight(unsupported, diagnostics));
+  REQUIRE(diagnostics.str().find("reason=composition") != std::string::npos);
+  std::ifstream artifact{pattern, std::ios::in | std::ios::binary};
+  const std::string contents{std::istreambuf_iterator<char>{artifact},
+                             std::istreambuf_iterator<char>{}};
+  REQUIRE(contents == sentinel);
+
+  production::DaemonConfig supported{
+      "127.0.0.1:50051", {g11::spot_btcusdt_key(), g11::usdm_btcusdt_key()}};
+  std::ostringstream supported_diagnostics;
+  REQUIRE(production::performance_baseline_preflight(supported,
+                                                     supported_diagnostics));
+  REQUIRE(supported_diagnostics.str().empty());
+
+  if (saved.has_value()) {
+    REQUIRE(setenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT", saved->c_str(),
+                   1) == 0);
+  } else {
+    REQUIRE(unsetenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT") == 0);
+  }
+  unlink(pattern.c_str());
+}
+
 } // namespace
 
 int main() {
@@ -589,6 +636,8 @@ int main() {
        storage_exhaustion_and_queue_evidence_are_measurement_only},
       {"PRODUCTION_SHUTDOWN_PRECEDES_BOUNDED_EXPORT",
        production_shutdown_precedes_bounded_export},
+      {"UNSUPPORTED_COMPOSITION_PREFLIGHT_PRESERVES_ARTIFACT",
+       unsupported_composition_preflight_preserves_artifact},
   };
   for (const auto &[name, test] : tests) {
     try {

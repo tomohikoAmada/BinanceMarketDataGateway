@@ -1074,6 +1074,16 @@ ExchangeInfoResult fetch_exchange_info_https() {
   return fetch_exchange_info_https("BTCUSDT");
 }
 
+detail::ExchangeInfoEndpoint detail::spot_exchange_info_set_endpoint() {
+  return {std::string{kRestHost}, std::string{kRestPort},
+          "/api/v3/exchangeInfo", kStageTimeout};
+}
+
+ExchangeInfoResult fetch_spot_exchange_info_set_https() {
+  return detail::fetch_exchange_info_https(
+      detail::spot_exchange_info_set_endpoint());
+}
+
 bool detail::live_acceptance_ready(
     const TransportObservation &transport,
     const g3::RuntimeObservation &runtime) noexcept {

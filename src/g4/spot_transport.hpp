@@ -72,6 +72,9 @@ make_spot_transport_routes(std::string_view exact_symbol);
 [[nodiscard]] ExchangeInfoResult fetch_exchange_info_https();
 [[nodiscard]] ExchangeInfoResult
 fetch_exchange_info_https(std::string_view exact_symbol);
+// G12-C set-level metadata acquisition. This intentionally fetches the full
+// Spot exchangeInfo document once for all configured Spot products.
+[[nodiscard]] ExchangeInfoResult fetch_spot_exchange_info_set_https();
 [[nodiscard]] g3::ClockSample sample_real_clock() noexcept;
 
 enum class TransportStartResult : std::uint8_t {
@@ -157,6 +160,8 @@ struct ExchangeInfoEndpoint final {
   std::string target;
   std::chrono::steady_clock::duration stage_timeout;
 };
+
+[[nodiscard]] ExchangeInfoEndpoint spot_exchange_info_set_endpoint();
 
 [[nodiscard]] ExchangeInfoResult
 fetch_exchange_info_https(const ExchangeInfoEndpoint &endpoint);

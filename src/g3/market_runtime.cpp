@@ -96,6 +96,8 @@ public:
         admission_enqueued_{std::move(test_options.admission_enqueued)},
         before_admission_processing_{
             std::move(test_options.before_admission_processing)},
+        before_owner_thread_creation_{
+            std::move(test_options.before_owner_thread_creation)},
         owner_paused_{test_options.owner_starts_paused} {
     if (limits_.ingress_capacity == 0U || limits_.bootstrap_capacity == 0U) {
       throw std::invalid_argument{"G3 runtime capacities must be nonzero"};
@@ -127,11 +129,16 @@ public:
       return StartResult::AlreadyStarted;
     }
 
+    if (before_owner_thread_creation_) {
+      before_owner_thread_creation_();
+    }
+    // The new owner waits for mutex_. Commit the started state only after
+    // thread construction succeeds, so failed creation leaves no phantom owner.
+    owner_ = std::thread{[this] { owner_loop(); }};
     started_ = true;
     accepting_ = true;
     publication_admission_open_ = !publication_shutdown_completed_;
     observation_.publication_admission_open = publication_admission_open_;
-    owner_ = std::thread{[this] { owner_loop(); }};
     condition_.wait(lock, [this] { return owner_ready_; });
     return StartResult::Started;
   }
@@ -1348,6 +1355,7 @@ private:
   std::size_t pending_admission_count_{0U};
   std::function<void()> admission_enqueued_;
   std::function<void()> before_admission_processing_;
+  std::function<void()> before_owner_thread_creation_;
   bool started_{false};
   bool accepting_{false};
   bool publication_admission_open_{false};

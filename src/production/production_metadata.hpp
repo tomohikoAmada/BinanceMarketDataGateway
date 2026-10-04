@@ -1,5 +1,6 @@
 #pragma once
 
+#include "multi_market_runtime.hpp"
 #include "spot_transport.hpp"
 #include "usdm_transport.hpp"
 
@@ -7,9 +8,11 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace binance_market_data::gateway::production {
 
@@ -20,13 +23,18 @@ enum class MetadataStage : std::uint8_t {
   UsdMParse,
 };
 
+struct ResolvedProductSpec final {
+  g11::MarketKey key;
+  projection::v1::NumericSpec numeric_spec;
+};
+
 struct ProductionMetadata final {
-  projection::v1::NumericSpec spot_numeric_spec;
-  projection::v1::NumericSpec usdm_numeric_spec;
+  std::vector<ResolvedProductSpec> products;
 };
 
 struct MetadataError final {
   MetadataStage stage{MetadataStage::SpotFetch};
+  std::optional<g11::MarketKey> product;
   std::string message;
 };
 
@@ -39,7 +47,10 @@ using ProductionMetadataResult =
     std::variant<ProductionMetadata, MetadataError>;
 
 [[nodiscard]] ProductionMetadataResult
-acquire_production_metadata(MetadataSources sources = {});
+acquire_production_metadata(const std::vector<g11::MarketKey> &market_keys,
+                            MetadataSources sources = {});
+[[nodiscard]] std::vector<g11::ProductRuntimeSpec>
+make_product_runtime_specs(ProductionMetadata metadata);
 [[nodiscard]] std::string_view to_string(MetadataStage stage) noexcept;
 
 } // namespace binance_market_data::gateway::production

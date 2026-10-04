@@ -1,447 +1,66 @@
 # Gateway architecture
 
-The detailed, ordered development authority is
-[docs/MILESTONES.md](docs/MILESTONES.md). This document records only the
-responsibility split, the current foundation/G11 production boundary, the
-G12-B runtime-serving layer, and the accepted post-G11 production host.
+当前开发计划：[docs/MILESTONES.md](docs/MILESTONES.md)。当前实现是支持启动配置的有限产品集合，已经复用 G12-B 的 owner set 和 registry；历史固定双 BTC 是其中一个配置场景。
 
-Current project state: `POST_G11_PERFORMANCE_BASELINE=COMPLETE`.
-The current production implementation remains the fixed G11 two-product
-runtime. Production Qualification and optimization are not authorized. G12 is
-the frozen, authorized development campaign; G12-A and G12-B are complete and
-G12-C is next. Current production remains the fixed G11 two-product daemon.
-
-## Dependency direction
+## 职责与依赖
 
 ```text
-Binance public APIs
-        |
-        v
-BinanceMarketDataGateway
-        +--> Contracts message-only package
-        +--> Projection::ProtoAdapter --> Projection::Core
-        +--> Contracts separate gRPC package (conditionally for G7)
+Binance public REST / WebSocket
+                |
+                v
+       BinanceMarketDataGateway
+          +--> Contracts Protobuf / opt-in gRPC artifacts
+          +--> Projection ProtoAdapter --> Core
 ```
 
-There is no Gateway-to-Recorder dependency. Contracts owns Protobuf messages,
-service contracts, wire compatibility, and both C++ message and separate gRPC
-service/stub packages. Projection owns fixed-point semantics, deterministic order
-book state, Spot/USD-M sequence and gap policy, lifecycle, reset/resync,
-ProtoAdapter, and snapshot construction. Gateway owns transport acquisition,
-metadata, timestamps, connection and recovery orchestration, serialized
-Projection scheduling, bounded queues and subscriptions, slow-consumer
-isolation, and the Gateway gRPC runtime.
+Contracts 管理消息、服务与 wire 兼容性；Projection 管理定点数、订单簿、Spot/USD-M 序列判断、bootstrap/reset 和快照；Gateway 管理网络、metadata、时间戳、连接恢复/轮换、owner 调度、有限发布队列、订阅与 gRPC。Gateway 不依赖 Recorder，不复制 proto，不添加订单簿或序列分类器。
 
-## Phase A components
-
-`bmd_gateway_foundation` is a small library with two synchronous seams:
-
-- `config.hpp` defines `Venue`, `Market`, `ListenEndpoint`, `GatewayConfig`, and typed validation
-  errors. The only configuration fields are venue, market, symbol, a future gRPC listen endpoint,
-  and a nonzero queue-capacity value. The listen endpoint performs only shallow, no-I/O validation
-  of a non-empty safe ASCII host token and port; it does not claim full DNS/IP syntax validation.
-  The symbol is an opaque, exact, non-empty strict UTF-8
-  scalar identity without ASCII C0, DEL, or ASCII-whitespace bytes. Validation preserves the
-  original bytes and does not normalize, case-fold, impose a length/alphabet rule, or assert
-  exchange membership. Later transport code must map the configured identity to the official
-  lowercase stream name and use exchangeInfo for existence/market membership.
-- `lifecycle.hpp` defines `Foundation` and the explicit states `Constructed`, `Running`, and
-  `Stopped`. `Foundation` owns only validated configuration and state; it creates no threads,
-  sockets, queues, clocks, callbacks, or asynchronous work.
-
-The Foundation CLI is a historical/minimal Phase-A lifecycle seam. It parses
-the five flags, validates them, starts the foundation, reports `running`, stops
-it, reports `stopped`, and exits. Its endpoint is not bound and no transport is
-attempted. The separate `bmd-gateway-g2-synthetic` executable drives one
-deterministic in-memory Spot BTCUSDT scenario through the direct Projection
-APIs; it is not a production transport runtime.
-
-## Post-G11 production daemon
-
-The ordinary `bmd-gatewayd` is the production two-product host:
-
-```text
-process
-├── TerminationSignals
-├── ConfiguredProductRuntimeSet
-│   ├── Spot BTCUSDT ProductRuntime
-│   └── USD-M perpetual BTCUSDT ProductRuntime
-├── immutable non-owning registry (two current entries)
-└── synchronous Gateway gRPC server
-```
-
-The current `ProductionGateway` composition still supplies exactly two resolved
-`ProductRuntimeSpec` entries for the frozen BTC products. The
-`ConfiguredProductRuntimeSet` owner and registry are the reusable G12-B
-runtime-serving layer; the two-entry production composition is a current
-production choice, not a fixed-two limit of that layer.
-
-It has one process-global `gateway_instance_id`. Both product runtimes must
-reach initial Live/Synchronized before server readiness; there is no self-test
-client and no controlled-recovery acceptance hook in production. The daemon
-uses a configured nonzero gRPC endpoint, waits for SIGINT/SIGTERM, starts the
-server only after both products are ready, and shuts down the server and its
-handlers before stopping and destroying the product graph. After startup, a
-terminal failure of one market remains isolated from the other market and the
-gRPC server.
-
-At startup failure and orderly shutdown, the daemon may emit bounded one-line
-records for the retained recovery-failure history. A clean process with no
-retained cuts emits no recovery-failure records. No second telemetry subsystem
-is introduced.
-
-`BMD_GATEWAY_BUILD_PRODUCTION_DAEMON` is explicit opt-in and OFF by default.
-When enabled, it composes the full accepted G11 graph and builds/installs the
-real `bmd-gatewayd`. The minimal Foundation build does not include the
-production graph. The direct daemon gRPC deployment is intended for a
-trusted/private/loopback transport boundary or an externally protected
-transport; this phase adds no TLS/auth framework.
-
-The opt-in `bmd_gateway_g3_runtime` target is the first concurrent runtime
-boundary. It implements exactly one Binance Spot BTCUSDT `MarketRuntime`, which
-owns one private `BookProjection` and one dedicated serialized owner thread. Its
-complete-frame ingress FIFO and distinct owner-local bootstrap buffer have
-independent finite capacities. The owner performs all adaptation, Projection
-mutation/state reads, and consumer snapshot capture. External callers receive
-only copied observations or owning protobuf snapshots. An injected clock supplies
-snapshot-generation timestamps. Shutdown admission closure and wakeup are
-out-of-band from the bounded ingress; graceful stop drains accepted work in FIFO
-order unless a terminal fault forbids mutation, then joins the owner.
-
-G3 accepts only already-parsed synthetic Contracts messages and explicit
-transport/snapshot fault events. It has no sockets, HTTP, WebSocket, JSON,
-reconnect, retry, publication, subscription, or gRPC behavior.
-
-The opt-in G4 targets add exactly one real Binance Spot BTCUSDT transport. Before
-runtime construction, verified HTTPS exchangeInfo validates `TRADING` Spot
-membership and derives Projection NumericSpec from `PRICE_FILTER.tickSize` and
-`LOT_SIZE.stepSize`. A separate networking I/O thread owns verified TLS DNS/TCP,
-the raw `btcusdt@depth@100ms` WebSocket, and asynchronous HTTPS depth snapshot.
-It timestamps each complete frame before strict JSON parsing, preserves receive
-order, and submits only complete Contracts messages through G3's existing
-bounded ingress. Projection remains private to the G3 owner. G4 assigns one
-stable connection ID and generation 1, handles server ping/pong and
-`serverShutdown`, fails closed without retry/reconnect, and stops/join cleanly.
-
-The opt-in G5 target adds one concrete recovery coordinator. It retains the same
-G3 runtime, private Projection, and owner thread while replacing G4 transport
-attempts one at a time. The old network thread joins before the runtime owner
-barrier/reset and before a higher, never-reused connection generation is
-created. Projection reset is an owner-domain control, runtime state transitions
-are observed with condition-variable waits, and stop interrupts deterministic
-bounded backoff. HTTP 429/418 honor strict `Retry-After`; terminal internal and
-HTTP 4xx classifications fail closed. Recovery always returns through fresh
-WebSocket buffering and REST depth bootstrap. G5 adds no continuity predicate or
-second sequence classifier.
-
-`RecoveryCoordinator` also retains product-local bounded internal diagnostics
-for classified unplanned recovery failures: seven fixed-capacity cuts in
-chronological order, captured after source quiescence and before
-reset/rebootstrap destroys attempt evidence. Each cut retains the generation,
-recovery cause, optional exact network error, runtime fault, adapter diagnostic,
-and Projection/gap summary. This is diagnostic history only: it changes no
-recovery policy, retry/backoff, generation/reset semantics, subscriber behavior,
-or public wire surface.
-
-The opt-in G6 target adds the 23h50m project planned-rotation policy to that same
-coordinator. A generation's injected monotonic birth timestamp is captured
-before its transport start. While qualified Live, one timed condition-variable
-wait ends on recovery, the planned deadline, or stop; there is no polling loop.
-On a clean deadline cut, the old transport stops and joins before the owner FIFO
-barrier and before a distinct owner-thread healthy reset. Only then may the next
-generation start and conservatively re-enter G4 bootstrap. A clean rotation has
-no recovery backoff or budget cost. A real transport fault or Projection
-`NeedsResync` observed at the cut wins and follows G5 recovery. G6 remains
-break-before-make, permits at most one active transport, and adds no sequence
-classifier, gRPC, publication, or subscriptions. The reviewed Boost 1.91
-reactor/scheduler shutdown barrier is unchanged and requires re-proof on upgrade.
-
-The opt-in G7 targets add the first normal gRPC/publication flow, exactly
-`SubscribeOrderBook` for Binance Spot BTCUSDT. Source snapshot and update inputs
-carry immutable optional connection-generation provenance from G4 into G3. The
-existing `MarketRuntime` Projection owner exclusively owns the bounded pending
-admission mailbox, target-ticket subscription cut, subscriber registry, and
-fanout after Projection returns `Applied`; stale and duplicate inputs are not
-published. Each accepted channel has 64 fixed ordinary slots plus one separate
-terminal descriptor slot, with at most eight resident accepted channels and
-eight pending admissions.
-
-One synchronous RPC handler is the sole writer for each accepted stream. It
-peeks without removing the front record, performs `ServerWriter::Write` off the
-Projection owner, and acknowledges the same record only after success. Ordinary
-overflow reserves one `SLOW_CONSUMER`/`RESUBSCRIBE` terminal notice without
-blocking the owner. Projection gap, other recovery, and planned rotation
-terminalize existing sessions before reset; sessions never cross a full
-rebootstrap. Service shutdown closes admission, executes a reserved owner
-publication-shutdown control, cancels a bounded snapshot of active contexts,
-then shuts down and waits for the synchronous server before G5/G6/runtime stop.
-
-G8 composes the existing G3-G7 production components at the accepted
-cross-repository boundary. Its deterministic and real acceptance paths prove
-consumer-visible behavior across Projection `NeedsResync`, G5 recovery and
-rebootstrap, G6 planned rotation and rebootstrap, fresh resubscription,
-generation provenance, per-session sequencing, and final shutdown. G8 adds no
-production runtime layer, second order book, sequence classifier, recovery
-coordinator, or other runtime abstraction.
-
-## G9 SubscribeEvents
-
-G9 adds `SubscribeEvents` to the existing synchronous Gateway service. V1 accepts
-exactly one selector per request for Binance Spot BTCUSDT: `DIFF_DEPTH`,
-`AGG_TRADE`, or `BOOK_TICKER`. Its transport profile uses one combined Binance
-Spot WebSocket; the historical depth-only G4-G8 paths remain independently
-usable.
-
-`SubscribeEvents(DIFF_DEPTH)` is a `PRE_PROJECTION_NORMALIZED` source event
-feed. `SubscribeOrderBook` remains the Projection-Applied mutation/snapshot
-feed. Projection remains the only sequence and gap classifier; G9 does not add
-a second classifier or describe the event feed as a Projection publication path.
-
-G9 uses a focused bounded Event publication registry with no dedicated
-publication thread: at most eight Event subscribers, 64 ordinary slots per
-subscriber, and one terminal control slot. Matching subscribers may share
-immutable normalized payloads, while slow consumers terminate independently.
-This is not a generic event bus.
-
-Event subscriptions bind to one source generation and never cross an actual
-source replacement. Recoverable replacement and planned rotation terminalize
-with `CONNECTION_GENERATION_CHANGED` / `RESUBSCRIBE`. Permanent failure
-terminates unavailable without fabricating a future generation, and Projection
-`NeedsResync` alone is not the Event terminal event.
-
-G7 and G9 use the same generated Gateway service, synchronous server, and
-context tracking / TryCancel lifetime protocol. The historical G10
-single-market composition had a mechanical tracked-context maximum of 24. The
-G11 two-market composition has a maximum of 48; this is not a generic RPC
-framework.
-
-## G10 Minimal GetGatewayStatus
-
-G10 adds a focused synchronous `GatewayStatusAssembler` for the existing
-Contracts `GetGatewayStatus` unary surface. It reads `MarketRuntime`,
-`SpotRecovery`, and `EventPublication` observations, and uses the existing
-Gateway service identity plus an injected runtime clock. The assembler does not
-own or schedule those runtime components and creates no thread, queue, cache,
-health state machine, metrics registry, or control path.
-
-The historical G10 snapshot contains exactly one BINANCE/SPOT/BTCUSDT market. It maps G3
-`RuntimeState` to Contracts `StreamLifecycleState`, reports monotonic Gateway
-server uptime, carries the optional receive UTC time of the most recently
-successfully normalized WebSocket `DepthUpdate`, `AggTrade`, or `BookTicker`,
-and carries `connection_generation` only while exactly one active transport
-uniquely applies. Last-event freshness is independent of subscribers and
-Projection Apply classification; G4 observes it and G5 carries it across
-transport generations. Subscription count is G7 resident plus G9 active Event
-subscriptions, excluding pending G7 admissions.
-
-Status collection is sequential rather than a global atomic cut: each component
-observation is authoritative at its own point within one bounded collection
-interval. One expensive status RPC may collect at a time; additional concurrent
-requests return `RESOURCE_EXHAUSTED` instead of entering a waiting queue.
-
-`GetGatewayStatus` is unary and is not inserted into the G7/G9 streaming
-`ServerContext` tracker. That tracker remains mechanically bounded at 24 for
-the historical G10 composition and 48 for G11, and
-normal synchronous `Server::Shutdown()` / `Server::Wait()` provides the unary
-handler lifetime barrier. The established G7/G9 TryCancel protocol is unchanged.
-
-## G11 USD-M and Multi-Market Runtime
-
-G11 is the current two-product runtime boundary. It implements exactly:
-
-- `BINANCE / SPOT / BTCUSDT`;
-- `BINANCE / USD_M_PERPETUAL / BTCUSDT`.
-
-It is not arbitrary multi-symbol support or generic dynamic market registration.
-The accepted composition has two isolated single-product `MarketRuntime`
-instances, two private `BookProjection` instances, two serialized Projection
-owner threads, two independent mutable `RecoveryCoordinator` instances, one
-fixed non-owning two-entry market registry, and one shared synchronous Gateway
-gRPC service.
-
-USD-M REST uses `fapi.binance.com` for `/fapi/v1/exchangeInfo` and
-`/fapi/v1/depth?symbol=BTCUSDT&limit=1000`. Its WebSocket is
-`wss://fstream.binance.com/public/ws/btcusdt@depth@100ms`. Gateway parses and
-forwards USD-M `pu` as `DepthUpdate.previous_final_update_id`; Projection's
-`SequencePolicyKind::UsdMPerpetual`, through `ProtoAdapter`, remains the sole
-authority for bootstrap bridge, stale, duplicate, missing previous-final,
-previous-final mismatch, gap, and `NeedsResync`. Gateway has no second `pu`
-classifier. The historical Spot route authority is unchanged.
-
-The shared `RecoveryCoordinator` code authority is instantiated independently
-for Spot and USD-M. Each product separately owns its generation, backoff,
-rotation deadline, active attempt, mutex/state, last-event observation, and
-terminal state. At most one transport is active per market,
-with a process total bounded at two; terminal failure of one market does not
-stop the other product or the gRPC server.
-
-G7 routes exactly one product per `SubscribeOrderBook` RPC. Its active and
-pending limits are eight per market, hence totals of 16 active and 16 pending.
-G7 controlled recovery remains `RESUME_NOT_AVAILABLE` /
-`REQUEST_NEW_SNAPSHOT`. G9 retains Spot `DIFF_DEPTH`, `AGG_TRADE`, and
-`BOOK_TICKER`, while USD-M exposes only `DIFF_DEPTH`; USD-M AggTrade and
-BookTicker are unsupported. Each market has an independent EventPublication,
-with eight active G9 sessions per market and 16 total. Generation replacement
-remains `CONNECTION_GENERATION_CHANGED` / `RESUBSCRIBE`.
-
-Identifiers are scoped as follows: `gateway_instance_id` is process-global;
-`connection_generation` is per market/source lifecycle; G7 `subscription_id`
-is per MarketRuntime/market namespace; G9 `subscription_id` is per
-EventPublication/market namespace; and `session_sequence` is per accepted
-RPC/session. Thus Spot `ob-1` and USD-M `ob-1`, or Spot `ev-1` and USD-M `ev-1`,
-may coexist.
-
-G11 status returns two deterministic rows in stable order: Spot BTCUSDT, then
-USD-M perpetual BTCUSDT. Per-market active subscription count is G7 resident
-plus G9 active; pending G7 admissions are excluded. Status remains a minimal
-one-shot read-only snapshot, permits one concurrent collection, and stays
-outside streaming context tracking. The G11 two-market bound is 48 contexts
-(16 G7 active + 16 G7 pending + 16 G9 active); the historical G10/G11-off
-composition remains 24. The top-level active subscription count is the sum of
-the two per-market counts.
-
-G11 is opt-in through `BMD_GATEWAY_BUILD_G11_MULTI_MARKET=ON`; it is OFF by
-default, and G11-off preserves the historical G0-G10 build behavior. Global
-shutdown closes admission, terminates product-local publications, snapshots at
-most 48 streaming contexts, TryCancels them, synchronously shuts down and waits
-for the server, then stops and joins both recovery/transport lifecycles and
-both `MarketRuntime` owners before destroying non-owning routing/service
-references. No new lifecycle framework is introduced.
-
-## G12 target architecture (G12-A and G12-B implemented; G12-C/D/E pending)
-
-G12 keeps the current G11 implementation as the production baseline while
-authorizing a finite startup-configured product set. Its exact product identity
-is the existing Gateway `MarketKey`:
-
-```text
-MarketKey = (venue, market, exact symbol)
-```
-
-Only `BINANCE` with `SPOT` or `USD_M_PERPETUAL` is supported by this target.
-The symbol is an exact opaque identity: no case folding, Unicode normalization,
-or automatic uppercasing is allowed. Lowercase Binance route text is transport
-encoding only and does not mutate the public `MarketKey`.
-
-The G12 graph is one isolated product graph per exact `MarketKey`:
-
-```text
-MarketKey
-  -> ProductRuntime
-  -> MarketRuntime
-  -> private BookProjection
-  -> EventPublication
-  -> RecoveryCoordinator
-  -> independent Binance transport
-```
-
-`ProductRuntime` owns one exact immutable `MarketKey`. Expected identity,
-sequence-policy selection, transport routes, protocol identity, status
-identity, and diagnostics derive from that authority. G12 does not authorize a
-shared multiplexed WebSocket, a cross-product `RecoveryCoordinator`,
-`MultiSymbolProjection`, `ProjectionManager`, or a second sequence classifier.
-
-G12-B is implemented as the reusable/runtime-serving layer over this graph:
-
-```text
-ConfiguredProductRuntimeSet
-├── ProductRuntime[1..8], stable heap-owned
-├── immutable dynamic MarketRuntimeRegistry
-└── shared synchronous Gateway gRPC server
-```
-
-It provides exact registry-membership routing, dynamic status rows,
-observations, recovery diagnostics, and shutdown aggregation while preserving
-the process-wide 48-context bound. The ordinary production composition remains
-the two resolved BTC products described above until G12-C.
-
-The configured product count is `1..8`. Eight is the frozen
-`G12_MAX_CONFIGURED_PRODUCTS` configuration/resource bound and configuration
-envelope, not a demonstrated throughput capacity, real-network-qualified
-eight-product production capacity, benchmark-derived capacity guarantee,
-Binance protocol maximum, or permanent architectural maximum. The gRPC
-tracked-context limit is one process-wide hard limit of 48. It must not become a
-configured-product-count multiplication of a per-product limit. Existing
-G7/G9 publication and admission bounds remain product-local unless a later
-milestone changes them.
-
-G12-C's target production configuration authority is startup-only JSON; it is
-not implemented by G12-B:
+## 生产组合
 
 ```text
 bmd-gatewayd --config PATH
+  -> validate JSON (grpc_listen, spot_symbols, usdm_symbols)
+  -> fetch exchangeInfo once per configured market
+  -> resolve NumericSpec for every exact MarketKey
+  -> ProductionGateway
+       +-- ConfiguredProductRuntimeSet (1..8 stable owned ProductRuntime)
+       |     +-- immutable MarketKey
+       |     +-- MarketRuntime / private BookProjection / one owner thread
+       |     +-- product-local order-book and event publication
+       |     +-- independent RecoveryCoordinator / one active transport
+       +-- immutable non-owning MarketRuntimeRegistry
+       +-- one shared synchronous gRPC server
 ```
 
-The parser accepts the finite `grpc_listen`, `spot_symbols`, and `usdm_symbols`
-surface, rejects malformed JSON and unknown top-level fields, rejects exact
-duplicates within one market, and requires at least one and at most eight
-configured `MarketKey` values. Either symbol list may be empty, but not both;
-the same exact symbol in Spot and USD-M is valid because the `MarketKey`
-differs. There is no hot reload, runtime product add/remove, second CLI
-configuration authority, or new configuration dependency; existing
-`nlohmann_json` is sufficient.
+`MarketKey = (venue, market, exact symbol)`。同一 symbol 的 Spot 与 USD-M 是两个产品。配置不自动修改大小写；小写 stream route 只是网络编码。当前 Binance route 支持大写 ASCII 字母/数字，exchangeInfo 负责存在性、市场资格与精度验证。
 
-Startup acquires Spot `exchangeInfo` once when Spot products exist and USD-M
-`exchangeInfo` once when USD-M products exist. It selects every exact configured
-symbol and derives one supported `NumericSpec` per `MarketKey`; missing,
-ineligible, malformed, or unsupported metadata fails closed before serving.
-Product-local REST depth snapshots remain product-local. Metadata acquisition
-remains bounded by its network-stage authority and fails closed; it is not
-folded into the shared product-readiness deadline. The product-start/initial-
-readiness phase uses one shared absolute deadline across the configured product
-set, and the deadline is not reset per product. All configured products must
-reach Live/Synchronized before gRPC starts. Any initial product failure or stop
-causes complete rollback; once serving, one product can fail without taking
-down healthy products or gRPC.
+配置严格拒绝未知字段、重复 JSON 字段、同市场重复 symbol、空总集合、超过八个产品和无效 endpoint。任何一个 symbol 的缺失、非交易状态、市场资格或不支持的数值规格都会使启动失败。配置验证不做网络 I/O；metadata 获取独立进行，并受网络阶段超时约束。变更配置需要重启，没有运行时 registry 增删。
 
-The serving aggregate uses stable `ProductRuntime` object addresses and an
-immutable non-owning dynamic registry after construction, with deterministic
-product ordering and exact membership routing. The finite bound permits a
-small linear lookup; it does not authorize a generic registry framework or a
-relocating owner layout. Server handlers must stop and drain before any product
-owner is destroyed.
+八个产品是资源政策，可在新容量证据后调整，不是币安限制。当前使用小集合线性查询和 stable unique_ptr owner；没有通用注册框架或共享多 symbol WebSocket。
 
-G12 makes `SubscribeOrderBook`, `SubscribeEvents`, status rows, observations,
-recovery diagnostics, and shutdown aggregation dynamic over the configured set.
-`SubscribeEvents` still requires exactly one selector. Spot retains
-`DIFF_DEPTH`, `AGG_TRADE`, and `BOOK_TICKER`; USD-M retains only its existing
-`DIFF_DEPTH`. G12 does not add cross-product merged subscriptions or new USD-M
-event types.
+## 并发与生命周期
 
-The G12 implementation sequence is frozen in [docs/MILESTONES.md](docs/MILESTONES.md):
-`G12-A` exact single-product parameterization, `G12-B` configured runtime set
-and dynamic serving surface, `G12-C` configuration/metadata/startup
-composition, `G12-D` deterministic four-product acceptance, and `G12-E` real
-network bounded qualification. `G12-A` and `G12-B` are implemented;
-`G12-C` is the next stage, and no later stage may be implemented ahead of it.
+- MarketRuntime 接收完整事件；有界 ingress 与 bootstrap buffer 分离；Projection 的读写、reset、publication 注册都在同一个 owner 上串行执行。对外只交付 owning/copy 数据。
+- owner 线程成功创建后才发布 started 状态。生产 start 遇到返回失败或异常都回滚所有已启动产品。
+- 所有配置产品共享一个首次就绪绝对截止时间；全体 Live/Synchronized 后绑定 gRPC。一个产品未就绪不能放行整体服务。
+- metadata 网络阶段与产品首次同步阶段分别有界，首次同步截止时间不因新增产品或观察到迟到的 Live 而重置。
+- 运行后的产品故障隔离。每产品恢复先 quiesce 旧 transport，再在 owner 上 reset/rebootstrap；同时最多一个 active transport。
+- 计划轮换沿用 23h50m monotonic 策略和 break-before-make；不拼接两条连接的数据。
+- 订单簿 session 在需要完整 Projection rebootstrap 前结束；Event session 在实际 source generation 替换时结束，均不跨 generation 拼接。
+- SIGINT/SIGTERM 使用 async-safe signal 模型。停止先关闭 admission、结束并取消/drain server handlers，再停止 transport/owner 和销毁产品；不得在 owner 已不存在时等待其确认。
 
-## MarketRuntime Projection boundary
+## 发布与服务边界
 
-The G3 `MarketRuntime`, G4 transport, and G5/G6 lifecycle coordinator use, and
-future Gateway runtime work must continue to use, the existing Projection APIs
-directly:
-construct one `BookProjection` per `venue + market + symbol`, adapt Contracts
-messages with `ProtoAdapter`, feed updates in source receive order, and follow
-Projection's returned classification. It must not add a
-`GatewayProjectionHost`, second sequence classifier, second order book, second
-Projection lifecycle, generic event bus, DI framework, plugin framework, or
-generic runtime framework.
+`SubscribeOrderBook` 只发布 Projection 已 Applied 的数据。`SubscribeEvents` 需要恰好一个 V1 selector；Spot 支持 DIFF_DEPTH / AGG_TRADE / BOOK_TICKER，USD-M 仅 DIFF_DEPTH。深度事件为 PRE_PROJECTION_NORMALIZED，不代表已应用到订单簿。
 
-The foundation and frozen G1 link proof remain runtime-free. The completed G2
-synthetic host remains the deterministic direct-Projection proof. G3 establishes
-serialized concurrency and bounded runtime ownership independently of transport.
-G4 is the first real network/bootstrap implementation. G5 adds bounded automatic
-recovery and G6 adds planned break-before-make rotation without changing
-Projection continuity ownership. G7 adds bounded publication and the first
-synchronous gRPC business flow without adding a second classifier or order book.
-G8 closes the Projection M6 real-Gateway order-book integration acceptance.
-G11 closes the accepted USD-M/two-market runtime boundary, and post-G11
-productization closes the production daemon host boundary. Recovery
-observability, the bounded recovery-observation campaign, and the accepted
-post-G11 performance baseline are complete. The baseline is descriptive
-evidence rather than a hard SLA, capacity guarantee, or infinite-duration RSS
-claim. The accepted baseline is evidence for the fixed two-product G11 daemon,
-not G12 multi-product capacity evidence. Production Qualification and
-optimization are not authorized. G12 is in progress: G12-A and G12-B are
-complete and G12-C is next. The current daemon remains fixed at two production
-products.
+每产品 order-book resident 与 Event active 各上限 8；各普通队列 64，另有一个 terminal slot。慢消费者按 session 终止。进程级 TryCancel tracker 总上限 48，与产品数无关；注册/取消握手保护 ServerContext 生命周期。昂贵 unary status 并发上限为一，不占 streaming tracker。status 采用已有 runtime/recovery/publication 观察，没有第二健康框架。
+
+`SubscribeMarketState` 尚未实现。服务直接使用 insecure gRPC，部署在 loopback/可信私网或已有认证保护的代理之后。公开网络认证/TLS 如果成为实际部署需求，再增加专门交付项。
+
+## 构建与历史
+
+Foundation 是独立、无网络无线程的历史最小配置/生命周期 seam；生产目标由 `BMD_GATEWAY_BUILD_PRODUCTION_DAEMON=ON` 启用。Contracts message-only 依赖与单独 gRPC artifact 的选择继续显式保留；G1 冻结 upstream smoke 不随 main 漂移而重新固定。
+
+依赖不使用 floating FetchContent。Gateway 的 offline runtime 测试和 sanitizer 图已经可以本机构建；GitHub 现有默认 CI 只覆盖 Foundation，补生产 CI 是 M3 的要求。
+
+旧 fixed-two 的 recovery 和 performance 记录保留为历史事实。当前配置生产代码的完成，不等同于四产品真实验收或容量证明。性能改动必须由实际瓶颈和同条件前后测量支持，不引入 speculative lock-free、busy polling、affinity、自定义 allocator 或 worker framework。

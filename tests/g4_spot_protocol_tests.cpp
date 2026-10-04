@@ -337,6 +337,21 @@ void stream_name_and_server_shutdown() {
   REQUIRE(std::holds_alternative<g4::ServerShutdown>(shutdown));
   REQUIRE_EQ(std::get<g4::ServerShutdown>(shutdown).exchange_event_time_ms,
              1770123456789ULL);
+  const auto combined_shutdown = g4::parse_combined_event_frame(
+      R"json({"stream":"!serverShutdown","data":{"e":"serverShutdown","E":1770123456789}})json",
+      {1U, 2U}, "connection", "ETHUSDT");
+  REQUIRE(std::holds_alternative<g4::ServerShutdown>(combined_shutdown));
+  REQUIRE_EQ(
+      std::get<g4::ServerShutdown>(combined_shutdown).exchange_event_time_ms,
+      1770123456789ULL);
+  for (
+      const auto payload :
+      {R"json({"stream":"!serverShutdown","data":{"e":"depthUpdate","E":1}})json",
+       R"json({"stream":"!serverShutdown","data":{"e":"serverShutdown","E":"1"}})json",
+       R"json({"stream":"unknown","data":{"e":"serverShutdown","E":1}})json"}) {
+    REQUIRE(std::holds_alternative<g4::ProtocolError>(
+        g4::parse_combined_event_frame(payload, {1U, 2U}, "connection")));
+  }
 }
 
 void combined_event_frames() {

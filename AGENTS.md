@@ -1,177 +1,58 @@
 # Gateway contribution rules
 
-Read in this order before making Gateway changes:
+Read before changes:
 
 1. [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md)
 2. [docs/MILESTONES.md](docs/MILESTONES.md)
 3. [ARCHITECTURE.md](ARCHITECTURE.md)
-4. milestone-specific evidence as needed
+4. relevant implementation and evidence
 
-G0, G1, GW-PREQ-002, G2, G3, G4, G5, G6, G7, G8, G9, G10, and G11 are complete. The deterministic G2
-synthetic host, serialized G3 `MarketRuntime`, real G4 Binance Spot BTCUSDT
-transport/bootstrap, bounded G5 reconnect/resync recovery, and break-before-make
-G6 planned connection rotation are implemented. G7 adds bounded owner-domain
-order-book publication and the first synchronous `SubscribeOrderBook` gRPC flow.
-G8 closes the Projection M6 real-Gateway order-book integration acceptance using
-the existing G3-G7 production architecture and adds no second order book,
-sequence classifier, recovery coordinator, or production runtime abstraction.
-G9 adds focused bounded synchronous `SubscribeEvents` for Spot BTCUSDT
-`DIFF_DEPTH`, `AGG_TRADE`, and `BOOK_TICKER`.
-G10 adds minimal synchronous `GetGatewayStatus` for one Spot BTCUSDT market,
-assembled from existing runtime, recovery, and publication observations.
-G11 adds the fixed two-product USD-M and multi-market runtime boundary.
-POST_G11_RUNTIME_PRODUCTIZATION is complete: the ordinary `bmd-gatewayd` is
-the long-running fixed two-product production daemon.
-`POST_G11_PERFORMANCE_BASELINE=COMPLETE`; G12 is in progress. `G12-A` and
-`G12-B` are complete and `G12-C` is next. Keep Phase A small and
-independently buildable.
+The current plan replaces stale historical stage/authorization prose. If code,
+protocol facts or measurements contradict documentation, establish evidence and
+update the current documents. User instructions take precedence. Do not add
+permission steps inferred from old milestone freezes.
 
-`RECOVERY_OBSERVABILITY=COMPLETE`; PR #25 merged the bounded product-local
-recovery-failure diagnostic history. The bounded recovery-observation campaign
-is complete, and `POST_G11_PERFORMANCE_BASELINE=COMPLETE`. The accepted
-baseline is descriptive evidence, not a hard SLA or capacity guarantee.
-`PRODUCTION_QUALIFICATION_AUTHORIZED=NO` and
-`OPTIMIZATION_AUTHORIZED=NO`. The baseline describes the fixed two-product G11
-daemon and is not G12 multi-product capacity evidence.
-
-This repository contains the G0 foundation, frozen G1 proof, deterministic G2
-synthetic host, serialized G3 runtime, real G4 Spot transport, G5 recovery, and
-G6 rotation, G7 publication/gRPC, G8 integration acceptance, G9
-`SubscribeEvents`, G10 `GetGatewayStatus`, and the G11 fixed two-product
-USD-M/multi-market runtime; future work follows the milestone authority.
-The post-G11 productization is complete and future work follows the milestone
-authority. Recovery observation and the post-G11 performance baseline are
-complete. G12-B now provides the reusable/internal configured owner set and
-dynamic serving surface. Future work follows the frozen G12 authority, with
-`G12-C` next. Keep Phase A small and independently buildable.
-
-The ordinary `bmd-gatewayd` is now the long-running production daemon for
-exactly Binance Spot BTCUSDT and Binance USD-M perpetual BTCUSDT. It requires
-both products to reach initial Live/Synchronized before serving, uses a
-configured gRPC endpoint, handles SIGINT/SIGTERM, rolls back startup
-completely, isolates a later single-market failure, and shuts down server
-handlers before destroying the product graph. The historical Foundation CLI
-remains a minimal Phase-A seam and is not the daemon's current production
-semantics.
-
-The coding sequence is `GW-PREQ-003=COMPLETE`, then `G12-A` (complete),
-`G12-B` (complete), `G12-C`, `G12-D`, and `G12-E`; `G12-C` is the next active
-milestone. The current production runtime remains the fixed two-product G11
-daemon. G12 implementation is authorized, but Contracts and Projection
-production changes are not required. Use the existing
-exact `MarketKey = (venue, market, exact symbol)` authority, support at most
-eight configured products, keep the process-global tracked-context cap at 48,
-and give each `MarketKey` one independent transport. Do not redo the G12-B
-ownership/registry/routing architecture. G12-C must build production
-configuration, metadata, and startup composition on the already implemented
-`ConfiguredProductRuntimeSet` and dynamic registry surface; do not treat
-G12-C or later target behavior as already implemented or jump ahead of the
-active milestone.
+G0-G11, G12-A and G12-B are complete. This merge completes G12-C configured
+production composition and the review fixes. M3 / G12-D four-product offline
+production acceptance and production CI is next; M4 / G12-E bounded live
+acceptance and delivery follows it. Do not label future acceptance complete
+because configurable code exists. Keep Foundation independently buildable.
 
 ## Boundaries
 
-- The normal G2–G6 and G7-disabled runtime lane depends on the Contracts-owned
-  message-only/Protobuf artifact and Projection `ProtoAdapter`/`Core` surfaces.
-- The separate `BinanceMarketDataContractsGrpc` artifact remains explicit and
-  opt-in for the frozen G1 proof; G7 enables it conditionally in the normal
-  runtime graph.
-- Gateway consumes Projection through the existing `ProtoAdapter`/`Core` surfaces.
-- Gateway has no Recorder dependency.
-- The G3 baseline has one owner thread, bounded ingress/bootstrap queues, and an
-  injected clock. G7 extends that same owner with bounded publication; it does
-  not add Gateway-owned Projection business logic, an order-book implementation,
-  a sequence classifier, storage, event bus, DI, plugins, or a generic runtime
-  framework.
-- G4 is exactly Binance Spot BTCUSDT, has one networking I/O thread and one
-  connection generation, and drives Projection only through G3's bounded owner
-  boundary. As an independently usable milestone it remains one-shot.
-- G5 retains one MarketRuntime/Projection owner, allows at most one active Spot
-  transport, quiesces the old network thread before owner-domain reset, and uses
-  bounded interruptible rate-limit-aware recovery. It has no second sequence
-  classifier, planned rotation, gRPC, publication, or subscriptions.
-- G6 integrates the 23h50m monotonic planned-rotation policy into the G5
-  coordinator. It remains break-before-make, uses the distinct owner-domain
-  healthy reset only after source quiescence and a Live/Synchronized barrier,
-  and has no source stitching, gRPC, publication, or subscriptions.
-- G7 implements only synchronous `SubscribeOrderBook`. Publication and registry
-  mutation stay on the G3 owner; each accepted RPC handler is its sole writer.
-  Existing sessions terminate before G5 recovery or G6 planned reset and never
-  cross a full Projection rebootstrap.
-- G9 implements synchronous `SubscribeEvents` with exactly one V1 selector.
-  `DIFF_DEPTH` publication is PRE_PROJECTION_NORMALIZED; G7 OrderBook remains
-  Projection-Applied-only. G9 adds no second classifier or generic event bus,
-  and Event sessions terminate at actual source-generation replacement rather
-  than stitching across it.
-- G10 implements a one-shot read-only `GetGatewayStatus` for one Spot BTCUSDT
-  market. It has no health/metrics/telemetry framework; last-event freshness is
-  the normalized WebSocket receive observation, generation is optional only
-  while uniquely applicable, and the status count is G7 resident plus G9
-  active Event subscriptions. Pending G7 admissions are excluded. The unary
-  status RPC does not enter the 24-context streaming TryCancel tracker, and
-  expensive status collection is limited to one concurrent RPC.
-- G11 implements exactly two products: Binance Spot BTCUSDT and Binance USD-M
-  perpetual BTCUSDT. Each has one `MarketRuntime`, private `BookProjection`,
-  serialized owner, and independent `RecoveryCoordinator` instance. A fixed
-  non-owning two-entry registry routes one shared synchronous gRPC service.
-  Projection exclusively owns USD-M `pu` continuity through
-  `DepthUpdate.previous_final_update_id`; Gateway adds no classifier. G7 routes
-  both products, G9 exposes only USD-M `DIFF_DEPTH`, status has two rows, and
-  the G11-enabled streaming bound is 48 (the G11-off legacy bound is 24).
-  There is no generic multi-market, event, plugin, or runtime framework.
-- G12-B has implemented the reusable/internal configurable finite-product
-  owner set and dynamic serving surface. It keeps exact `MarketKey` identity,
-  permits 1..8 configured products at the lower-level set, uses one isolated
-  `ProductRuntime` and independent transport per `MarketKey`, and keeps the
-  process-global tracked-context hard limit at 48. G12-C remains the
-  authorized production target with startup-only authority
-  `bmd-gatewayd --config PATH`; all configured products are required for
-  initial readiness, and later failure is isolated per product. Do not
-  introduce shared WebSocket multiplexing, hot reload, runtime add/remove, a
-  second classifier, or a generic framework.
-- Post-G11 productization keeps exactly two production products, one runtime/
-  Projection owner/recovery instance per product, and the G12-B configured
-  owner set with two current registry entries. It retains one transport per
-  product and two total, and a 48-context streaming bound. Projection remains
-  the sole Spot/USD-M sequencing and USD-M `pu` authority. Both products must
-  be initial-Live before production readiness; a later single-market failure
-  does not globally stop service. Server handlers must shut down before
-  product graph destruction, the signal model must remain async-safe, and
-  production must not contain an acceptance-only hook.
-- Do not copy Contracts `.proto` files or introduce floating FetchContent dependencies.
+- Gateway owns Binance transport, metadata, lifecycle, bounded publication and
+  gRPC. Contracts owns proto/wire; Projection owns numeric semantics, order
+  book and Spot/USD-M sequencing (including `pu`). No Recorder dependency.
+- Reuse `ConfiguredProductRuntimeSet` and the immutable registry. Exact
+  `MarketKey = (venue, market, exact symbol)`, 1..8 configured products, one
+  isolated ProductRuntime/private Projection/owner/recovery/transport per key.
+  The process-global streaming context cap remains 48, not 48 per product.
+- All configured products must initially reach Live/Synchronized. Any startup
+  return failure or exception rolls everything back. Later product failure is
+  isolated. Shut down and drain handlers before destroying products.
+- Use startup JSON `bmd-gatewayd --config PATH`. No hot reload, runtime add/remove,
+  generic event bus, DI/plugins, shared multiplexed transport or second classifier.
+- Preserve bounded queues, slow-client isolation, cancellation lifetime safety,
+  source quiescence before reset, and async-safe signal handling.
+- Spot events: DIFF_DEPTH, AGG_TRADE, BOOK_TICKER. USD-M: DIFF_DEPTH only.
+  Order-book publication is Projection-Applied; depth events are pre-Projection.
+  Sessions do not stitch across a full rebootstrap/source replacement.
+- Tests may use existing internal seams; production must not contain an
+  acceptance-only hook or expose test controls in configuration.
+- Do not copy proto files or add floating dependencies. Preserve the separate,
+  explicit frozen G1 upstream smoke; do not repin it merely for newer upstream main.
+- Eight products is a resource bound, not measured capacity. Historical fixed-two
+  performance evidence is not multi-product proof. Optimize only an evidenced
+  problem; keep changes small and avoid speculative concurrency frameworks.
 
-## Post-G11 performance phase
+## Validation and delivery
 
-`POST_G11_PERFORMANCE_BASELINE=COMPLETE`: the actual merged production daemon
-has accepted descriptive baseline evidence. Do not present it as a hard SLA,
-capacity guarantee, exact causal subscriber-cost decomposition,
-infinite-duration RSS proof, or zero-observer production truth. Do not
-authorize lock-free redesign, busy polling, CPU affinity, a custom allocator, a
-generic worker pool, or a combined multi-symbol transport without new measured
-evidence and separate architecture authority. Production Qualification and
-optimization remain unauthorized.
+Use CMake >=3.24. For runtime changes explicitly enable the production graph,
+build/run its offline CTest groups, ASan/UBSan/TSan configurations and
+`scripts/format-check.sh`. Existing GitHub Foundation checks alone do not verify
+production changes. Keep build/cache output under ignored directories.
 
-The original internal latency, queue, and delivery evidence is reusable with a
-scope note because the recovery-observability change does not alter the normal
-market-message path. Old process A/B CPU/RSS evidence is not exact-current-main
-authority; contaminated Row C evidence is not reusable. If later authorized,
-the minimum process bridge is one short exact-head A/B/C companion. Do not run a
-new 1200-second internal repeat or an OFF rerun merely for symmetry. Do not
-speculatively optimize Projection or rewrite its integration boundary.
-
-## Phase A implementation rules
-
-- Public configuration is the typed, finite surface in `include/binance_market_data/gateway/v1`.
-- Configuration validation performs no I/O. The lifecycle seam is synchronous and owns no runtime
-  resources.
-- The G1 upstream link-smoke is explicit and opt-in; do not continuously repin
-  its frozen candidate proof merely because upstream `main` changes.
-- The G3 runtime target is explicit and opt-in. Its owned `BookProjection` must
-  remain accessible only to its serialized owner after start; callers submit
-  complete events and receive owning copied observations/snapshots.
-- Never claim an upstream smoke or official protocol fact was verified when the dependency or
-  source was unavailable.
-
-## Validation
-
-Use CMake 3.24 or newer, build the offline tests, run CTest, run sanitizer configurations, and
-run `scripts/format-check.sh`. Keep all build/cache output under ignored directories.
+Update current state, milestone status and evidence with each milestone. Push
+reviewable commits; merge completed PRs before removing their remote branch.
+Never discard unmerged work. Keep main as the only long-lived GitHub branch;
+retain merged PR/history records.

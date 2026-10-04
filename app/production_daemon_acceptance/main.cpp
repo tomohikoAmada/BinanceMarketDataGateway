@@ -1,3 +1,4 @@
+#include "acceptance_config.hpp"
 #include "grpc_service.hpp"
 
 #include <binance_market_data/common/v1/enums.pb.h>
@@ -31,6 +32,14 @@ namespace common = binance_market_data::common::v1;
 namespace g7 = binance_market_data::gateway::g7;
 namespace g9 = binance_market_data::gateway::g9;
 namespace g10 = binance_market_data::gateway::g10;
+namespace acceptance = binance_market_data::gateway::production::acceptance;
+using acceptance::AcceptanceFailure;
+using acceptance::field_value;
+using acceptance::Options;
+using acceptance::parse_options;
+using acceptance::parse_serving_line;
+using acceptance::require;
+using acceptance::ServingIdentity;
 namespace wire = binance_market_data::gateway::v1;
 
 inline constexpr auto kStartupTimeout = std::chrono::seconds{180};
@@ -39,91 +48,10 @@ inline constexpr auto kShutdownTimeout = std::chrono::seconds{30};
 inline constexpr auto kFailureCleanupTimeout = std::chrono::seconds{15};
 inline constexpr auto kPollInterval = std::chrono::milliseconds{10};
 
-class AcceptanceFailure final : public std::runtime_error {
-public:
-  using std::runtime_error::runtime_error;
-};
-
-void require(bool condition, std::string_view message) {
-  if (!condition) {
-    throw AcceptanceFailure{std::string{message}};
-  }
-}
-
-template <typename Integer>
-[[nodiscard]] std::optional<Integer> parse_unsigned(std::string_view text) {
-  if (text.empty()) {
-    return std::nullopt;
-  }
-  Integer value{};
-  const auto parsed =
-      std::from_chars(text.data(), text.data() + text.size(), value);
-  if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) {
-    return std::nullopt;
-  }
-  return value;
-}
-
-struct Options final {
-  std::string daemon_path;
-  std::string grpc_target;
-  std::uint16_t grpc_port{};
-};
-
-[[nodiscard]] Options parse_options(int argc, char **argv) {
-  std::optional<std::string> daemon_path;
-  std::optional<std::string> grpc_target;
-  for (int index = 1; index < argc; index += 2) {
-    const std::string_view option{argv[index]};
-    if (option != "--daemon" && option != "--grpc-target") {
-      throw AcceptanceFailure{"unknown option: " + std::string{option}};
-    }
-    if (index + 1 >= argc) {
-      throw AcceptanceFailure{"missing value for " + std::string{option}};
-    }
-    const std::string_view value{argv[index + 1]};
-    if (value.empty() || value.starts_with("--")) {
-      throw AcceptanceFailure{"empty or missing value for " +
-                              std::string{option}};
-    }
-    auto &destination = option == "--daemon" ? daemon_path : grpc_target;
-    if (destination.has_value()) {
-      throw AcceptanceFailure{"duplicate option: " + std::string{option}};
-    }
-    destination = value;
-  }
-  require(daemon_path.has_value(), "missing --daemon");
-  require(grpc_target.has_value(), "missing --grpc-target");
-
-  const auto colon = grpc_target->rfind(':');
-  require(colon != std::string::npos && colon != 0U &&
-              colon + 1U < grpc_target->size(),
-          "--grpc-target must include a nonempty host and numeric port");
-  const auto parsed_port = parse_unsigned<unsigned int>(
-      std::string_view{*grpc_target}.substr(colon + 1U));
-  require(parsed_port.has_value() && *parsed_port > 0U &&
-              *parsed_port <= 65'535U,
-          "--grpc-target port is invalid");
-
-  std::error_code filesystem_error;
-  const auto resolved_path =
-      std::filesystem::canonical(*daemon_path, filesystem_error);
-  require(!filesystem_error, "--daemon path cannot be resolved");
-  filesystem_error.clear();
-  const auto regular =
-      std::filesystem::is_regular_file(resolved_path, filesystem_error);
-  require(!filesystem_error && regular, "--daemon path is not a regular file");
-  require(access(resolved_path.c_str(), X_OK) == 0,
-          "--daemon path is not executable");
-
-  return {resolved_path.string(), *grpc_target,
-          static_cast<std::uint16_t>(*parsed_port)};
-}
-
 class ChildProcess final {
 public:
   [[nodiscard]] static ChildProcess spawn(const std::string &daemon_path,
-                                          const std::string &grpc_target) {
+                                          const std::string &config_path) {
     int pipe_descriptors[2]{};
     if (pipe(pipe_descriptors) != 0) {
       throw AcceptanceFailure{"daemon output pipe failed"};
@@ -142,9 +70,9 @@ public:
         _exit(126);
       }
       close(pipe_descriptors[1]);
-      char listen_option[] = "--grpc-listen";
+      char listen_option[] = "--config";
       char *child_argv[]{const_cast<char *>(daemon_path.c_str()), listen_option,
-                         const_cast<char *>(grpc_target.c_str()), nullptr};
+                         const_cast<char *>(config_path.c_str()), nullptr};
       execv(daemon_path.c_str(), child_argv);
       constexpr char message[] = "daemon_execv=failed\n";
       static_cast<void>(write(STDERR_FILENO, message, sizeof(message) - 1U));
@@ -379,53 +307,6 @@ find_complete_line(std::string_view output, std::string_view marker,
   return std::nullopt;
 }
 
-[[nodiscard]] std::optional<std::string_view>
-field_value(std::string_view line, std::string_view key) {
-  auto position = line.find(key);
-  while (position != std::string_view::npos && position != 0U &&
-         line[position - 1U] != ' ') {
-    position = line.find(key, position + 1U);
-  }
-  if (position == std::string_view::npos) {
-    return std::nullopt;
-  }
-  const auto value_start = position + key.size();
-  const auto value_end = line.find(' ', value_start);
-  const auto value = line.substr(value_start, value_end - value_start);
-  if (value.empty()) {
-    return std::nullopt;
-  }
-  return value;
-}
-
-struct ServingIdentity final {
-  std::uint16_t grpc_port{};
-  std::uint64_t spot_generation{};
-  std::uint64_t usdm_generation{};
-  std::string gateway_instance_id;
-};
-
-[[nodiscard]] ServingIdentity parse_serving_line(std::string_view line,
-                                                 std::uint16_t expected_port) {
-  const auto port_text = field_value(line, "grpc_port=");
-  const auto spot_text = field_value(line, "spot_generation=");
-  const auto usdm_text = field_value(line, "usdm_generation=");
-  const auto instance_text = field_value(line, "gateway_instance_id=");
-  require(port_text.has_value() && spot_text.has_value() &&
-              usdm_text.has_value() && instance_text.has_value(),
-          "serving line is missing required identity fields");
-  const auto port = parse_unsigned<unsigned int>(*port_text);
-  const auto spot_generation = parse_unsigned<std::uint64_t>(*spot_text);
-  const auto usdm_generation = parse_unsigned<std::uint64_t>(*usdm_text);
-  require(port.has_value() && *port == expected_port,
-          "serving grpc_port does not match --grpc-target");
-  require(spot_generation.has_value() && *spot_generation != 0U &&
-              usdm_generation.has_value() && *usdm_generation != 0U,
-          "serving line has invalid connection generation");
-  return {static_cast<std::uint16_t>(*port), *spot_generation, *usdm_generation,
-          std::string{*instance_text}};
-}
-
 [[nodiscard]] ServingIdentity wait_for_serving(ChildProcess &child,
                                                std::uint16_t expected_port) {
   const auto deadline = std::chrono::steady_clock::now() + kStartupTimeout;
@@ -637,6 +518,27 @@ validate_status(const grpc::Status &status,
   return evidence;
 }
 
+void read_initial_generations(wire::BinanceMarketDataGatewayService::Stub &stub,
+                              ServingIdentity &identity) {
+  wire::GatewayStatusRequest request;
+  request.set_request_id("production-initial-status");
+  request.set_schema_version(g10::kStatusRequestSchema);
+  wire::GatewayStatusSnapshot response;
+  grpc::ClientContext context;
+  context.set_deadline(std::chrono::system_clock::now() +
+                       std::chrono::seconds{10});
+  const auto status = stub.GetGatewayStatus(&context, request, &response);
+  require(status.ok() && response.markets_size() == 2,
+          "initial two-product status is unavailable");
+  identity.spot_generation = response.markets(0).connection_generation();
+  identity.usdm_generation = response.markets(1).connection_generation();
+  const auto evidence = validate_status(status, response, identity);
+  require(identity.spot_generation != 0U && identity.usdm_generation != 0U &&
+              evidence.schema_valid && evidence.instance_match &&
+              evidence.spot_live && evidence.usdm_live,
+          "initial status does not match the serving process and products");
+}
+
 class ClientCancellation final {
 public:
   ClientCancellation(grpc::ClientContext &spot, grpc::ClientContext &usdm,
@@ -732,13 +634,13 @@ void print_captured_output(std::ostream &stream, std::string_view output) {
 }
 
 int run_acceptance(const Options &options) {
-  auto child = ChildProcess::spawn(options.daemon_path, options.grpc_target);
+  auto child = ChildProcess::spawn(options.daemon_path, options.config_path);
   std::cout << "REAL_DAEMON_PATH=" << options.daemon_path << '\n'
             << "REAL_DAEMON_PID=" << child.pid() << '\n'
             << std::flush;
   bool captured_output_printed = false;
   try {
-    const auto identity = wait_for_serving(child, options.grpc_port);
+    auto identity = wait_for_serving(child, options.grpc_port);
     std::cout << "REAL_DAEMON_SERVING=YES\n"
               << "DAEMON_GATEWAY_INSTANCE_ID=" << identity.gateway_instance_id
               << '\n'
@@ -747,6 +649,7 @@ int run_acceptance(const Options &options) {
     auto stub =
         wire::BinanceMarketDataGatewayService::NewStub(grpc::CreateChannel(
             options.grpc_target, grpc::InsecureChannelCredentials()));
+    read_initial_generations(*stub, identity);
     const auto stream_deadline =
         std::chrono::system_clock::now() + kStreamTimeout;
     grpc::ClientContext spot_context;
@@ -902,7 +805,7 @@ int main(int argc, char **argv) {
     std::cerr << "REAL_PRODUCTION_DAEMON_ACCEPTANCE=FAIL reason="
               << one_line(error.what()) << '\n'
               << "Usage: bmd-gateway-production-acceptance-client "
-                 "--daemon PATH --grpc-target HOST:PORT\n";
+                 "--daemon PATH --config PATH --grpc-target HOST:PORT\n";
     return EXIT_FAILURE;
   }
 }

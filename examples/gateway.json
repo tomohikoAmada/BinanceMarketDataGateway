@@ -1,0 +1,5 @@
+{
+  "grpc_listen": "127.0.0.1:50051",
+  "spot_symbols": ["BTCUSDT", "ETHUSDT"],
+  "usdm_symbols": ["BTCUSDT", "ETHUSDT"]
+}

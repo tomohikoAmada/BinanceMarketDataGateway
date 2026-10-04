@@ -1111,6 +1111,7 @@ if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
             BinanceMarketDataGateway::Foundation
             bmd_gateway_g7_grpc
             bmd_gateway_g11_multi_market_runtime
+            nlohmann_json::nlohmann_json
             Threads::Threads
     )
     bmd_gateway_apply_warnings(bmd_gateway_production)
@@ -1141,7 +1142,7 @@ if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
     target_link_libraries(
         bmd-gateway-production-acceptance-client
         PRIVATE
-            bmd_gateway_g7_grpc
+            bmd_gateway_production
     )
     bmd_gateway_apply_warnings(
         bmd-gateway-production-acceptance-client)
@@ -1151,6 +1152,22 @@ if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
     install(TARGETS bmd-gatewayd RUNTIME DESTINATION bin)
 
     if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_production_acceptance_config_tests
+            tests/production_acceptance_config_tests.cpp
+        )
+        set_target_properties(bmd_gateway_production_acceptance_config_tests
+            PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+        target_include_directories(bmd_gateway_production_acceptance_config_tests
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/app/production_daemon_acceptance)
+        target_link_libraries(bmd_gateway_production_acceptance_config_tests
+            PRIVATE bmd_gateway_production)
+        bmd_gateway_apply_warnings(bmd_gateway_production_acceptance_config_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_production_acceptance_config_tests)
+        add_test(NAME gateway_production_acceptance_config_tests
+                 COMMAND bmd_gateway_production_acceptance_config_tests)
+        set_tests_properties(gateway_production_acceptance_config_tests
+                             PROPERTIES TIMEOUT 10)
+
         add_executable(bmd_gateway_production_tests
             tests/production_gateway_tests.cpp
         )
@@ -1176,6 +1193,30 @@ if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
         add_test(NAME gateway_production_tests
                  COMMAND bmd_gateway_production_tests)
         set_tests_properties(gateway_production_tests PROPERTIES TIMEOUT 30)
+
+        add_executable(bmd_gateway_production_config_metadata_tests
+            tests/production_config_metadata_tests.cpp
+        )
+        set_target_properties(
+            bmd_gateway_production_config_metadata_tests
+            PROPERTIES
+                CXX_STANDARD 20
+                CXX_STANDARD_REQUIRED YES
+                CXX_EXTENSIONS NO
+        )
+        target_link_libraries(
+            bmd_gateway_production_config_metadata_tests
+            PRIVATE
+                bmd_gateway_production
+        )
+        bmd_gateway_apply_warnings(
+            bmd_gateway_production_config_metadata_tests)
+        bmd_gateway_apply_sanitizers(
+            bmd_gateway_production_config_metadata_tests)
+        add_test(NAME gateway_production_config_metadata_tests
+                 COMMAND bmd_gateway_production_config_metadata_tests)
+        set_tests_properties(gateway_production_config_metadata_tests
+                             PROPERTIES TIMEOUT 30)
 
         if(BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION)
             add_executable(bmd_gateway_performance_baseline_tests

@@ -83,7 +83,7 @@ int main(int argc, char **argv) {
       recover_spot = true;
     }
   }
-  auto configured = support::gateway_options(spot_mode);
+  auto configured = support::gateway_products(spot_mode);
   auto trigger_recovery = [state = configured.spot] {
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds{2};
@@ -104,6 +104,7 @@ int main(int argc, char **argv) {
   std::ostream output{&output_buffer};
   configured.gateway.allow_ephemeral_listen_for_testing = false;
   return production::run_production_service(
-      std::get<production::DaemonConfig>(parsed), support::metadata(), signals,
-      output, std::cerr, std::move(configured.gateway));
+      std::get<production::DaemonConfig>(parsed),
+      std::move(configured.specifications), signals, output, std::cerr,
+      std::move(configured.gateway));
 }

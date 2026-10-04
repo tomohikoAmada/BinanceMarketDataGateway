@@ -346,15 +346,12 @@ SpotMetadataResult parse_exchange_info(std::string_view payload) {
   return parse_exchange_info(payload, "BTCUSDT");
 }
 
-DepthFrameResult parse_depth_frame(std::string_view payload,
-                                   g3::ClockSample received_at,
-                                   std::string_view connection_id,
-                                   std::string_view requested_symbol) {
-  const auto decoded = parse_json(payload);
-  if (const auto *failure = std::get_if<ProtocolError>(&decoded)) {
-    return *failure;
-  }
-  const auto &root = std::get<Json>(decoded);
+namespace {
+
+DepthFrameResult parse_depth_object(const Json &root,
+                                    g3::ClockSample received_at,
+                                    std::string_view connection_id,
+                                    std::string_view requested_symbol) {
   if (!spot_stream_symbol(requested_symbol).has_value()) {
     return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
                  "requested Spot symbol cannot be represented by a Binance "
@@ -418,6 +415,20 @@ DepthFrameResult parse_depth_frame(std::string_view payload,
   return update;
 }
 
+} // namespace
+
+DepthFrameResult parse_depth_frame(std::string_view payload,
+                                   g3::ClockSample received_at,
+                                   std::string_view connection_id,
+                                   std::string_view requested_symbol) {
+  const auto decoded = parse_json(payload);
+  if (const auto *failure = std::get_if<ProtocolError>(&decoded)) {
+    return *failure;
+  }
+  return parse_depth_object(std::get<Json>(decoded), received_at, connection_id,
+                            requested_symbol);
+}
+
 DepthFrameResult parse_depth_frame(std::string_view payload,
                                    g3::ClockSample received_at,
                                    std::string_view connection_id) {
@@ -462,9 +473,23 @@ CombinedFrameResult parse_combined_event_frame(
   const auto agg_trade_stream = *stream_symbol + "@aggTrade";
   const auto book_ticker_stream = *stream_symbol + "@bookTicker";
 
+  if (*stream == "!serverShutdown") {
+    const auto event = string_field(*data, "e");
+    if (!event.has_value() || *event != "serverShutdown") {
+      return error(ProtocolErrorCode::WrongEvent, "e",
+                   "server shutdown stream requires a serverShutdown event");
+    }
+    const auto nested =
+        parse_depth_object(*data, received_at, connection_id, requested_symbol);
+    if (const auto *shutdown = std::get_if<ServerShutdown>(&nested)) {
+      return *shutdown;
+    }
+    return std::get<ProtocolError>(nested);
+  }
+
   if (*stream == depth_stream) {
-    const auto nested = parse_depth_frame(data->dump(), received_at,
-                                          connection_id, requested_symbol);
+    const auto nested =
+        parse_depth_object(*data, received_at, connection_id, requested_symbol);
     if (const auto *shutdown = std::get_if<ServerShutdown>(&nested)) {
       return *shutdown;
     }

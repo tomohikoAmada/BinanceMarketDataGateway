@@ -208,6 +208,13 @@ void set_idle_timeout(LocalWebSocketPair::Stream &stream,
          !g4::make_spot_transport_routes("ethusdt").has_value();
 }
 
+[[nodiscard]] bool set_metadata_endpoint_is_full_exchange_info() {
+  const auto endpoint = g4::detail::spot_exchange_info_set_endpoint();
+  return endpoint.host == "api.binance.com" && endpoint.port == "443" &&
+         endpoint.target == "/api/v3/exchangeInfo" &&
+         endpoint.target.find("?symbol=") == std::string::npos;
+}
+
 [[nodiscard]] bool exchange_info_tls_stall_times_out() {
   asio::io_context server_context;
   tcp::acceptor acceptor{server_context, {tcp::v4(), 0U}};
@@ -440,6 +447,9 @@ int main() {
   if (!exact_spot_routes_are_product_bound()) {
     return EXIT_FAILURE;
   }
+  if (!set_metadata_endpoint_is_full_exchange_info()) {
+    return EXIT_FAILURE;
+  }
   if (!exchange_info_tls_stall_times_out()) {
     return EXIT_FAILURE;
   }
@@ -515,6 +525,7 @@ int main() {
   }
   runtime.stop();
   std::cout << "EXCHANGE_INFO_ASYNC_TIMEOUT=PASS\n"
+               "SPOT_SET_METADATA_FULL_EXCHANGE_INFO=PASS\n"
                "WEBSOCKET_IDLE_POLICY=PASS\n"
                "FINAL_ACCEPTANCE_REJECTION=PASS\n"
                "OUTSTANDING_WEBSOCKET_READ_CANCEL=PASS\n"
