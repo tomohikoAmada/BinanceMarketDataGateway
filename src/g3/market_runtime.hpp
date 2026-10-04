@@ -201,15 +201,19 @@ struct RuntimeTestOptions final {
   RuntimeTestOptions(
       bool owner_starts_paused_value = false,
       std::function<void()> admission_enqueued_value = {},
-      std::function<void()> before_admission_processing_value = {})
+      std::function<void()> before_admission_processing_value = {},
+      std::function<void()> before_owner_thread_creation_value = {})
       : owner_starts_paused{owner_starts_paused_value},
         admission_enqueued{std::move(admission_enqueued_value)},
         before_admission_processing{
-            std::move(before_admission_processing_value)} {}
+            std::move(before_admission_processing_value)},
+        before_owner_thread_creation{
+            std::move(before_owner_thread_creation_value)} {}
 
   bool owner_starts_paused;
   std::function<void()> admission_enqueued;
   std::function<void()> before_admission_processing;
+  std::function<void()> before_owner_thread_creation;
 };
 
 // Internal single-product runtime. This header is exposed only by the opt-in

@@ -22,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <variant>
@@ -283,6 +284,35 @@ void product_start_failure_is_exact_and_rolls_back() {
   }
   REQUIRE(spot_state->active.load() == 0U);
   REQUIRE(usdm_state->active.load() == 0U);
+}
+
+void owner_thread_creation_exception_rolls_back_all_products() {
+  auto configured = support::gateway_products();
+  configured.specifications.back()
+      .options.runtime_test.before_owner_thread_creation = [] {
+    throw std::system_error{
+        std::make_error_code(std::errc::resource_unavailable_try_again)};
+  };
+  auto gateway = make_gateway(std::move(configured.specifications),
+                              std::move(configured.gateway));
+  bool caught = false;
+  try {
+    static_cast<void>(gateway.start());
+  } catch (const std::system_error &) {
+    caught = true;
+  }
+  REQUIRE(caught);
+  require_fully_stopped(gateway);
+  REQUIRE(configured.spot->active.load() == 0U);
+  REQUIRE(configured.usdm->active.load() == 0U);
+  REQUIRE(product(gateway, g11::spot_btcusdt_key())
+              .runtime()
+              .observe()
+              .owner_joined);
+  REQUIRE(product(gateway, g11::usdm_btcusdt_key())
+              .runtime()
+              .observe()
+              .owner_joined);
 }
 
 void canonical_first_initial_failure_wins() {
@@ -817,6 +847,8 @@ int main() {
       {"ONE_CONFIGURED_PRODUCT_SERVES", one_configured_product_serves},
       {"PRODUCT_START_FAILURE_EXACT_ROLLBACK",
        product_start_failure_is_exact_and_rolls_back},
+      {"OWNER_THREAD_EXCEPTION_FULL_ROLLBACK",
+       owner_thread_creation_exception_rolls_back_all_products},
       {"INITIAL_SPOT_FAILURE_ROLLBACK", initial_spot_failure_rolls_back},
       {"INITIAL_USDM_FAILURE_ROLLBACK", initial_usdm_failure_rolls_back},
       {"CANONICAL_FIRST_INITIAL_FAILURE_WINS",

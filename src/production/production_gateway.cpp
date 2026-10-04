@@ -87,47 +87,52 @@ ProductionGateway::start(const std::function<bool()> &external_stop_requested) {
     state_ = GatewayState::Starting;
   }
 
-  if (stop_requested(external_stop_requested)) {
-    rollback();
-    return {StartCode::StopRequested, std::nullopt};
-  }
-
-  const auto deadline = startup_now_() + initial_startup_timeout_;
-  const auto starts = products_.start();
-  for (const auto &started : starts) {
-    if (started.result != g5::RecoveryStartResult::Started) {
-      const StartResult result{StartCode::ProductStartFailed, started.key};
+  try {
+    if (stop_requested(external_stop_requested)) {
       rollback();
-      return result;
+      return {StartCode::StopRequested, std::nullopt};
     }
-  }
 
-  const auto initial_result =
-      wait_for_initial_live(external_stop_requested, deadline);
-  if (initial_result.code != StartCode::Serving) {
-    rollback();
-    return initial_result;
-  }
+    const auto deadline = startup_now_() + initial_startup_timeout_;
+    const auto starts = products_.start();
+    for (const auto &started : starts) {
+      if (started.result != g5::RecoveryStartResult::Started) {
+        const StartResult result{StartCode::ProductStartFailed, started.key};
+        rollback();
+        return result;
+      }
+    }
 
-  if (stop_requested(external_stop_requested)) {
-    rollback();
-    return {StartCode::StopRequested, std::nullopt};
-  }
-  if (!server_.start(grpc_listen_address_)) {
-    rollback();
-    return {StartCode::GrpcBindFailed, std::nullopt};
-  }
-  if (stop_requested(external_stop_requested)) {
-    rollback();
-    return {StartCode::StopRequested, std::nullopt};
-  }
+    const auto initial_result =
+        wait_for_initial_live(external_stop_requested, deadline);
+    if (initial_result.code != StartCode::Serving) {
+      rollback();
+      return initial_result;
+    }
 
-  {
-    std::lock_guard state_lock{state_mutex_};
-    state_ = GatewayState::Serving;
+    if (stop_requested(external_stop_requested)) {
+      rollback();
+      return {StartCode::StopRequested, std::nullopt};
+    }
+    if (!server_.start(grpc_listen_address_)) {
+      rollback();
+      return {StartCode::GrpcBindFailed, std::nullopt};
+    }
+    if (stop_requested(external_stop_requested)) {
+      rollback();
+      return {StartCode::StopRequested, std::nullopt};
+    }
+
+    {
+      std::lock_guard state_lock{state_mutex_};
+      state_ = GatewayState::Serving;
+    }
+    state_condition_.notify_all();
+    return {StartCode::Serving, std::nullopt};
+  } catch (...) {
+    rollback();
+    throw;
   }
-  state_condition_.notify_all();
-  return {StartCode::Serving, std::nullopt};
 }
 
 void ProductionGateway::request_stop() noexcept {

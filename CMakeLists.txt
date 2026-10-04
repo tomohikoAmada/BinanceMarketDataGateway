@@ -1142,7 +1142,7 @@ if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
     target_link_libraries(
         bmd-gateway-production-acceptance-client
         PRIVATE
-            bmd_gateway_g7_grpc
+            bmd_gateway_production
     )
     bmd_gateway_apply_warnings(
         bmd-gateway-production-acceptance-client)
@@ -1152,6 +1152,22 @@ if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
     install(TARGETS bmd-gatewayd RUNTIME DESTINATION bin)
 
     if(BMD_GATEWAY_BUILD_TESTS)
+        add_executable(bmd_gateway_production_acceptance_config_tests
+            tests/production_acceptance_config_tests.cpp
+        )
+        set_target_properties(bmd_gateway_production_acceptance_config_tests
+            PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+        target_include_directories(bmd_gateway_production_acceptance_config_tests
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/app/production_daemon_acceptance)
+        target_link_libraries(bmd_gateway_production_acceptance_config_tests
+            PRIVATE bmd_gateway_production)
+        bmd_gateway_apply_warnings(bmd_gateway_production_acceptance_config_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_production_acceptance_config_tests)
+        add_test(NAME gateway_production_acceptance_config_tests
+                 COMMAND bmd_gateway_production_acceptance_config_tests)
+        set_tests_properties(gateway_production_acceptance_config_tests
+                             PROPERTIES TIMEOUT 10)
+
         add_executable(bmd_gateway_production_tests
             tests/production_gateway_tests.cpp
         )
