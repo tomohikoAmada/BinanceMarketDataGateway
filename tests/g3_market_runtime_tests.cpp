@@ -2,10 +2,12 @@
 
 #include <binance_market_data/common/v1/enums.pb.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <exception>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <stdexcept>
 #include <stop_token>
@@ -605,6 +607,99 @@ void timed_recovery_or_deadline_wait() {
   }
 }
 
+void observation_timeout_cancel_and_resume() {
+  g3::MarketRuntime runtime{
+      {8U, 8U}, fixed_clock(), numeric_spec(), g3::RuntimeTestOptions{true}};
+  REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
+  REQUIRE_EQ(runtime.submit_snapshot(make_snapshot()),
+             g3::AdmissionResult::Accepted);
+  const auto started_at = std::chrono::steady_clock::now();
+  REQUIRE(!runtime.observe_until(started_at + std::chrono::milliseconds{20})
+               .has_value());
+  REQUIRE(std::chrono::steady_clock::now() - started_at <
+          std::chrono::seconds{1});
+
+  std::stop_source cancellation;
+  std::jthread cancel{[&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds{20});
+    cancellation.request_stop();
+  }};
+  REQUIRE(!runtime
+               .observe_until(std::chrono::steady_clock::now() +
+                                  std::chrono::hours{1},
+                              cancellation.get_token())
+               .has_value());
+  cancel.join();
+  runtime.release_owner_for_testing();
+  const auto resumed = runtime.observe();
+  REQUIRE_EQ(resumed.processed_ticket, resumed.last_admitted_ticket);
+  REQUIRE_EQ(resumed.state, g3::RuntimeState::AwaitingBridge);
+  runtime.stop();
+  REQUIRE(runtime.observe().owner_joined);
+}
+
+void default_observation_timeout_then_safe_stop() {
+  g3::MarketRuntime runtime{
+      {8U, 8U}, fixed_clock(), numeric_spec(), g3::RuntimeTestOptions{true}};
+  REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
+  REQUIRE_EQ(runtime.submit_snapshot(make_snapshot()),
+             g3::AdmissionResult::Accepted);
+  const auto started_at = std::chrono::steady_clock::now();
+  bool timed_out = false;
+  try {
+    static_cast<void>(runtime.observe());
+  } catch (const std::runtime_error &) {
+    timed_out = true;
+  }
+  REQUIRE(timed_out);
+  REQUIRE(std::chrono::steady_clock::now() - started_at <
+          std::chrono::seconds{2});
+  runtime.stop();
+  REQUIRE(runtime.observe().owner_joined);
+  REQUIRE_EQ(runtime.observe().ingress_occupancy, 0U);
+}
+
+void in_progress_owner_stall_times_out_without_detaching() {
+  std::atomic<bool> block{false};
+  std::promise<void> entered;
+  std::promise<void> release;
+  auto released = release.get_future().share();
+  const auto clock = [&] {
+    if (block.exchange(false)) {
+      entered.set_value();
+      released.wait();
+    }
+    return fixed_clock()();
+  };
+  g3::MarketRuntime runtime{{8U, 8U}, clock, numeric_spec()};
+  bootstrap_live(runtime);
+  block = true;
+  g3::SnapshotResult snapshot;
+  std::jthread capture{[&] { snapshot = runtime.capture_snapshot(); }};
+  std::jthread stopping;
+  {
+    // Release before either thread joins even if an assertion throws.
+    struct Release final {
+      std::promise<void> &promise;
+      ~Release() { promise.set_value(); }
+    } release_on_exit{release};
+    REQUIRE(entered.get_future().wait_for(std::chrono::seconds{1}) ==
+            std::future_status::ready);
+    REQUIRE_EQ(runtime.submit_depth_update(make_update(102U, 102U, "4.000")),
+               g3::AdmissionResult::Accepted);
+    REQUIRE(!runtime
+                 .observe_until(std::chrono::steady_clock::now() +
+                                std::chrono::milliseconds{20})
+                 .has_value());
+    stopping = std::jthread{[&] { runtime.stop(); }};
+  }
+  capture.join();
+  stopping.join();
+  REQUIRE(runtime.observe().owner_joined);
+  REQUIRE_EQ(runtime.observe().ingress_occupancy, 0U);
+  REQUIRE(std::holds_alternative<g3::CapturedSnapshot>(snapshot));
+}
+
 } // namespace
 
 int main() {
@@ -633,6 +728,12 @@ int main() {
        owner_domain_planned_rebootstrap_reset},
       {"PLANNED_RESET_REJECTS_WRONG_STATE", planned_reset_rejects_wrong_state},
       {"TIMED_RECOVERY_OR_DEADLINE_WAIT", timed_recovery_or_deadline_wait},
+      {"OBSERVATION_TIMEOUT_CANCEL_AND_RESUME",
+       observation_timeout_cancel_and_resume},
+      {"DEFAULT_OBSERVATION_TIMEOUT_THEN_SAFE_STOP",
+       default_observation_timeout_then_safe_stop},
+      {"IN_PROGRESS_OWNER_STALL_SAFE_JOIN",
+       in_progress_owner_stall_times_out_without_detaching},
   };
 
   for (const auto &[name, test] : tests) {

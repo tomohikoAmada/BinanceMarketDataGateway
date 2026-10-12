@@ -30,6 +30,7 @@ enum class StatusSnapshotError : std::uint8_t {
   ClockError,
   MonotonicClockRegression,
   InvalidObservation,
+  ObservationTimeout,
 };
 
 using StatusSnapshotResult =
@@ -60,7 +61,10 @@ public:
   [[nodiscard]] bool prepare_start_baseline() noexcept;
   void clear_start_baseline() noexcept;
 
-  [[nodiscard]] StatusSnapshotResult collect() const;
+  [[nodiscard]] StatusSnapshotResult
+  collect(std::chrono::steady_clock::time_point deadline =
+              std::chrono::steady_clock::now() + g3::kObservationTimeout,
+          std::stop_token stop_token = {}) const;
 
 private:
   g3::MarketRuntime *runtime_{nullptr};

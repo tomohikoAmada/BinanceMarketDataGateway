@@ -20,7 +20,9 @@ bmd-gatewayd --config examples/gateway.json
 
 可以只配置其中一个市场；总数必须为 1..8，同一 symbol 的现货和永续是不同产品。symbol 使用币安的精确大写标识，不自动修正大小写，且需要通过 exchangeInfo 交易资格与精度验证。配置变更后重启。
 
-全部配置产品首次同步成功后才开始服务；启动失败会回滚，运行后单个产品故障独立恢复。SIGINT/SIGTERM 会停止订阅和 transport，并清理 owner。进程流式 context 总上限为 48。默认 endpoint 是 loopback，公网部署应使用已有认证保护边界。
+全部配置产品首次同步成功后才开始服务；启动失败会回滚，运行后单个产品故障独立恢复。SIGINT/SIGTERM 会停止订阅和 transport，并清理 owner。进程流式 context 总上限为 48。无认证 gRPC 必须使用数值 loopback（IPv4 127/8 或 IPv6 ::1）；hostname、wildcard 和非 loopback 配置被拒绝。
+
+`GetGatewayStatus` 的 owner 观察最多等待一秒，并遵守更短的客户端 deadline；超时返回 DEADLINE_EXCEEDED。新版 v0.3 G0 的修复/离线验证见 [证据](docs/GATEWAY_G0_V03_EVIDENCE.md)。
 
 提供 `SubscribeOrderBook`、`SubscribeEvents` 和 `GetGatewayStatus`。Spot 事件为 DIFF_DEPTH / AGG_TRADE / BOOK_TICKER，USD-M 事件仅 DIFF_DEPTH。`SubscribeMarketState` 尚未实现。
 

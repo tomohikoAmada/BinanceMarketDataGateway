@@ -712,6 +712,44 @@ void initial_startup_deadline_is_bounded() {
   require_fully_stopped(gateway);
 }
 
+void stalled_owner_does_not_block_startup_timeout_or_stop() {
+  for (const bool cancel : {false, true}) {
+    auto configured = support::gateway_products();
+    configured.specifications[0].options.runtime_test.owner_starts_paused =
+        true;
+    configured.gateway.initial_startup_timeout = std::chrono::milliseconds{30};
+    auto gateway = make_gateway(std::move(configured));
+    const auto started_at = std::chrono::steady_clock::now();
+    const auto result = gateway.start([&] {
+      return cancel && std::chrono::steady_clock::now() - started_at >=
+                           std::chrono::milliseconds{10};
+    });
+    REQUIRE(result.code ==
+            (cancel ? production::StartCode::StopRequested
+                    : production::StartCode::InitialStartupTimeout));
+    REQUIRE(std::chrono::steady_clock::now() - started_at <
+            std::chrono::seconds{1});
+    require_fully_stopped(gateway);
+  }
+}
+
+void constructor_rejects_nonloopback_without_starting_products() {
+  for (const auto address : {"0.0.0.0:50051", "[::]:50051",
+                             "203.0.113.10:50051", "localhost:50051"}) {
+    auto configured = support::gateway_products();
+    const auto state = configured.spot;
+    bool rejected = false;
+    try {
+      auto gateway = make_gateway(std::move(configured), address);
+    } catch (const std::invalid_argument &) {
+      rejected = true;
+    }
+    REQUIRE(rejected);
+    REQUIRE(state->starts.load() == 0U);
+    REQUIRE(state->active.load() == 0U);
+  }
+}
+
 void context_bound_preserved() {
   static_assert(g7::kMaximumGrpcTrackedContexts == 48U);
   auto configured = support::gateway_products();
@@ -864,6 +902,10 @@ int main() {
       {"GRPC_WAITS_FOR_EVERY_PRODUCT_INITIAL_LIVE",
        grpc_waits_for_every_product_initial_live},
       {"INITIAL_STARTUP_DEADLINE_BOUNDED", initial_startup_deadline_is_bounded},
+      {"STALLED_OWNER_STARTUP_TIMEOUT_AND_STOP",
+       stalled_owner_does_not_block_startup_timeout_or_stop},
+      {"CONSTRUCTOR_REJECTS_NONLOOPBACK",
+       constructor_rejects_nonloopback_without_starting_products},
       {"SHARED_DEADLINE_CAPTURED_BEFORE_PRODUCT_START",
        shared_deadline_is_captured_before_product_start},
       {"LATE_INITIAL_LIVE_DOES_NOT_BYPASS_ABSOLUTE_DEADLINE",

@@ -152,6 +152,26 @@ void config_bound() {
   REQUIRE(std::holds_alternative<production::DaemonConfigError>(load(exact)));
 }
 
+void numeric_loopback_only() {
+  const auto config = [](std::string_view endpoint) {
+    return std::string{R"({"grpc_listen":")"} + std::string{endpoint} +
+           R"(","spot_symbols":["BTCUSDT"],"usdm_symbols":[]})";
+  };
+  for (const auto endpoint : {"127.0.0.1:50051", "127.4.3.2:50051",
+                              "[::1]:50051", "[0:0:0:0:0:0:0:1]:50051"}) {
+    REQUIRE(std::holds_alternative<production::DaemonConfig>(
+        load(config(endpoint))));
+  }
+  for (const auto endpoint :
+       {"0.0.0.0:50051", "[::]:50051", "203.0.113.10:50051",
+        "192.168.1.2:50051", "[2001:db8::1]:50051", "localhost:50051",
+        "127.0.0.1.example.com:50051", "127.1:50051", "127.0.0.999:50051",
+        "[::1]:0"}) {
+    REQUIRE(std::holds_alternative<production::DaemonConfigError>(
+        load(config(endpoint))));
+  }
+}
+
 void configuration_identity_and_cardinality() {
   const auto spot_only = require_config(load(
       R"json({"grpc_listen":"127.0.0.1:50051","spot_symbols":["BTCUSDT"],"usdm_symbols":[]})json"));
@@ -332,6 +352,7 @@ int main() {
       {"CONFIG_CLI_CONTRACT", cli_contract},
       {"CONFIG_STRICT_JSON_REJECTIONS", strict_json_rejections},
       {"CONFIG_64_KIB_BOUND", config_bound},
+      {"CONFIG_NUMERIC_LOOPBACK_ONLY", numeric_loopback_only},
       {"CONFIG_IDENTITY_AND_CARDINALITY",
        configuration_identity_and_cardinality},
       {"METADATA_FETCH_COUNTS_AND_PAIRING", metadata_fetch_counts_and_pairing},

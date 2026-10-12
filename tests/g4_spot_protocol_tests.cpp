@@ -1,6 +1,7 @@
 #include "spot_protocol.hpp"
 
 #include <binance_market_data/common/v1/enums.pb.h>
+#include <nlohmann/json.hpp>
 
 #include <cstdint>
 #include <exception>
@@ -432,6 +433,59 @@ void malformed_combined_event_frames() {
       {1U, 2U}, "connection")));
 }
 
+void unrelated_extensions_preserve_strict_fields() {
+  using Json = nlohmann::json;
+  const std::vector<std::pair<std::string_view, std::string_view>> fixtures{
+      {"btcusdt@depth@100ms",
+       R"({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":1,"u":1,"b":[],"a":[]})"},
+      {"btcusdt@aggTrade",
+       R"({"e":"aggTrade","E":1,"s":"BTCUSDT","a":1,"p":"1","q":"1","f":1,"l":1,"T":1,"m":true,"M":true})"},
+      {"btcusdt@bookTicker",
+       R"({"u":1,"s":"BTCUSDT","b":"1","B":"1","a":"2","A":"1"})"},
+      {"!serverShutdown", R"({"e":"serverShutdown","E":1})"}};
+  for (const auto &[stream, payload] : fixtures) {
+    const auto original = Json::parse(payload);
+    auto extended = original;
+    extended["future_extension"] = Json{{"nested", {1, 2, 3}}};
+    const auto frame = [&](const Json &data) {
+      return Json{{"stream", stream},
+                  {"data", data},
+                  {"future_envelope_extension", nullptr}}
+          .dump();
+    };
+    REQUIRE(!std::holds_alternative<g4::ProtocolError>(
+        g4::parse_combined_event_frame(frame(extended), {1U, 2U}, "source")));
+    if (stream == "btcusdt@depth@100ms") {
+      REQUIRE(std::holds_alternative<g4::market::DepthUpdate>(
+          g4::parse_depth_frame(extended.dump(), {1U, 2U}, "source")));
+    }
+    for (const auto &[key, value] : original.items()) {
+      static_cast<void>(value);
+      auto missing = extended;
+      missing.erase(key);
+      REQUIRE(std::holds_alternative<g4::ProtocolError>(
+          g4::parse_combined_event_frame(frame(missing), {1U, 2U}, "source")));
+      auto malformed = extended;
+      malformed[key] = nullptr;
+      REQUIRE(std::holds_alternative<g4::ProtocolError>(
+          g4::parse_combined_event_frame(frame(malformed), {1U, 2U},
+                                         "source")));
+    }
+    if (extended.contains("s")) {
+      extended["s"] = "ETHUSDT";
+      REQUIRE(std::holds_alternative<g4::ProtocolError>(
+          g4::parse_combined_event_frame(frame(extended), {1U, 2U}, "source")));
+    }
+  }
+  auto snapshot = Json::parse(
+      R"({"lastUpdateId":1,"bids":[],"asks":[],"future_extension":true})");
+  REQUIRE(std::holds_alternative<g4::market::ExchangeDepthSnapshot>(
+      g4::parse_depth_snapshot(snapshot.dump(), {1U, 2U}, "request")));
+  snapshot["lastUpdateId"] = "1";
+  REQUIRE(std::holds_alternative<g4::ProtocolError>(
+      g4::parse_depth_snapshot(snapshot.dump(), {1U, 2U}, "request")));
+}
+
 } // namespace
 
 int main() {
@@ -448,6 +502,8 @@ int main() {
       {"STREAM_NAME_AND_SERVER_SHUTDOWN", stream_name_and_server_shutdown},
       {"COMBINED_EVENT_FRAMES", combined_event_frames},
       {"MALFORMED_COMBINED_EVENT_FRAMES", malformed_combined_event_frames},
+      {"UNRELATED_EXTENSIONS_PRESERVE_STRICT_FIELDS",
+       unrelated_extensions_preserve_strict_fields},
   };
 
   for (const auto &[name, test] : tests) {

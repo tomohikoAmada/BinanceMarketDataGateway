@@ -340,14 +340,16 @@ struct FakeAttempts final {
 
 void wait_for_attempt_count(const std::shared_ptr<FakeAttempts> &attempts,
                             std::size_t expected) {
-  for (std::size_t tries = 0U; tries < 200U; ++tries) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds{2};
+  while (std::chrono::steady_clock::now() < deadline) {
     {
       std::lock_guard lock{attempts->mutex};
       if (attempts->states.size() >= expected) {
         return;
       }
     }
-    std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds{1});
   }
   throw TestFailure{"timed out waiting for fake recovery attempt"};
 }

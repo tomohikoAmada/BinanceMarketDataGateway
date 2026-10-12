@@ -1,6 +1,6 @@
 # Gateway architecture
 
-当前开发计划：[docs/MILESTONES.md](docs/MILESTONES.md)。当前实现是支持启动配置的有限产品集合，已经复用 G12-B 的 owner set 和 registry；历史固定双 BTC 是其中一个配置场景。
+当前开发计划：[docs/MILESTONES.md](docs/MILESTONES.md)，依据 2026-10-12 BinanceMarketData v0.3 总计划及 Gateway 模块计划。本轮仅修改新版 G0 的安全、协议兼容、观察等待和测试清理。当前实现是支持启动配置的有限产品集合，已经复用 G12-B 的 owner set 和 registry；历史固定双 BTC 是其中一个配置场景。
 
 ## 职责与依赖
 
@@ -36,6 +36,10 @@ bmd-gatewayd --config PATH
 
 配置严格拒绝未知字段、重复 JSON 字段、同市场重复 symbol、空总集合、超过八个产品和无效 endpoint。任何一个 symbol 的缺失、非交易状态、市场资格或不支持的数值规格都会使启动失败。配置验证不做网络 I/O；metadata 获取独立进行，并受网络阶段超时约束。变更配置需要重启，没有运行时 registry 增删。
 
+无认证 gRPC 只接受数值 IPv4 127/8 或 IPv6 ::1；hostname、wildcard 和非 loopback 均拒绝。配置与直接构造检查非零端口；绑定边界重复校验，内部离线测试可用 loopback port 0。复用已有 Boost 地址解析，不做 DNS，不给 Foundation 加网络依赖。
+
+交易所 JSON 只检查所需字段及已知语义，允许无关扩展对象/数组。Spot depth 的 pu 仍拒绝；USD-M pu 的类型/presence 保持已有 Adapter/Core 边界，Gateway 不增设序列分类器。自身配置的未知字段拒绝与上游协议扩展兼容是不同边界。
+
 八个产品是资源政策，可在新容量证据后调整，不是币安限制。当前使用小集合线性查询和 stable unique_ptr owner；没有通用注册框架或共享多 symbol WebSocket。
 
 ## 并发与生命周期
@@ -43,6 +47,7 @@ bmd-gatewayd --config PATH
 - MarketRuntime 接收完整事件；有界 ingress 与 bootstrap buffer 分离；Projection 的读写、reset、publication 注册都在同一个 owner 上串行执行。对外只交付 owning/copy 数据。
 - owner 线程成功创建后才发布 started 状态。生产 start 遇到返回失败或异常都回滚所有已启动产品。
 - 所有配置产品共享一个首次就绪绝对截止时间；全体 Live/Synchronized 后绑定 gRPC。一个产品未就绪不能放行整体服务。
+- 启动 readiness 对 owner FIFO barrier 做非阻塞观察，未完成就继续已有有界轮询。普通观察最多等待一秒；显式 deadline/stop token 观察返回 optional owning copy，无 mailbox 请求或返回后残留的调用者指针。超时不会伪报 Live。
 - metadata 网络阶段与产品首次同步阶段分别有界，首次同步截止时间不因新增产品或观察到迟到的 Live 而重置。
 - 运行后的产品故障隔离。每产品恢复先 quiesce 旧 transport，再在 owner 上 reset/rebootstrap；同时最多一个 active transport。
 - 计划轮换沿用 23h50m monotonic 策略和 break-before-make；不拼接两条连接的数据。
@@ -55,7 +60,9 @@ bmd-gatewayd --config PATH
 
 每产品 order-book resident 与 Event active 各上限 8；各普通队列 64，另有一个 terminal slot。慢消费者按 session 终止。进程级 TryCancel tracker 总上限 48，与产品数无关；注册/取消握手保护 ServerContext 生命周期。昂贵 unary status 并发上限为一，不占 streaming tracker。status 采用已有 runtime/recovery/publication 观察，没有第二健康框架。
 
-`SubscribeMarketState` 尚未实现。服务直接使用 insecure gRPC，部署在 loopback/可信私网或已有认证保护的代理之后。公开网络认证/TLS 如果成为实际部署需求，再增加专门交付项。
+`GetGatewayStatus` 使用 min(一秒, client deadline) 的整次请求观察预算，多个产品共享同一 deadline；超时返回 DEADLINE_EXCEEDED，关闭服务取消观察。无限 RPC deadline 先在 system_clock 单位内截短再转换，避免 macOS 的时间单位转换溢出。服务 drain 后才销毁产品；正在执行的 owner 操作返回后仍须 join，不强行 detach。
+
+`SubscribeMarketState` 尚未实现。服务直接使用 insecure gRPC，仅绑定数值 loopback。公开网络认证/TLS 如果成为实际部署需求，再增加专门交付项。
 
 ## 构建与历史
 

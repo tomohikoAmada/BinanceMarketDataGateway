@@ -1,66 +1,66 @@
 # Gateway milestone plan
 
-更新日期：2026-10-04。本文是后续开发的当前计划；它替代旧计划中的当前状态、下一阶段和授权描述。旧版保留在 [历史计划](MILESTONES_PRE_REVIEW_2026-10-04.md)，仅用于追溯。设计可以依据代码、官方协议和测试证据调整，不需要服从已经失效的阶段限制。
+更新日期：2026-10-12。当前执行依据是同级 `Milestone Plan` 目录中的
+`01_BinanceMarketData_总体_Milestone_Plan.md` 和 `03_Gateway_Milestone_Plan.md`
+（v0.3）；已阅读该目录全部六份文档。本页记录本仓执行状态与边界。
+历史 G0–G11、G12-A/B/C 已完成，新版 G0–G3 编号不代表重做历史阶段。
+历史链接证明与审查记录保留，不因重新编号改写 PASS/FAIL。
 
-## 模块目标
+## 当前四阶段
 
-做一个以高性能、安全稳定、低延迟、低 CPU 和内存消耗为交付目标的 C++20 币安实时行情网关：用户在启动配置中选择多个现货或 USD-M 永续交易对；Gateway 获取行情、建立订单簿、处理断线与重同步，并通过 gRPC 向下游提供订单簿、原始规范化事件和运行状态。订单簿与序列判断由 Projection 负责，消息与服务定义由 Contracts 负责。Gateway 不保存历史行情，也不依赖 Recorder。这些质量目标需要在明确的硬件、产品数、行情负载和订阅负载下验证，不能仅凭功能完成或测试通过宣称已经达标。
+| v0.3 阶段 | 工作与验收 | 当前状态 |
+| --- | --- | --- |
+| G0：安全、协议兼容与可用性 | G01 数值 loopback；G03 无关 JSON 扩展兼容且身份/类型/序列不放宽；G05 owner 观察/Status/startup 有界且生命周期安全；G10 测试 RAII join/有界同步 | 实现与离线验证完成，待独立复核；[证据](GATEWAY_G0_V03_EVIDENCE.md) |
+| G1：数据语义与最小新鲜度 | USD-M T transaction-time 映射按共同 fixture 修正；最后 Applied Depth 的最小可观察性；不增加 Health 服务或安静市场强制重同步 | 未启动；本轮不改 Wire、不跨仓 |
+| G2：四产品生产路径与最小 CI | Spot BTC/ETH + USD-M BTC/ETH，JSON→metadata→spec→各自 transport/Projection→Book/Event/Status；故障与慢消费者隔离、48 contexts、活动 RPC 退出、失败回滚；Foundation 之外真实 production build/smoke | 未启动；原 M3/G12-D 缺口仍未关闭 |
+| G3：共同负载、API 联合预算与交付 | 批准硬件/负载/CPU/RSS/p99 等现实预算；四产品有界真实行情与同 VPS 共同运行；完成 BMD-RL-01 分市场分窗口预算、离线恢复及授权的低扰动联合观察；只优化实测热点 | 未启动；原 M4/G12-E 质量/交付验收仍未关闭 |
 
-本轮交付范围：1..8 个配置产品，每个产品按 `(venue, market, exact symbol)` 区分，独立连接与恢复；一个共享 gRPC 服务，进程级流式上下文上限 48。八个产品是当前资源边界，不是已经证明的处理容量。Spot 提供 `DIFF_DEPTH`、`AGG_TRADE`、`BOOK_TICKER`，USD-M 提供 `DIFF_DEPTH`；两者均提供订单簿和状态。
+只授权本轮 G0。后续阶段与生产窗口单独安排；本次离线回归既有测试不等于启动 G1/G2，也不构成四产品正式验收。
 
-## 里程碑和验收
+## 保留的实现与设计边界
 
-| 里程碑 | 通俗解释 | 交付物与完成标准 | 状态 |
-| --- | --- | --- | --- |
-| M1：修稳并统一基线 | 先修掉会卡住或无法验收的问题，把可靠版本放到 main | 修复启动异常回滚、验收客户端旧参数、官方 serverShutdown 解析；针对性回归、完整离线测试、三类 sanitizer 和格式检查通过；合并已完成 PR，安全删除已合并远程分支 | 本次合并完成 |
-| M2：用户自选多个交易对 | 改一个配置文件，就能决定接收哪些现货、哪些永续行情 | `--config PATH` 成为唯一生产配置入口；校验重复/未知字段/1..8 边界；为每个配置产品获取并验证 metadata 与精度；全部产品首次 Live 后才服务；启动失败全部回滚，运行后故障按产品隔离 | 实现及针对性离线验证完成；对应 G12-C |
-| M3：证明多个产品互不干扰 | 用可重复的模拟行情证明不会串交易对，一个坏了不会拖垮其他产品 | 通过真实生产组合路径完成 Spot BTC/ETH + USD-M BTC/ETH 四产品验收；覆盖身份、不同精度、订单簿/事件/status 路由、未配置产品拒绝、单产品恢复及终止、慢客户端、48 全局上限、活动订阅退出；让 CI 编译测试生产图与 sanitizer 图；补深簿/突发行情/恢复循环的可重复负载与 Projection 性能评估输入 | 下一阶段；对应 G12-D |
-| M4：性能稳定性、真实行情验证与交付 | 证明延迟和资源消耗符合实际使用预算，压力与恢复下仍正确，再交付真实行情服务 | 先明确硬件/负载/延迟/CPU/RSS预算；完成可重复性能与稳定性验收及有界四产品真实网络验收；定位并修复影响预算的瓶颈，必要时配套优化 Projection；验证正常版本、观察开销、恢复、慢消费者与资源清理；交付可复现构建、配置和部署说明 | M3 完成后；对应 G12-E |
+- Gateway 管 Binance transport、metadata、生命周期、有界 publication 和 gRPC；
+  Contracts 管 wire；Projection 是定点数、order book 和 Spot/USD-M sequence（包括 pu）的唯一权威。无 Recorder 依赖。
+- 复用 ConfiguredProductRuntimeSet 和不可变 registry。每个精确
+  `(venue, market, exact symbol)` 产品独立 owner/private Projection/recovery/transport；
+  1..8 是资源政策，八产品不是已测容量。
+- 启动配置 `bmd-gatewayd --config PATH`，全体首次 Live/Synchronized 才服务。
+  返回失败或异常全部回滚；运行后产品故障隔离；server handler drain 后销毁产品。
+- 保留有界队列、slow-client 隔离、取消 lifetime 握手、source quiescence 和 async-safe 信号。
+  不加 hot reload、共享 multiplexed transport、event bus、DI/plugin、第二分类器或限流 daemon。
+- Spot events 为 DIFF_DEPTH/AGG_TRADE/BOOK_TICKER；USD-M 为 DIFF_DEPTH。
+  Book 为 Projection-Applied；depth Event 为 pre-Projection；session 不跨 source replacement 拼接。
+  SubscribeMarketState 保持 UNIMPLEMENTED。
+- 无认证 gRPC 只绑定数值 loopback；配置未知字段仍拒绝，交易所无关扩展容忍。
+  owner 观察超时返回错误/无结果，不以陈旧状态伪报 Live；仍安全 join，不 detach。
 
-G0–G11、G12-A、G12-B 的已完成实现保留，不重新实现。M1/M2 的本次证据见 [代码审查与验证](CODE_REVIEW_2026-10-04.md)。M3/M4 尚未完成，配置产品上限不能替代四产品验收或容量证据。
+## 按影响范围验证
 
-## M3 的执行顺序
+日常使用一个 production Release build 和必要离线 smoke/重点回归；使用固定 Conan 二进制依赖。
+涉及并发、生命周期、内存或数值边界时做对应 sanitizer/序列回归；里程碑或候选发布做一次完整离线组合与必要 sanitizer。
+本轮 G0 在生产图执行 Release、ASan、UBSan、TSan、格式检查，并保留独立 Foundation 构建。
 
-1. 让四产品测试从 JSON 配置、注入的市场 metadata 和生产 `ProductionGateway` 组合进入，避免只验证内部 owner set。每个产品使用不同数据与精度，确保串路由能被测试发现。
-2. 在同一场景订阅各产品、读取状态，然后只让一个产品恢复/终止，验证其他产品的状态、generation 和输出保持正确；验证慢订阅者终止和全局上下文上限。
-3. 验证带活动 RPC 的 SIGINT/SIGTERM 退出、端口占用、部分启动失败、线程创建异常，确保无残留线程/transport/context。
-4. 补生产 CI。使用固定版本的 Contracts/Projection 构建或缓存依赖，不依赖开发机 Conan 缓存；至少包含生产离线测试、ASan、UBSan、TSan 和格式检查，确保新检查确实编译 runtime，而不是只运行 Foundation。
-5. 复用 Projection 现有 benchmark/replay 和 Gateway instrumentation，准备不同簿深、更新批大小、产品数、订阅数及突发/恢复场景的输入与指标。重点评估 Projection 每批全簿复制和重建的耗时/分配，不先改 API 或替换容器。
-6. 对上游 JSON 的扩展兼容做小范围修正：严格校验必需字段、类型、身份和序列，允许无关扩展字段；自身配置仍拒绝未知字段。以协议测试证明，不增加恢复分类器。
+历史 G1 四包/link/message-lineage proof 只在依赖打包、ABI 或导出边界实质变化时复跑。
+不要求每 PR 冷编全部 Protobuf/gRPC/Boost/Projection/Contracts，不把线上长跑放进普通 PR。
+目前 GitHub CI 仍只覆盖 Foundation；本轮未改 CI，生产 CI 属新版 G2。
 
-完成这一阶段后，再进入 M4；出现影响正确性的缺陷先修复，不为了照搬历史编号跳过必要验证。
+## 质量与交付仍需证明
 
-## 性能、安全与稳定性的验收口径
+高性能、安全稳定、低延迟、低 CPU/RSS 是交付要求；尚无批准的多产品数值预算。
+历史固定双 BTC 性能不能替代四产品生产证据。G2 复用已有 instrumentation/replay 准备可重复负载；
+G3 在固定硬件、簿深、批大小、产品/订阅负载下测延迟分位、CPU/RSS、队列和恢复后的资源清理。
+T5 是 server Write 返回，不代表客户端处理完成；有限窗口不能证明无限时长无泄漏。
 
-- 低延迟：分别统计 WebSocket read 完成到 Projection 应用返回（T3-T0）、到 server Write 返回（T5-T0）的 p50/p95/p99，并观察 ingress 等待（T2-Q）。订单簿和 pre-Projection Event 分别统计；T5 不是客户端处理完成，外部网络延迟不能算作内部优化效果。
-- 低资源：记录进程 CPU、RSS 稳态/峰值/恢复后变化、线程数、队列高水位、Full/慢消费者终止次数；Projection 单独记录每批更新的分配次数/字节及处理耗时。有限运行窗口不能证明无限时长无泄漏。
-- 高性能：在固定行情输入、簿深、批大小和订阅负载下测吞吐与尾延迟；不能用丢弃数据、削弱身份/序列检查或降低异常安全换取更好的数字。
-- 安全稳定：继续验证定点数与数值边界、序列正确、资源有界、generation 隔离、恢复与退出；加入突发行情、慢客户端、反复恢复和分配失败场景的回归。
-- M4 开始先声明目标硬件、负载与可验收数值预算，并区分持续负载和突发负载；预算目前尚未确定。先测基线，再针对达不到预算的路径做小改动，同条件重复比较，达标后才关闭质量验收。
-- 当前使用 instrumented 图定位内部阶段，普通生产图验证实际 CPU/RSS 和外部观测延迟；记录观测开销，不能把开启测量的资源占用当成普通 daemon 的资源占用。
+Projection accepted batch 的全簿复制/重建是待测热点，
+[配套评估](PROJECTION_INTEGRATION_REVIEW_2026-10-04.md)尚未证明它阻碍四产品预算。
+多个产品不需要新增 Projection API；有实际性能/预算依据再在 Projection 单独实施局部优化。
+本轮无跨仓改动或 package repin。
 
-## Projection 的配套工作
+BMD-RL-01 属 G3 的联合交付要求：按 Spot/USD-M 各自窗口列实际 endpoint/参数/weight，
+合并 Recorder 与 Gateway 同启、单断、四产品同时恢复和短 Live 后重复断线的预算。
+保留 429/418/Retry-After 和 fail-closed；先用静态份额/现有进程内机制及必要错峰。
+生产观察须有授权窗口，不主动在真实 Binance 打出限流，不干扰 Recorder 冻结资格。
 
-[配套评估](PROJECTION_INTEGRATION_REVIEW_2026-10-04.md) 已确认 Gateway 生产路径实际调用 Projection；多个产品通过多个独立实例组合，当前无需为多交易对扩展 Projection API。
-
-性能验证必须覆盖 Projection。已确认其 accepted depth batch 会复制整个现有订单簿并构建 candidate，以保持强异常保证；这是重点测量和局部优化候选，尚未证明它是 Gateway 的主瓶颈。若预算或 profiling 指向该路径，在 Projection 仓库实施局部事务更新优化，并用差分/replay、分配失败和完整 Gateway 集成回归证明语义与异常安全不变，再固定新 package revision。保留 Core 单 writer、无网络无线程无系统时钟的边界。
-
-Projection 的旧双 BTC Gateway 描述需要配套文档对齐；当前评估未修改 Projection 仓库，也未升级其依赖。历史 KEEP_STD_MAP 实验不等于禁止任何性能改动，也不证明换容器能解决全簿事务复制。
-
-## M4 的执行边界
-
-先使用四产品、有限运行时间、明确订阅场景；连接失败或平台限制如实记录，不能写成成功。真实行情测试需要区分自然发生的恢复和离线可控故障，不能把没有观察到断线写成恢复已验证。
-
-固定两个 BTC 产品的旧性能基线仅作历史参考。新的四产品数据描述实际测量条件，不承诺 SLA、无限时长内存稳定或八产品容量。只有测量发现实际瓶颈，才进行目标明确、可回归的小优化；优化前后比较相同条件。
-
-## 设计与维护原则
-
-- 每个产品一套 owner、私有 Projection、recovery 和独立 transport；复用现有 `ConfiguredProductRuntimeSet` 与不可变 registry。小集合线性查找足够。
-- Projection 是订单簿和 Spot/USD-M 序列的唯一权威；Gateway 不添加第二分类器，也不复制 Contracts proto。
-- 配置启动时读取，修改后重启。此次目标不包含热加载、自动发现、运行时增删、共享多 symbol WebSocket、存储、通用事件总线、DI 或插件框架。
-- 所有配置产品都必须首次同步成功；后续失败隔离；server handler 先退出，再销毁产品。线程启动失败同样必须完整清理。
-- 保留有界队列、慢客户端隔离、context 生命周期保护和 async-safe 信号处理。它们解决真实资源/并发问题，不属于需要删除的过度防御。
-- 文档与代码冲突时先核对实现与证据，及时修订当前三份文件：本文、CURRENT_STATE、ARCHITECTURE。历史验收记录不改写成当前版本证明。
-- 每个里程碑独立提交和验收，更新证据后推送、合并 main，再删除已合并分支。PR 历史保留；未合并提交先保全。
-
-`SubscribeMarketState` 尚未实现，本轮不将其计入完成范围。如确有消费者需求，再单独定义小的交付项，不宣称完整 V1 服务全部实现。
+历史依据：[2026-10-04 审查](CODE_REVIEW_2026-10-04.md)、
+[旧阶段计划](MILESTONES_PRE_REVIEW_2026-10-04.md)、
+[历史 G0 Foundation](G0_EVIDENCE.md)、[G1 proof](../scripts/g1-candidate-proof.sh)。

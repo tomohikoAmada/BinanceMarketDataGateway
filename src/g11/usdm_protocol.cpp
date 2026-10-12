@@ -57,18 +57,14 @@ string_field(const Json &object, std::string_view name) {
 }
 
 [[nodiscard]] bool
-has_only_keys(const Json &value,
-              std::initializer_list<std::string_view> allowed) {
+has_required_keys(const Json &value,
+                  std::initializer_list<std::string_view> required) {
   if (!value.is_object()) {
     return false;
   }
-  for (auto item = value.begin(); item != value.end(); ++item) {
-    if (std::none_of(allowed.begin(), allowed.end(),
-                     [&item](auto key) { return item.key() == key; })) {
-      return false;
-    }
-  }
-  return true;
+  return std::all_of(required.begin(), required.end(), [&value](auto key) {
+    return value.contains(std::string{key});
+  });
 }
 
 template <typename RepeatedLevels>
@@ -251,7 +247,7 @@ UsdMDepthFrameResult parse_usdm_depth_frame(std::string_view payload,
                  "event type must be a string");
   }
   if (*event == "serverShutdown") {
-    if (!root.is_object() || root.size() != 2U || !root.contains("E")) {
+    if (!has_required_keys(root, {"e", "E"})) {
       return error(g4::ProtocolErrorCode::InvalidShape, "payload",
                    "serverShutdown has an unexpected shape");
     }
@@ -266,10 +262,7 @@ UsdMDepthFrameResult parse_usdm_depth_frame(std::string_view payload,
     return error(g4::ProtocolErrorCode::WrongEvent, "e",
                  "USD-M raw stream payload is not a depthUpdate");
   }
-  if (!has_only_keys(
-          root, {"e", "E", "T", "s", "U", "u", "pu", "b", "a", "ps", "st"}) ||
-      !root.contains("E") || !root.contains("s") || !root.contains("U") ||
-      !root.contains("u") || !root.contains("b") || !root.contains("a")) {
+  if (!has_required_keys(root, {"e", "E", "s", "U", "u", "b", "a"})) {
     return error(g4::ProtocolErrorCode::InvalidShape, "payload",
                  "USD-M depthUpdate has an unexpected shape");
   }
@@ -361,9 +354,7 @@ parse_usdm_depth_snapshot(std::string_view payload, g3::ClockSample received_at,
                  "requested USD-M symbol cannot be represented by a Binance "
                  "route");
   }
-  if (!has_only_keys(root, {"lastUpdateId", "E", "T", "bids", "asks"}) ||
-      !root.contains("lastUpdateId") || !root.contains("bids") ||
-      !root.contains("asks")) {
+  if (!has_required_keys(root, {"lastUpdateId", "bids", "asks"})) {
     return error(g4::ProtocolErrorCode::InvalidShape, "payload",
                  "USD-M depth snapshot has an unexpected shape");
   }
