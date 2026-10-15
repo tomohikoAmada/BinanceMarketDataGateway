@@ -11,12 +11,13 @@ namespace binance_market_data::gateway::production {
 namespace {
 
 [[nodiscard]] bool initial_live(g11::ProductRuntime &product) {
-  const auto recovery = product.recovery().observe();
+  const auto recovery =
+      product.recovery().observe_until(std::chrono::steady_clock::now());
   const auto runtime =
       product.runtime().observe_until(std::chrono::steady_clock::now());
-  return recovery.state == g5::RecoveryState::Live && !recovery.terminal &&
-         recovery.connection_generation >= 1U &&
-         recovery.active_transport_count == 1U && runtime.has_value() &&
+  return recovery.has_value() && recovery->state == g5::RecoveryState::Live &&
+         !recovery->terminal && recovery->connection_generation >= 1U &&
+         recovery->active_transport_count == 1U && runtime.has_value() &&
          runtime->state == g3::RuntimeState::Live &&
          runtime->projection_status ==
              projection::v1::ProjectionStatus::Synchronized &&
@@ -24,11 +25,13 @@ namespace {
 }
 
 [[nodiscard]] bool initial_failure(g11::ProductRuntime &product) {
-  const auto recovery = product.recovery().observe();
+  const auto recovery =
+      product.recovery().observe_until(std::chrono::steady_clock::now());
   const auto runtime =
       product.runtime().observe_until(std::chrono::steady_clock::now());
-  return recovery.terminal || recovery.exhausted ||
-         recovery.state == g5::RecoveryState::Stopped ||
+  return (recovery.has_value() &&
+          (recovery->terminal || recovery->exhausted ||
+           recovery->state == g5::RecoveryState::Stopped)) ||
          (runtime.has_value() && (runtime->state == g3::RuntimeState::Faulted ||
                                   runtime->state == g3::RuntimeState::Stopped));
 }
@@ -43,10 +46,11 @@ observe_products(g11::ConfiguredProductRuntimeSet &products) {
       std::chrono::steady_clock::now() + g3::kObservationTimeout;
   for (const auto &owner : products.products()) {
     const auto runtime = owner->runtime().observe_until(deadline);
-    if (!runtime.has_value()) {
+    const auto recovery = owner->recovery().observe_until(deadline);
+    if (!runtime.has_value() || !recovery.has_value()) {
       throw std::runtime_error{"product owner observation deadline exceeded"};
     }
-    observations.push_back({owner->key(), owner->recovery().observe(), *runtime,
+    observations.push_back({owner->key(), *recovery, *runtime,
                             owner->event_publication().observe()});
   }
   return observations;

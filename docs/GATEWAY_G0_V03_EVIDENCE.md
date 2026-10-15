@@ -4,6 +4,14 @@
 BinanceMarketData v0.3 总计划/Gateway 模块计划中的安全与可用性修复，
 不是 [历史 G0 Foundation](G0_EVIDENCE.md)。已阅读 `Milestone Plan` 全部六份文档。
 
+2026-10-15 独立复核发现并补修 G05：恢复/轮换持 lifecycle gate 等待 owner
+reset 时，原 `recovery.observe()` 仍可能阻塞 Status/startup。新增 recovery
+`observe_until(deadline, stop_token)`，保留 reset/shutdown 的互斥顺序；Status
+与 production 整组观察共用已有 deadline，startup 非阻塞检查 gate。
+回归将 owner 暂停在 planned reset 中，确认 runtime FIFO barrier 已可通过时，
+Status 仍遵守 20ms deadline，并可由 stop token 取消；RAII watchdog 保证失败清理。
+验证结果与独立复核结论将在通过后补记。
+
 ## 基线与去重
 
 开始时工作树干净；`git fetch origin main` 后 main 与 origin/main 均为

@@ -110,9 +110,13 @@ GatewayStatusAssembler::collect(std::chrono::steady_clock::time_point deadline,
       if (!runtime.has_value()) {
         return StatusSnapshotError::ObservationTimeout;
       }
-      markets.push_back(CollectedMarket{
-          entry.key.venue, entry.key.market, entry.key.symbol, *runtime,
-          entry.recovery->observe(), entry.event_publication->observe()});
+      const auto recovery = entry.recovery->observe_until(deadline, stop_token);
+      if (!recovery.has_value()) {
+        return StatusSnapshotError::ObservationTimeout;
+      }
+      markets.push_back(CollectedMarket{entry.key.venue, entry.key.market,
+                                        entry.key.symbol, *runtime, *recovery,
+                                        entry.event_publication->observe()});
     }
   } else
 #endif
@@ -125,9 +129,13 @@ GatewayStatusAssembler::collect(std::chrono::steady_clock::time_point deadline,
     if (!runtime.has_value()) {
       return StatusSnapshotError::ObservationTimeout;
     }
+    const auto recovery = recovery_->observe_until(deadline, stop_token);
+    if (!recovery.has_value()) {
+      return StatusSnapshotError::ObservationTimeout;
+    }
     markets.push_back(CollectedMarket{
         common_wire::VENUE_BINANCE, common_wire::MARKET_SPOT, "BTCUSDT",
-        *runtime, recovery_->observe(), event_publication_->observe()});
+        *runtime, *recovery, event_publication_->observe()});
   }
 
   for (const auto &market : markets) {
