@@ -185,8 +185,22 @@ GatewayStatusAssembler::collect(std::chrono::steady_clock::time_point deadline,
     market->set_market(observation.market);
     market->set_symbol(observation.symbol);
     market->set_state(*mapped_state);
-    if (observation.recovery.last_event_utc_ns.has_value()) {
-      market->set_last_event_utc_ns(*observation.recovery.last_event_utc_ns);
+    // This market status describes the applied order book. Trade/ticker
+    // activity must never make a stalled book appear fresh. Missing source
+    // provenance or an invalidated book leaves the existing optional time
+    // unset.
+    const auto &depth = observation.runtime.last_applied_depth;
+    if (depth.has_value() &&
+        observation.runtime.state == g3::RuntimeState::Live &&
+        observation.runtime.projection_status ==
+            g3::core::ProjectionStatus::Synchronized &&
+        observation.recovery.state == g5::RecoveryState::Live &&
+        observation.recovery.active_transport_count == 1U &&
+        depth->connection_generation ==
+            std::optional<std::uint64_t>{
+                observation.recovery.connection_generation} &&
+        depth->receive_time_utc_ns.has_value()) {
+      market->set_last_event_utc_ns(*depth->receive_time_utc_ns);
     }
     if (observation.recovery.active_transport_count == 1U) {
       market->set_connection_generation(

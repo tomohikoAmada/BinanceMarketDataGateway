@@ -97,6 +97,17 @@ struct IngressObservation final {
   std::size_t capacity;
 };
 
+// Receive time of the last DepthUpdate that Projection actually Applied.
+// Optional source timestamps stay absent; zero is a valid timestamp.
+struct AppliedDepthObservation final {
+  std::optional<std::uint64_t> receive_time_utc_ns;
+  std::optional<std::uint64_t> receive_monotonic_ns;
+  std::optional<std::uint64_t> connection_generation;
+
+  friend bool operator==(const AppliedDepthObservation &,
+                         const AppliedDepthObservation &) = default;
+};
+
 struct RuntimeObservation final {
   RuntimeState state{RuntimeState::Constructed};
   core::ProjectionStatus projection_status{
@@ -105,6 +116,7 @@ struct RuntimeObservation final {
   std::optional<core::GapInfo> last_gap;
   std::optional<core::InstallResult> last_install;
   std::optional<core::ApplyResult> last_apply;
+  std::optional<AppliedDepthObservation> last_applied_depth;
   std::optional<adapter::AdapterError> adapter_error;
   std::optional<FaultReason> fault_reason;
   std::size_t ingress_occupancy{0U};

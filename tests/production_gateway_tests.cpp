@@ -2,6 +2,8 @@
 #include "daemon_runtime.hpp"
 #include "production_metadata.hpp"
 #include "production_test_support.hpp"
+#include "usdm_protocol.hpp"
+#include "usdm_time_fixture.hpp"
 
 #include <binance_market_data/common/v1/enums.pb.h>
 #include <binance_market_data/gateway/v1/gateway_service.grpc.pb.h>
@@ -32,6 +34,7 @@ namespace {
 
 namespace common = binance_market_data::common::v1;
 namespace g3 = binance_market_data::gateway::g3;
+namespace g4 = binance_market_data::gateway::g4;
 namespace g5 = binance_market_data::gateway::g5;
 namespace g7 = binance_market_data::gateway::g7;
 namespace g9 = binance_market_data::gateway::g9;
@@ -877,11 +880,92 @@ void cli_is_fixed_and_fail_closed() {
       production::parse_daemon_config(3, invalid_argv)));
 }
 
+void contracts_c0_time_reaches_projection_and_both_grpc_streams() {
+  namespace fixtures = binance_market_data::gateway::test_support;
+  auto gateway = make_gateway(support::gateway_products());
+  REQUIRE(gateway.start().code == production::StartCode::Serving);
+  auto stub = stub_for(gateway.observe());
+  grpc::ClientContext book_context;
+  grpc::ClientContext event_context;
+  book_context.set_deadline(std::chrono::system_clock::now() +
+                            std::chrono::seconds{3});
+  event_context.set_deadline(std::chrono::system_clock::now() +
+                             std::chrono::seconds{3});
+  auto book = stub->SubscribeOrderBook(
+      &book_context, book_request(common::MARKET_USD_M_PERPETUAL, "c0-book"));
+  auto events = stub->SubscribeEvents(
+      &event_context,
+      event_request(common::MARKET_USD_M_PERPETUAL, "c0-event"));
+  wire::OrderBookStreamItem book_item;
+  wire::GatewayEventEnvelope event_item;
+  REQUIRE(book->Read(&book_item) && book_item.has_subscription_accepted());
+  REQUIRE(book->Read(&book_item) && book_item.has_snapshot());
+  REQUIRE(events->Read(&event_item) && event_item.has_subscription_accepted());
+  const auto fixture = fixtures::usdm_time_fixture();
+  auto &usdm = product(gateway, g11::usdm_btcusdt_key());
+  const auto spot_before = product(gateway, g11::spot_btcusdt_key())
+                               .runtime()
+                               .observe()
+                               .last_applied_depth;
+  std::uint64_t final_id = 101U;
+  for (const auto &test_case : fixture.at("cases")) {
+    auto source = fixtures::source_case(fixture, test_case);
+    // Continue the existing synthetic Live baseline; the time oracle is
+    // unchanged.
+    source["pu"] = final_id;
+    source["U"] = ++final_id;
+    source["u"] = final_id;
+    source["b"] = nlohmann::json::array({{"100.00", "3.000"}});
+    source["a"] = nlohmann::json::array({{"101.00", "0.000"}});
+    const auto received = g3::ClockSample{1000U + final_id, 2000U + final_id};
+    auto parsed =
+        g11::parse_usdm_depth_frame(source.dump(), received, "usdm-test-g1");
+    REQUIRE(std::holds_alternative<g11::market::DepthUpdate>(parsed));
+    const auto update = std::get<g11::market::DepthUpdate>(std::move(parsed));
+    REQUIRE(usdm.event_publication().publish(
+                std::make_shared<const g4::NormalizedMarketEvent>(update),
+                1U) == g9::EventPublishResult::Published);
+    REQUIRE(usdm.runtime().submit_depth_update(update, {1U}) ==
+            g3::AdmissionResult::Accepted);
+    const auto applied = usdm.runtime().observe();
+    REQUIRE(applied.last_apply->disposition ==
+            projection::ApplyDisposition::Applied);
+    REQUIRE(applied.last_applied_depth->receive_time_utc_ns == received.utc_ns);
+    REQUIRE(applied.last_applied_depth->receive_monotonic_ns ==
+            received.monotonic_ns);
+    REQUIRE(book->Read(&book_item) && book_item.has_depth_update());
+    REQUIRE(events->Read(&event_item) && event_item.has_depth_update());
+    REQUIRE(book_item.depth_update().SerializeAsString() ==
+            update.SerializeAsString());
+    REQUIRE(event_item.depth_update().SerializeAsString() ==
+            update.SerializeAsString());
+    REQUIRE(!book_item.depth_update().metadata().has_exchange_trade_time_ms());
+    REQUIRE(book_item.delivery_metadata().connection_generation() == 1U);
+    REQUIRE(event_item.delivery_metadata().connection_generation() == 1U);
+  }
+  REQUIRE(product(gateway, g11::spot_btcusdt_key())
+              .runtime()
+              .observe()
+              .last_applied_depth == spot_before);
+  book_context.TryCancel();
+  event_context.TryCancel();
+  while (book->Read(&book_item)) {
+  }
+  while (events->Read(&event_item)) {
+  }
+  static_cast<void>(book->Finish());
+  static_cast<void>(events->Finish());
+  gateway.stop();
+  require_fully_stopped(gateway);
+}
+
 } // namespace
 
 int main() {
   const std::vector<std::pair<std::string_view, std::function<void()>>> tests{
       {"NORMAL_PRODUCTION_START_STOP", normal_start_stop},
+      {"CONTRACTS_C0_TIME_PROJECTION_GRPC",
+       contracts_c0_time_reaches_projection_and_both_grpc_streams},
       {"ONE_CONFIGURED_PRODUCT_SERVES", one_configured_product_serves},
       {"PRODUCT_START_FAILURE_EXACT_ROLLBACK",
        product_start_failure_is_exact_and_rolls_back},

@@ -1,4 +1,5 @@
 #include "usdm_protocol.hpp"
+#include "usdm_time_fixture.hpp"
 
 #include <binance_market_data/common/v1/enums.pb.h>
 #include <nlohmann/json.hpp>
@@ -172,7 +173,10 @@ void diff_depth_present_and_absent_pu() {
   REQUIRE_EQ(update.metadata().symbol(), "BTCUSDT");
   REQUIRE_EQ(update.metadata().stream(), common_wire::STREAM_DIFF_DEPTH);
   REQUIRE_EQ(update.metadata().exchange_event_time_ms(), 1770000000001ULL);
-  REQUIRE_EQ(update.metadata().exchange_trade_time_ms(), 1770000000000ULL);
+  REQUIRE(update.metadata().has_exchange_transaction_time_ms());
+  REQUIRE_EQ(update.metadata().exchange_transaction_time_ms(),
+             1770000000000ULL);
+  REQUIRE(!update.metadata().has_exchange_trade_time_ms());
   REQUIRE_EQ(update.first_update_id(), 501U);
   REQUIRE_EQ(update.final_update_id(), 504U);
   REQUIRE(update.has_previous_final_update_id());
@@ -371,6 +375,69 @@ void extensions_do_not_bypass_projection_sequence_checks() {
   }
 }
 
+void contracts_c0_source_time_oracle() {
+  namespace fixtures = binance_market_data::gateway::test_support;
+  const auto fixture = fixtures::usdm_time_fixture();
+  for (const auto &test_case : fixture.at("cases")) {
+    const auto source = fixtures::source_case(fixture, test_case);
+    const auto parsed =
+        g11::parse_usdm_depth_frame(source.dump(), {10U, 20U}, "c0-source");
+    REQUIRE(std::holds_alternative<g11::market::DepthUpdate>(parsed));
+    const auto &update = std::get<g11::market::DepthUpdate>(parsed);
+    const auto &metadata = update.metadata();
+    const auto &expected = test_case.at("expected_metadata");
+    REQUIRE_EQ(metadata.exchange_event_time_ms(),
+               expected.at("exchange_event_time_ms").get<std::uint64_t>());
+    REQUIRE(!metadata.has_exchange_trade_time_ms());
+    REQUIRE_EQ(metadata.has_exchange_transaction_time_ms(),
+               !expected.at("exchange_transaction_time_ms").is_null());
+    if (metadata.has_exchange_transaction_time_ms()) {
+      REQUIRE_EQ(
+          metadata.exchange_transaction_time_ms(),
+          expected.at("exchange_transaction_time_ms").get<std::uint64_t>());
+    }
+    REQUIRE_EQ(update.first_update_id(), 2001U);
+    REQUIRE_EQ(update.final_update_id(), 2003U);
+    REQUIRE_EQ(update.previous_final_update_id(), 1999U);
+    REQUIRE_EQ(update.bids(0).price(), "29600.00");
+    REQUIRE_EQ(update.bids(0).quantity(), "3.00000000");
+    REQUIRE_EQ(update.asks(0).quantity(), "0.00000000");
+    g11::market::DepthUpdate decoded;
+    REQUIRE(decoded.ParseFromString(update.SerializeAsString()));
+    REQUIRE_EQ(decoded.metadata().SerializeAsString(),
+               metadata.SerializeAsString());
+    for (const auto &wrong : fixture.at("invalid_metadata")) {
+      if (metadata.has_exchange_transaction_time_ms() &&
+          metadata.exchange_transaction_time_ms() != 0U) {
+        REQUIRE(wrong != expected);
+      }
+    }
+    nlohmann::json snapshot{{"lastUpdateId", 2000U},
+                            {"bids", source.at("b")},
+                            {"asks", source.at("a")}};
+    if (source.contains("T")) {
+      snapshot["T"] = source.at("T");
+    }
+    const auto baseline = g11::parse_usdm_depth_snapshot(
+        snapshot.dump(), {10U, 20U}, "c0-request");
+    REQUIRE(
+        std::holds_alternative<g11::market::ExchangeDepthSnapshot>(baseline));
+    const auto &book = std::get<g11::market::ExchangeDepthSnapshot>(baseline);
+    REQUIRE_EQ(book.has_exchange_transaction_time_ms(),
+               metadata.has_exchange_transaction_time_ms());
+    REQUIRE_EQ(book.exchange_transaction_time_ms(),
+               metadata.exchange_transaction_time_ms());
+  }
+  for (const auto &patch : fixture.at("invalid_source_patches")) {
+    auto source = fixture.at("raw");
+    source.update(patch);
+    const auto parsed =
+        g11::parse_usdm_depth_frame(source.dump(), {10U, 20U}, "c0-source");
+    REQUIRE(std::holds_alternative<g4::ProtocolError>(parsed));
+    REQUIRE_EQ(std::get<g4::ProtocolError>(parsed).field, "T");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -380,6 +447,7 @@ int main() {
       {"EXACT_SYMBOL_METADATA_SELECTION", exact_symbol_metadata_selection},
       {"EXCHANGEINFO_FILTER_VALIDATION", exchange_info_filter_validation},
       {"DIFF_DEPTH_PRESENT_AND_ABSENT_PU", diff_depth_present_and_absent_pu},
+      {"CONTRACTS_C0_SOURCE_TIME_ORACLE", contracts_c0_source_time_oracle},
       {"EXACT_SYMBOL_EVENTS_AND_SNAPSHOT_IDENTITY",
        exact_symbol_events_and_snapshot_identity},
       {"DIFF_DEPTH_HAS_NO_PRIOR_U_CLASSIFIER",

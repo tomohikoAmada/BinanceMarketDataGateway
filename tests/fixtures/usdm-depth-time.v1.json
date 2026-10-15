@@ -1,0 +1,103 @@
+{
+  "fixture_version": "contracts-c0.usdm-depth-time.v1",
+  "source_checked_on": "2026-10-12",
+  "source_url": "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams/public#diff-book-depth-streams",
+  "raw": {
+    "e": "depthUpdate",
+    "E": 1690000002007,
+    "T": 1690000002000,
+    "s": "BTCUSDT",
+    "ps": "BTCUSDT",
+    "st": 1,
+    "U": 2001,
+    "u": 2003,
+    "pu": 1999,
+    "b": [
+      [
+        "29600.00",
+        "3.00000000"
+      ]
+    ],
+    "a": [
+      [
+        "29601.00",
+        "0.00000000"
+      ]
+    ]
+  },
+  "expected_metadata": {
+    "exchange_event_time_ms": 1690000002007,
+    "exchange_transaction_time_ms": 1690000002000,
+    "exchange_trade_time_ms": null
+  },
+  "cases": [
+    {
+      "name": "distinct-event-and-transaction-time",
+      "source_patch": {},
+      "remove_source_fields": [],
+      "expected_metadata": {
+        "exchange_event_time_ms": 1690000002007,
+        "exchange_transaction_time_ms": 1690000002000,
+        "exchange_trade_time_ms": null
+      }
+    },
+    {
+      "name": "present-zero-transaction-time",
+      "source_patch": {
+        "T": 0
+      },
+      "remove_source_fields": [],
+      "expected_metadata": {
+        "exchange_event_time_ms": 1690000002007,
+        "exchange_transaction_time_ms": 0,
+        "exchange_trade_time_ms": null
+      }
+    },
+    {
+      "name": "absent-transaction-time",
+      "source_patch": {},
+      "remove_source_fields": [
+        "T"
+      ],
+      "expected_metadata": {
+        "exchange_event_time_ms": 1690000002007,
+        "exchange_transaction_time_ms": null,
+        "exchange_trade_time_ms": null
+      }
+    }
+  ],
+  "invalid_source_patches": [
+    {
+      "T": -1
+    },
+    {
+      "T": "1690000002000"
+    },
+    {
+      "T": true
+    },
+    {
+      "T": null
+    },
+    {
+      "T": 18446744073709551616
+    }
+  ],
+  "invalid_metadata": [
+    {
+      "exchange_event_time_ms": 1690000002007,
+      "exchange_transaction_time_ms": null,
+      "exchange_trade_time_ms": 1690000002000
+    },
+    {
+      "exchange_event_time_ms": 1690000002007,
+      "exchange_transaction_time_ms": 1690000002007,
+      "exchange_trade_time_ms": null
+    },
+    {
+      "exchange_event_time_ms": 1690000002007,
+      "exchange_transaction_time_ms": 1690000002000,
+      "exchange_trade_time_ms": 1690000002000
+    }
+  ]
+}

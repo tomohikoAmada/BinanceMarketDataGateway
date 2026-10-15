@@ -1,6 +1,6 @@
 # Gateway milestone plan
 
-更新日期：2026-10-12。当前执行依据是同级 `Milestone Plan` 目录中的
+更新日期：2026-10-15。当前执行依据是同级 `Milestone Plan` 目录中的
 `01_BinanceMarketData_总体_Milestone_Plan.md` 和 `03_Gateway_Milestone_Plan.md`
 （v0.3）；已阅读该目录全部六份文档。本页记录本仓执行状态与边界。
 历史 G0–G11、G12-A/B/C 已完成，新版 G0–G3 编号不代表重做历史阶段。
@@ -10,12 +10,12 @@
 
 | v0.3 阶段 | 工作与验收 | 当前状态 |
 | --- | --- | --- |
-| G0：安全、协议兼容与可用性 | G01 数值 loopback；G03 无关 JSON 扩展兼容且身份/类型/序列不放宽；G05 owner 观察/Status/startup 有界且生命周期安全；G10 测试 RAII join/有界同步 | 实现与离线验证完成，待独立复核；[证据](GATEWAY_G0_V03_EVIDENCE.md) |
-| G1：数据语义与最小新鲜度 | USD-M T transaction-time 映射按共同 fixture 修正；最后 Applied Depth 的最小可观察性；不增加 Health 服务或安静市场强制重同步 | 未启动；本轮不改 Wire、不跨仓 |
+| G0：安全、协议兼容与可用性 | G01 数值 loopback；G03 无关 JSON 扩展兼容且身份/类型/序列不放宽；G05 owner 观察/Status/startup 有界且生命周期安全；G10 测试 RAII join/有界同步 | 完成；2026-10-15 独立复核补修 reset gate 观察，PR #35 已合并；[证据](GATEWAY_G0_V03_EVIDENCE.md) |
+| G1：数据语义与最小新鲜度 | USD-M T transaction-time 映射按共同 fixture 修正；最后 Applied Depth 的最小可观察性；不增加 Health 服务或安静市场强制重同步 | 2026-10-15 用户授权实现中；沿用现有 Wire 和依赖 pin |
 | G2：四产品生产路径与最小 CI | Spot BTC/ETH + USD-M BTC/ETH，JSON→metadata→spec→各自 transport/Projection→Book/Event/Status；故障与慢消费者隔离、48 contexts、活动 RPC 退出、失败回滚；Foundation 之外真实 production build/smoke | 未启动；原 M3/G12-D 缺口仍未关闭 |
 | G3：共同负载、API 联合预算与交付 | 批准硬件/负载/CPU/RSS/p99 等现实预算；四产品有界真实行情与同 VPS 共同运行；完成 BMD-RL-01 分市场分窗口预算、离线恢复及授权的低扰动联合观察；只优化实测热点 | 未启动；原 M4/G12-E 质量/交付验收仍未关闭 |
 
-只授权本轮 G0。后续阶段与生产窗口单独安排；本次离线回归既有测试不等于启动 G1/G2，也不构成四产品正式验收。
+2026-10-15 用户授权完成 G1，并独立复核待审分支。G2/G3 与生产窗口仍单独安排；G1 离线回归既有测试不构成四产品正式验收。
 
 ## 保留的实现与设计边界
 
