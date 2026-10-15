@@ -1,10 +1,11 @@
 # Gateway G1 v0.3 — 2026-10-15
 
-状态：实现完成，离线验证和独立复核进行中。已阅读同级 Milestone Plan 全部六份文档，
+状态：2026-10-16 完成实现、离线验证和独立复核。已阅读同级 Milestone Plan 全部六份文档，
 依据总计划 BMD-1 和 Gateway G1；新版 G2/G3 尚未启动。
 
 基线：G0 PR #35 merge `e4de33b`（含复核修复 `29e7baa`）。G1 使用全新子代理
 独立审查；移除其发现的同步日志阻塞路径后，最终复核无待修复发现。
+实现提交 `f2c4048`；交付 [PR #36](https://github.com/tomohikoAmada/BinanceMarketDataGateway/pull/36)。
 
 ## 实现与边界
 
@@ -55,16 +56,25 @@ PR #35 的 `df8a7e2` 发现 recovery lifecycle gate 等 owner reset 时，旧 re
 本机证据：`build/v03-g0/review-fix-ctest.log`、
 `build/v03-g0-independent-review-20261015/repro-after-fix.log`。
 
-## 构建与结果（待完成后填写）
+## 构建与结果
 
 复用固定 `build/g7-conan/conan_toolchain.cmake` 二进制依赖，显式 production daemon、
 历史 G2 synthetic 与 G8 integration 开关，测试全开；未冷构建上游、未重做历史 G1 proof。
-Release、相关 sanitizer、Foundation 与格式检查的精确结果将在运行后记录。
 所有 runtime 验证均为本机离线/loopback，未连接 Binance 行情或访问 VPS。
 
-已完成：production Release 全图 22/22（4.11s），独立 Foundation 1/1（0.08s），
-`scripts/format-check.sh` 和 `git diff --check` 通过。各日志在 ignored `build/v03-g1/`。
-ASan+UBSan、TSan 全 production 图及重点重复检查进行中。
+macOS arm64 / AppleClang 21.0.0 / CMake 4.3.2 / clang-format 22.1.8。
+
+| 检查 | 结果 | ignored 本机日志 |
+| --- | --- | --- |
+| Release production 全图（含 bmd-gatewayd） | 22/22，4.11s | `build/v03-g1/release-ctest.log` |
+| ASan+UBSan production 全图 | 22/22，16.60s | `build/v03-g1/asan-ubsan-ctest.log` |
+| TSan production 全图 | 22/22，34.67s | `build/v03-g1/tsan-ctest.log` |
+| G10 status / G10 gRPC / G11 routing / production 重复 | 每组十次，共四十次，全部通过 | `build/v03-g1/repeat-ctest.log` |
+| 独立 Foundation Release | 1/1，0.08s | `build/v03-g1/foundation-ctest.log` |
+| scripts/format-check.sh / git diff --check | 通过 | `build/v03-g1/format-check.log` |
+
+G1 最终独立子代理复核无待修复发现。历史 G10 时间语义替换在 README、架构、当前状态、
+里程碑及外部总/Gateway 计划中明确记录；G2/G3 未启动。各 configure/build 日志同目录保留。
 
 复现命令：
 

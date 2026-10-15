@@ -90,6 +90,9 @@ git diff --check
 
 ## 完成边界
 
+下段保留 2026-10-12 初次 G0 交付范围；2026-10-16 G1 已完成的当前状态见
+[CURRENT_STATE](CURRENT_STATE.md) 和 [G1 证据](GATEWAY_G1_V03_EVIDENCE.md)。
+
 仅 G01/G03/G05/G10 测试清理。新版 G1/G2/G3 未启动；USD-M T 映射/depth freshness、
 四产品正式 acceptance、production CI、API 联合预算和性能/VPS 资格仍留在相应后续阶段。
 无跨仓修改、无 production VPS 访问、无 Recorder 操作、无真实 Binance 行情连接。

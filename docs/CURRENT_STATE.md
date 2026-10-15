@@ -1,6 +1,6 @@
 # Current Gateway state
 
-更新日期：2026-10-15。执行 BinanceMarketData v0.3 总计划及 Gateway 模块计划；G0 独立复核发现的 reset 观察等待已补修，G1 时间映射与 Depth 新鲜度正在实现和验证。当前导航见 [MILESTONES](MILESTONES.md)，G0 证据见 [G0 v0.3](GATEWAY_G0_V03_EVIDENCE.md)。旧阶段编号及 [2026-10-04 审查](CODE_REVIEW_2026-10-04.md)仅作实现/修复历史，不与新版 G0 混同。
+更新日期：2026-10-16。执行 BinanceMarketData v0.3 总计划及 Gateway 模块计划；G0 reset 观察补修已复核合并，G1 时间映射与 Depth 新鲜度已完成实现、离线验证及独立复核。当前导航见 [MILESTONES](MILESTONES.md)，证据见 [G0 v0.3](GATEWAY_G0_V03_EVIDENCE.md) 和 [G1 v0.3](GATEWAY_G1_V03_EVIDENCE.md)。旧阶段编号及 [2026-10-04 审查](CODE_REVIEW_2026-10-04.md)仅作实现/修复历史，不与新版 G0 混同。
 
 ```text
 G0_THROUGH_G11=COMPLETE
@@ -10,7 +10,7 @@ G12-C=COMPLETE
 M1_REVIEW_AND_BASELINE=COMPLETE
 M2_CONFIGURED_PRODUCTION=IMPLEMENTED_OFFLINE_VERIFIED
 V03_G0=COMPLETE_REVIEWED_MERGED
-V03_G1=IN_PROGRESS
+V03_G1=COMPLETE_OFFLINE_VERIFIED_REVIEWED
 V03_G2=NOT_STARTED
 V03_G3=NOT_STARTED
 M3_FOUR_PRODUCT_ACCEPTANCE_AND_PRODUCTION_CI=NOT_COMPLETE_V03_G2_SCOPE
@@ -38,6 +38,14 @@ EIGHT_PRODUCT_CAPACITY=NOT_ESTABLISHED
 生产入口已有 JSON 配置、按市场获取 metadata、逐产品数值规格解析、可配置产品组合、共享首次就绪截止时间、启动回滚和独立恢复。没有固定 BTCUSDT allowlist；普通路由当前支持精确的大写 ASCII 字母/数字 symbol，仍必须通过币安 metadata 验证，不能据此宣称支持币安任意 Unicode symbol。
 
 已有 gRPC：两个市场的 `SubscribeOrderBook`；Spot 的三类事件与 USD-M 的深度事件；动态产品列表的 `GetGatewayStatus`。`SubscribeMarketState` 未实现。每产品 order-book 与 Event admission 各最多 8，普通队列容量各 64；进程 tracked streaming context 总上限 48。
+
+G1 修正 USD-M Depth `T` 为 transaction-time，trade-time 留空，零/缺失 presence 保持。
+owner 独立记录最后 Applied Depth（UTC/monotonic/provenance），重复/缓冲/Gap 不刷新，reset 清除。
+从本版起 Status `markets[].last_event_utc_ns` 明确收窄为当前有效 generation 最后 Applied
+Depth receive UTC；缺少来源/时间或簿失效时 absent。历史任意流活跃时间仍内部保留，
+不再由此 RPC 表达。客户端须检查墙钟回退；本轮提供时间证据，不承诺 age/SLA。
+没有新 Wire/服务/线程或安静市场自动重同步。共同 fixture、真实 parser→Projection→
+loopback Book/Event/Status、sanitizer 与独立审查已通过，四产品/VPS 验收仍留后续阶段。
 
 四产品配置示例见 [examples/gateway.json](../examples/gateway.json)。配置范围的离线检查已实现，完整四产品生产组合、CI runtime 覆盖及真实行情验收属新版 G2/G3（原 M3/M4），尚未完成。历史固定双 BTC 的真实验收和性能基线不能直接作为此版本多产品验收或容量证明。
 
