@@ -53,6 +53,8 @@ struct ClockSample final {
 
 using RuntimeClock = std::function<ClockSample()>;
 
+inline constexpr auto kObservationTimeout = std::chrono::seconds{1};
+
 enum class RuntimeState : std::uint8_t {
   Constructed,
   Buffering,
@@ -257,9 +259,15 @@ public:
   [[nodiscard]] AdmissionResult submit_transport_failure();
   [[nodiscard]] AdmissionResult submit_snapshot_failure();
 
-  // Both operations establish a FIFO barrier behind all earlier admitted
-  // source events. Returned Projection-derived state is an owning copy.
+  // Observations establish a FIFO barrier behind earlier admitted events and
+  // return owning copies. Timeout/cancellation never reports stale Live state.
+  // observe() throws on timeout; observe_until() returns nullopt. Neither
+  // queues a request or retains caller memory after returning.
   [[nodiscard]] RuntimeObservation observe();
+  [[nodiscard]] std::optional<RuntimeObservation>
+  observe_until(std::chrono::steady_clock::time_point deadline,
+                std::stop_token stop_token = {});
+  // Snapshot capture is a distinct owner mailbox operation.
   [[nodiscard]] SnapshotResult capture_snapshot();
 
   // G7 request admission is serialized onto the Projection owner through a

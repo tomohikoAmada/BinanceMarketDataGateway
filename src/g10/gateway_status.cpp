@@ -98,16 +98,25 @@ void GatewayStatusAssembler::clear_start_baseline() noexcept {
   start_baseline_monotonic_ns_.reset();
 }
 
-StatusSnapshotResult GatewayStatusAssembler::collect() const {
+StatusSnapshotResult
+GatewayStatusAssembler::collect(std::chrono::steady_clock::time_point deadline,
+                                std::stop_token stop_token) const {
   std::vector<CollectedMarket> markets;
 #if defined(BMD_GATEWAY_G11_ENABLED)
   if (registry_ != nullptr) {
     markets.reserve(registry_->entries().size());
     for (const auto &entry : registry_->entries()) {
-      markets.push_back(
-          CollectedMarket{entry.key.venue, entry.key.market, entry.key.symbol,
-                          entry.runtime->observe(), entry.recovery->observe(),
-                          entry.event_publication->observe()});
+      const auto runtime = entry.runtime->observe_until(deadline, stop_token);
+      if (!runtime.has_value()) {
+        return StatusSnapshotError::ObservationTimeout;
+      }
+      const auto recovery = entry.recovery->observe_until(deadline, stop_token);
+      if (!recovery.has_value()) {
+        return StatusSnapshotError::ObservationTimeout;
+      }
+      markets.push_back(CollectedMarket{entry.key.venue, entry.key.market,
+                                        entry.key.symbol, *runtime, *recovery,
+                                        entry.event_publication->observe()});
     }
   } else
 #endif
@@ -116,10 +125,17 @@ StatusSnapshotResult GatewayStatusAssembler::collect() const {
         event_publication_ == nullptr) {
       return StatusSnapshotError::InvalidObservation;
     }
-    markets.push_back(CollectedMarket{common_wire::VENUE_BINANCE,
-                                      common_wire::MARKET_SPOT, "BTCUSDT",
-                                      runtime_->observe(), recovery_->observe(),
-                                      event_publication_->observe()});
+    const auto runtime = runtime_->observe_until(deadline, stop_token);
+    if (!runtime.has_value()) {
+      return StatusSnapshotError::ObservationTimeout;
+    }
+    const auto recovery = recovery_->observe_until(deadline, stop_token);
+    if (!recovery.has_value()) {
+      return StatusSnapshotError::ObservationTimeout;
+    }
+    markets.push_back(CollectedMarket{
+        common_wire::VENUE_BINANCE, common_wire::MARKET_SPOT, "BTCUSDT",
+        *runtime, *recovery, event_publication_->observe()});
   }
 
   for (const auto &market : markets) {

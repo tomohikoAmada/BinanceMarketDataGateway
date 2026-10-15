@@ -183,6 +183,9 @@ public:
   [[nodiscard]] RecoveryStartResult start();
   void stop() noexcept;
   [[nodiscard]] RecoveryObservation observe() const;
+  [[nodiscard]] std::optional<RecoveryObservation>
+  observe_until(std::chrono::steady_clock::time_point deadline,
+                std::stop_token stop_token = {}) const;
   [[nodiscard]] RecoveryObservation
   wait_for_generation_live(std::uint64_t generation);
   [[nodiscard]] RecoveryObservation wait_until_terminal();

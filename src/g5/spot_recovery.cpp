@@ -314,9 +314,34 @@ public:
   }
 
   [[nodiscard]] RecoveryObservation observe() const {
+    return *observe_until(std::chrono::steady_clock::time_point::max());
+  }
+
+  [[nodiscard]] std::optional<RecoveryObservation>
+  observe_until(std::chrono::steady_clock::time_point deadline,
+                std::stop_token stop_token = {}) const {
     RecoveryObservation copy;
     {
-      std::lock_guard lock{mutex_};
+      // Reset holds the lifecycle gate while waiting for the owner. Bound
+      // observers without weakening reset/shutdown ordering. Short timed
+      // waits also let service shutdown cancel an observation promptly.
+      std::unique_lock lock{mutex_, std::defer_lock};
+      while (!stop_token.stop_requested()) {
+        if (lock.try_lock()) {
+          break;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+          return std::nullopt;
+        }
+        if (lock.try_lock_until(
+                std::min(deadline, now + std::chrono::milliseconds{5}))) {
+          break;
+        }
+      }
+      if (stop_token.stop_requested()) {
+        return std::nullopt;
+      }
       copy = observation_;
     }
 
@@ -985,8 +1010,8 @@ private:
   std::function<void()> before_backoff_commit_;
   std::function<void()> before_planned_reset_;
 
-  mutable std::mutex mutex_;
-  std::condition_variable condition_;
+  mutable std::timed_mutex mutex_;
+  std::condition_variable_any condition_;
   RecoveryObservation observation_;
   std::jthread coordinator_;
   bool started_{false};
@@ -1023,6 +1048,12 @@ void RecoveryCoordinator::stop() noexcept { impl_->stop(); }
 
 RecoveryObservation RecoveryCoordinator::observe() const {
   return impl_->observe();
+}
+
+std::optional<RecoveryObservation> RecoveryCoordinator::observe_until(
+    std::chrono::steady_clock::time_point deadline,
+    std::stop_token stop_token) const {
+  return impl_->observe_until(deadline, stop_token);
 }
 
 RecoveryObservation
@@ -1079,6 +1110,12 @@ void SpotRecovery::stop() noexcept { coordinator_->stop(); }
 
 RecoveryObservation SpotRecovery::observe() const {
   return coordinator_->observe();
+}
+
+std::optional<RecoveryObservation>
+SpotRecovery::observe_until(std::chrono::steady_clock::time_point deadline,
+                            std::stop_token stop_token) const {
+  return coordinator_->observe_until(deadline, stop_token);
 }
 
 RecoveryObservation

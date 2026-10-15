@@ -231,13 +231,22 @@ public:
     return AdmissionResult::Accepted;
   }
 
-  [[nodiscard]] RuntimeObservation observe() {
+  [[nodiscard]] std::optional<RuntimeObservation>
+  observe_until(std::chrono::steady_clock::time_point deadline,
+                std::stop_token stop_token) {
     std::unique_lock lock{mutex_};
+    if (stop_token.stop_requested()) {
+      return std::nullopt;
+    }
     if (started_ && !stopped_) {
       const auto target = last_admitted_ticket_;
-      condition_.wait(lock, [this, target] {
-        return processed_ticket_ >= target || stopped_;
-      });
+      const auto ready =
+          condition_.wait_until(lock, stop_token, deadline, [this, target] {
+            return processed_ticket_ >= target || stopped_;
+          });
+      if (!ready || stop_token.stop_requested()) {
+        return std::nullopt;
+      }
     }
     observation_.ingress_occupancy = ingress_.size();
     publish_tickets_locked();
@@ -1433,7 +1442,20 @@ AdmissionResult MarketRuntime::submit_snapshot_failure() {
   return impl_->submit(InjectedFailure::Snapshot);
 }
 
-RuntimeObservation MarketRuntime::observe() { return impl_->observe(); }
+RuntimeObservation MarketRuntime::observe() {
+  const auto observation =
+      observe_until(std::chrono::steady_clock::now() + kObservationTimeout);
+  if (!observation.has_value()) {
+    throw std::runtime_error{"runtime owner observation deadline exceeded"};
+  }
+  return *observation;
+}
+
+std::optional<RuntimeObservation>
+MarketRuntime::observe_until(std::chrono::steady_clock::time_point deadline,
+                             std::stop_token stop_token) {
+  return impl_->observe_until(deadline, stop_token);
+}
 
 SnapshotResult MarketRuntime::capture_snapshot() {
   return impl_->capture_snapshot();

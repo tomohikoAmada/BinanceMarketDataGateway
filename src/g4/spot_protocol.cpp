@@ -25,9 +25,9 @@ using Json = nlohmann::json;
 }
 
 [[nodiscard]] bool
-has_exact_keys(const Json &value,
-               std::initializer_list<std::string_view> expected) {
-  if (!value.is_object() || value.size() != expected.size()) {
+has_required_keys(const Json &value,
+                  std::initializer_list<std::string_view> expected) {
+  if (!value.is_object()) {
     return false;
   }
   return std::all_of(expected.begin(), expected.end(), [&value](auto key) {
@@ -363,7 +363,7 @@ DepthFrameResult parse_depth_object(const Json &root,
                  "event type must be a string");
   }
   if (*event == "serverShutdown") {
-    if (!has_exact_keys(root, {"e", "E"})) {
+    if (!has_required_keys(root, {"e", "E"})) {
       return error(ProtocolErrorCode::InvalidShape, "payload",
                    "serverShutdown has an unexpected shape");
     }
@@ -378,7 +378,9 @@ DepthFrameResult parse_depth_object(const Json &root,
     return error(ProtocolErrorCode::WrongEvent, "e",
                  "raw stream payload is not a depthUpdate");
   }
-  if (!has_exact_keys(root, {"e", "E", "s", "U", "u", "b", "a"})) {
+  // pu is a USD-M sequencing field, not an unrelated Spot extension.
+  if (!has_required_keys(root, {"e", "E", "s", "U", "u", "b", "a"}) ||
+      root.contains("pu")) {
     return error(ProtocolErrorCode::InvalidShape, "payload",
                  "depthUpdate has an unexpected shape");
   }
@@ -448,7 +450,7 @@ CombinedFrameResult parse_combined_event_frame(
                  "requested Spot symbol cannot be represented by a Binance "
                  "route");
   }
-  if (!has_exact_keys(root, {"stream", "data"})) {
+  if (!has_required_keys(root, {"stream", "data"})) {
     return error(ProtocolErrorCode::InvalidShape, "payload",
                  "combined stream envelope has an unexpected shape");
   }
@@ -501,7 +503,7 @@ CombinedFrameResult parse_combined_event_frame(
   }
 
   if (*stream == agg_trade_stream) {
-    if (!has_exact_keys(
+    if (!has_required_keys(
             *data, {"e", "E", "s", "a", "p", "q", "f", "l", "T", "m", "M"})) {
       return error(ProtocolErrorCode::InvalidShape, "data",
                    "aggTrade has an unexpected shape");
@@ -548,7 +550,7 @@ CombinedFrameResult parse_combined_event_frame(
   }
 
   if (*stream == book_ticker_stream) {
-    if (!has_exact_keys(*data, {"u", "s", "b", "B", "a", "A"})) {
+    if (!has_required_keys(*data, {"u", "s", "b", "B", "a", "A"})) {
       return error(ProtocolErrorCode::InvalidShape, "data",
                    "bookTicker has an unexpected shape");
     }
@@ -606,7 +608,7 @@ DepthSnapshotResult parse_depth_snapshot(std::string_view payload,
                  "requested Spot symbol cannot be represented by a Binance "
                  "route");
   }
-  if (!has_exact_keys(root, {"lastUpdateId", "bids", "asks"})) {
+  if (!has_required_keys(root, {"lastUpdateId", "bids", "asks"})) {
     return error(ProtocolErrorCode::InvalidShape, "payload",
                  "depth snapshot has an unexpected shape");
   }

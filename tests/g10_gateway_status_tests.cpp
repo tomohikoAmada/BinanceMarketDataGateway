@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <exception>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -340,14 +341,16 @@ struct FakeAttempts final {
 
 void wait_for_attempt_count(const std::shared_ptr<FakeAttempts> &attempts,
                             std::size_t expected) {
-  for (std::size_t tries = 0U; tries < 200U; ++tries) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds{2};
+  while (std::chrono::steady_clock::now() < deadline) {
     {
       std::lock_guard lock{attempts->mutex};
       if (attempts->states.size() >= expected) {
         return;
       }
     }
-    std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds{1});
   }
   throw TestFailure{"timed out waiting for fake recovery attempt"};
 }
@@ -410,10 +413,83 @@ void active_event_observation_persists_in_source_order() {
              std::optional<std::uint64_t>{90U});
 }
 
+void status_observation_is_bounded_during_owner_reset() {
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  std::promise<void> rotate;
+  auto rotation = rotate.get_future().share();
+  g5::detail::RecoveryTestOptions options;
+  options.attempt_factory = [](g3::MarketRuntime &owner,
+                               const g3::RuntimeClock &,
+                               std::uint64_t generation) {
+    return std::make_unique<FakeAttempt>(owner, generation,
+                                         std::make_shared<FakeAttemptState>());
+  };
+  options.rotation_waiter = [rotation](g3::MarketRuntime &owner,
+                                       std::chrono::nanoseconds,
+                                       std::stop_token token) {
+    rotation.wait();
+    if (token.stop_requested()) {
+      return g3::TimedRecoveryWaitResult::Stopped;
+    }
+    return owner.observe().reset_count == 0U
+               ? g3::TimedRecoveryWaitResult::DeadlineReached
+               : owner.wait_until_recovery_required_for(token,
+                                                        std::chrono::hours{1});
+  };
+  options.before_planned_reset = [&] { runtime.pause_owner_for_testing(); };
+  g5::SpotRecovery recovery{runtime, fixed_clock(),
+                            g5::PlannedRotationPolicy{std::chrono::hours{1}},
+                            std::move(options)};
+  g9::EventPublication events{"gw-reset-status", fixed_clock()};
+  g10::GatewayStatusAssembler assembler{runtime, recovery, events,
+                                        fixed_clock(), "gw-reset-status"};
+  REQUIRE(assembler.prepare_start_baseline());
+  REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+  REQUIRE_EQ(recovery.wait_for_generation_live(1U).state,
+             g5::RecoveryState::Live);
+  // Always release the owner before recovery destruction, including a failed
+  // assertion. The watchdog also makes the old blocking implementation fail
+  // this test instead of hanging the test process.
+  std::jthread release_owner{[&](std::stop_token token) {
+    std::mutex mutex;
+    std::condition_variable_any timer;
+    std::unique_lock lock{mutex};
+    timer.wait_for(lock, token, std::chrono::milliseconds{500},
+                   [] { return false; });
+    runtime.release_owner_for_testing();
+  }};
+  rotate.set_value();
+  const auto locked_by =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds{200};
+  while (recovery.observe_until(std::chrono::steady_clock::now()).has_value()) {
+    REQUIRE(std::chrono::steady_clock::now() < locked_by);
+    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+  }
+  REQUIRE(runtime.observe_until(std::chrono::steady_clock::now()).has_value());
+  const auto started = std::chrono::steady_clock::now();
+  REQUIRE_EQ(std::get<g10::StatusSnapshotError>(
+                 assembler.collect(started + std::chrono::milliseconds{20})),
+             g10::StatusSnapshotError::ObservationTimeout);
+  REQUIRE(std::chrono::steady_clock::now() - started <
+          std::chrono::milliseconds{250});
+  std::stop_source stop;
+  std::jthread cancel{[&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    stop.request_stop();
+  }};
+  const auto cancelling = std::chrono::steady_clock::now();
+  REQUIRE_EQ(std::get<g10::StatusSnapshotError>(assembler.collect(
+                 cancelling + std::chrono::seconds{1}, stop.get_token())),
+             g10::StatusSnapshotError::ObservationTimeout);
+  REQUIRE(std::chrono::steady_clock::now() - cancelling <
+          std::chrono::milliseconds{250});
+}
+
 } // namespace
 
 int main() {
   try {
+    status_observation_is_bounded_during_owner_reset();
     runtime_state_mapping();
     basic_snapshot_and_uptime();
     assembler_errors_and_counts();

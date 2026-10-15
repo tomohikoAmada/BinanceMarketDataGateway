@@ -1,6 +1,7 @@
 #include "usdm_protocol.hpp"
 
 #include <binance_market_data/common/v1/enums.pb.h>
+#include <nlohmann/json.hpp>
 
 #include <exception>
 #include <functional>
@@ -287,6 +288,89 @@ void stream_symbol_and_shutdown() {
   REQUIRE(std::holds_alternative<g4::ServerShutdown>(shutdown));
 }
 
+void unrelated_extensions_preserve_strict_fields() {
+  using Json = nlohmann::json;
+  auto depth = Json::parse(
+      R"({"e":"depthUpdate","E":1,"T":2,"s":"BTCUSDT","U":501,"u":504,"pu":499,"b":[],"a":[],"ps":"BTCUSDT","st":1,"future_extension":{"nested":true}})");
+  const auto parsed =
+      g11::parse_usdm_depth_frame(depth.dump(), {1U, 2U}, "source");
+  REQUIRE(std::holds_alternative<g11::market::DepthUpdate>(parsed));
+  const auto &update = std::get<g11::market::DepthUpdate>(parsed);
+  REQUIRE_EQ(update.first_update_id(), 501U);
+  REQUIRE_EQ(update.final_update_id(), 504U);
+  REQUIRE_EQ(update.previous_final_update_id(), 499U);
+  for (const auto key : {"e", "E", "s", "U", "u", "b", "a"}) {
+    auto missing = depth;
+    missing.erase(key);
+    REQUIRE(std::holds_alternative<g4::ProtocolError>(
+        g11::parse_usdm_depth_frame(missing.dump(), {1U, 2U}, "source")));
+  }
+  for (const auto key :
+       {"e", "E", "T", "s", "U", "u", "pu", "b", "a", "ps", "st"}) {
+    auto malformed = depth;
+    malformed[key] = nullptr;
+    REQUIRE(std::holds_alternative<g4::ProtocolError>(
+        g11::parse_usdm_depth_frame(malformed.dump(), {1U, 2U}, "source")));
+  }
+  depth["s"] = "ETHUSDT";
+  REQUIRE(std::holds_alternative<g4::ProtocolError>(
+      g11::parse_usdm_depth_frame(depth.dump(), {1U, 2U}, "source")));
+  auto snapshot = Json::parse(
+      R"({"lastUpdateId":504,"E":1,"T":2,"bids":[],"asks":[],"future_extension":null})");
+  REQUIRE(std::holds_alternative<g11::market::ExchangeDepthSnapshot>(
+      g11::parse_usdm_depth_snapshot(snapshot.dump(), {1U, 2U}, "request")));
+  snapshot["lastUpdateId"] = "504";
+  REQUIRE(std::holds_alternative<g4::ProtocolError>(
+      g11::parse_usdm_depth_snapshot(snapshot.dump(), {1U, 2U}, "request")));
+  REQUIRE(
+      std::holds_alternative<g4::ServerShutdown>(g11::parse_usdm_depth_frame(
+          R"({"e":"serverShutdown","E":1,"future_extension":[]})", {1U, 2U},
+          "source")));
+}
+
+void extensions_do_not_bypass_projection_sequence_checks() {
+  namespace g3 = binance_market_data::gateway::g3;
+  namespace core = binance_market_data::projection::v1;
+  const core::NumericSpec spec{*core::DecimalScale::create(2U),
+                               *core::DecimalScale::create(3U)};
+  for (
+      const auto payload :
+      {R"({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":102,"u":102,"pu":999,"b":[],"a":[],"future_extension":true})",
+       R"({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":103,"u":102,"pu":101,"b":[],"a":[],"future_extension":true})",
+       R"({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":102,"u":102,"b":[],"a":[],"future_extension":true})"}) {
+    g3::MarketRuntime runtime{
+        {8U, 8U},
+        [] { return g3::ClockSample{1U, 2U}; },
+        spec,
+        g3::adapter::ExpectedIdentity{"BTCUSDT",
+                                      core::SequencePolicyKind::UsdMPerpetual}};
+    REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
+    auto snapshot = g11::parse_usdm_depth_snapshot(
+        R"({"lastUpdateId":100,"bids":[["100.00","1.000"]],"asks":[["101.00","1.000"]],"future_extension":true})",
+        {1U, 2U}, "request");
+    REQUIRE_EQ(
+        runtime.submit_snapshot(
+            std::get<g11::market::ExchangeDepthSnapshot>(std::move(snapshot))),
+        g3::AdmissionResult::Accepted);
+    auto bridge = g11::parse_usdm_depth_frame(
+        R"({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":100,"u":101,"pu":99,"b":[],"a":[],"future_extension":true})",
+        {1U, 2U}, "source");
+    REQUIRE_EQ(runtime.submit_depth_update(
+                   std::get<g11::market::DepthUpdate>(std::move(bridge))),
+               g3::AdmissionResult::Accepted);
+    REQUIRE_EQ(runtime.observe().state, g3::RuntimeState::Live);
+    auto invalid = g11::parse_usdm_depth_frame(payload, {1U, 2U}, "source");
+    REQUIRE(std::holds_alternative<g11::market::DepthUpdate>(invalid));
+    REQUIRE_EQ(runtime.submit_depth_update(
+                   std::get<g11::market::DepthUpdate>(std::move(invalid))),
+               g3::AdmissionResult::Accepted);
+    const auto rejected = runtime.observe();
+    REQUIRE(rejected.state == g3::RuntimeState::NeedsResync ||
+            rejected.state == g3::RuntimeState::Faulted);
+    REQUIRE_EQ(rejected.last_update_id, std::optional<std::uint64_t>{101U});
+  }
+}
+
 } // namespace
 
 int main() {
@@ -304,6 +388,10 @@ int main() {
        diff_depth_identity_and_type_rejection},
       {"SNAPSHOT_PARSE_AND_VALIDATION", snapshot_parse_and_validation},
       {"STREAM_SYMBOL_AND_SHUTDOWN", stream_symbol_and_shutdown},
+      {"UNRELATED_EXTENSIONS_PRESERVE_STRICT_FIELDS",
+       unrelated_extensions_preserve_strict_fields},
+      {"EXTENSIONS_PRESERVE_PROJECTION_SEQUENCE_CHECKS",
+       extensions_do_not_bypass_projection_sequence_checks},
   };
 
   for (const auto &[name, test] : tests) {

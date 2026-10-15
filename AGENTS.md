@@ -12,10 +12,10 @@ protocol facts or measurements contradict documentation, establish evidence and
 update the current documents. User instructions take precedence. Do not add
 permission steps inferred from old milestone freezes.
 
-G0-G11, G12-A and G12-B are complete. This merge completes G12-C configured
-production composition and the review fixes. M3 / G12-D four-product offline
-production acceptance and production CI is next; M4 / G12-E performance/stability budget acceptance, bounded live
-acceptance and delivery follows it. High performance, low latency, low CPU/RSS
+Historical G0-G11 and G12-A/B/C are complete. The 2026-10-12 BinanceMarketData
+v0.3 overall and Gateway module plans now define G0-G3; these new labels do not
+reopen historical dependency proof. This change implements only v0.3 G0 and
+awaits independent review. G1/G2/G3 are not started. High performance, low latency, low CPU/RSS
 and safe stable behavior are delivery requirements; no multi-product performance
 budget has yet been established. Do not label future acceptance complete
 because configurable code exists. Keep Foundation independently buildable.
@@ -34,6 +34,8 @@ because configurable code exists. Keep Foundation independently buildable.
   isolated. Shut down and drain handlers before destroying products.
 - Use startup JSON `bmd-gatewayd --config PATH`. No hot reload, runtime add/remove,
   generic event bus, DI/plugins, shared multiplexed transport or second classifier.
+- Insecure gRPC must bind numeric loopback only; reject hostname, wildcard and
+  non-loopback endpoints before starting products or binding.
 - Preserve bounded queues, slow-client isolation, cancellation lifetime safety,
   source quiescence before reset, and async-safe signal handling.
 - Spot events: DIFF_DEPTH, AGG_TRADE, BOOK_TICKER. USD-M: DIFF_DEPTH only.
@@ -50,9 +52,12 @@ because configurable code exists. Keep Foundation independently buildable.
 ## Validation and delivery
 
 Use CMake >=3.24. For runtime changes explicitly enable the production graph,
-build/run its offline CTest groups, ASan/UBSan/TSan configurations and
+build/run the affected offline CTest groups, relevant sanitizers and
 `scripts/format-check.sh`. Existing GitHub Foundation checks alone do not verify
-production changes. Keep build/cache output under ignored directories.
+production changes. Reuse pinned binary dependencies; do not repeat historical
+G1 proof or cold-build all third-party sources for routine fixes. Full offline
+and necessary sanitizer checks belong at milestone/release closeout. Keep
+build/cache output under ignored directories.
 
 Update current state, milestone status and evidence with each milestone. Push
 reviewable commits; merge completed PRs before removing their remote branch.

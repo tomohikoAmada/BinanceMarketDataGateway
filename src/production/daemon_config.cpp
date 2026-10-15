@@ -1,4 +1,5 @@
 #include "daemon_config.hpp"
+#include "grpc_service.hpp"
 
 #include <binance_market_data/gateway/v1/config.hpp>
 #include <nlohmann/json.hpp>
@@ -159,6 +160,11 @@ DaemonConfigResult load_daemon_config(std::string_view config_path) {
   if (const auto *error = std::get_if<v1::ConfigError>(&endpoint)) {
     return DaemonConfigError{"invalid grpc_listen [" + error->field +
                              "]: " + error->message};
+  }
+  if (!g7::valid_loopback_listen_address(listen)) {
+    return error(
+        "grpc_listen must use a numeric loopback address and a port in "
+        "1..65535");
   }
 
   auto spot = symbols(root, "spot_symbols");

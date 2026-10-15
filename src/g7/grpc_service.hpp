@@ -30,6 +30,11 @@
 
 namespace binance_market_data::gateway::g7 {
 
+// Insecure listeners accept numeric loopback only; no hostname resolution.
+[[nodiscard]] bool
+valid_loopback_listen_address(std::string_view address,
+                              bool allow_ephemeral_port = false);
+
 enum class RequestValidationError : std::uint8_t {
   InvalidArgument,
   FailedPrecondition,
@@ -239,6 +244,7 @@ private:
 #if defined(BMD_GATEWAY_G10_ENABLED)
   std::unique_ptr<g10::GatewayStatusAssembler> status_assembler_;
   bool status_inflight_{false};
+  std::stop_source status_stop_;
 #endif
 
   mutable std::mutex mutex_;

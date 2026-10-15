@@ -1,9 +1,12 @@
 #include "grpc_service.hpp"
 
+#include <boost/asio/ip/address.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <cctype>
+#include <charconv>
 #include <iomanip>
 #include <limits>
 #include <random>
@@ -13,6 +16,31 @@
 #include <utility>
 
 namespace binance_market_data::gateway::g7 {
+
+bool valid_loopback_listen_address(std::string_view address,
+                                   bool allow_ephemeral_port) {
+  const auto colon = address.rfind(':');
+  if (colon == std::string_view::npos) {
+    return false;
+  }
+  auto host = address.substr(0U, colon);
+  const auto port = address.substr(colon + 1U);
+  const bool bracketed = host.starts_with('[') && host.ends_with(']');
+  if (bracketed) {
+    host = host.substr(1U, host.size() - 2U);
+  }
+  unsigned int number = 0U;
+  const auto [end, error] =
+      std::from_chars(port.data(), port.data() + port.size(), number);
+  if (error != std::errc{} || end != port.data() + port.size() ||
+      number > 65535U || (number == 0U && !allow_ephemeral_port) ||
+      host.find('%') != std::string_view::npos) {
+    return false;
+  }
+  boost::system::error_code parse_error;
+  const auto ip = boost::asio::ip::make_address(std::string{host}, parse_error);
+  return !parse_error && ip.is_loopback() && bracketed == ip.is_v6();
+}
 
 namespace {
 
@@ -507,7 +535,19 @@ grpc::Status OrderBookGrpcService::GetGatewayStatus(
   }
 
   try {
-    const auto result = status_assembler_->collect();
+    const auto now = std::chrono::steady_clock::now();
+    const auto remaining =
+        context->deadline() - std::chrono::system_clock::now();
+    // Clamp in the system clock's units before converting an infinite RPC
+    // deadline to the finer steady clock duration (macOS uses microseconds).
+    const auto budget = std::min(
+        remaining,
+        std::chrono::duration_cast<std::chrono::system_clock::duration>(
+            g3::kObservationTimeout));
+    const auto result = status_assembler_->collect(
+        now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                  budget),
+        status_stop_.get_token());
     if (context->IsCancelled()) {
       return {grpc::StatusCode::CANCELLED, "client cancelled"};
     }
@@ -515,6 +555,14 @@ grpc::Status OrderBookGrpcService::GetGatewayStatus(
             std::get_if<g10::gateway_wire::GatewayStatusSnapshot>(&result)) {
       *response = *snapshot;
       return grpc::Status::OK;
+    }
+    if (status_stop_.stop_requested()) {
+      return {grpc::StatusCode::UNAVAILABLE, "gateway status is shutting down"};
+    }
+    if (std::get<g10::StatusSnapshotError>(result) ==
+        g10::StatusSnapshotError::ObservationTimeout) {
+      return {grpc::StatusCode::DEADLINE_EXCEEDED,
+              "gateway owner observation deadline exceeded"};
     }
     return {grpc::StatusCode::INTERNAL,
             "gateway status observation is invalid"};
@@ -877,6 +925,10 @@ void OrderBookGrpcService::begin_shutdown() noexcept {
     admission_open_ = false;
   }
 
+#if defined(BMD_GATEWAY_G10_ENABLED)
+  status_stop_.request_stop();
+#endif
+
 #if defined(BMD_GATEWAY_G11_ENABLED)
   if (market_registry_ != nullptr) {
     for (const auto &entry : market_registry_->entries()) {
@@ -1064,7 +1116,8 @@ OrderBookGrpcServer::OrderBookGrpcServer(
 OrderBookGrpcServer::~OrderBookGrpcServer() { shutdown(); }
 
 bool OrderBookGrpcServer::start(const std::string &listen_address) {
-  if (server_ != nullptr || shutdown_) {
+  if (server_ != nullptr || shutdown_ ||
+      !valid_loopback_listen_address(listen_address, true)) {
     return false;
   }
   grpc::ServerBuilder builder;
