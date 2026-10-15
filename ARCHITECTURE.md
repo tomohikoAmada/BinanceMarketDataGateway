@@ -1,6 +1,6 @@
 # Gateway architecture
 
-当前开发计划：[docs/MILESTONES.md](docs/MILESTONES.md)，依据 2026-10-12 BinanceMarketData v0.3 总计划及 Gateway 模块计划。本轮仅修改新版 G0 的安全、协议兼容、观察等待和测试清理。当前实现是支持启动配置的有限产品集合，已经复用 G12-B 的 owner set 和 registry；历史固定双 BTC 是其中一个配置场景。
+当前开发计划：[docs/MILESTONES.md](docs/MILESTONES.md)，依据 2026-10-12 BinanceMarketData v0.3 总计划及 Gateway 模块计划。2026-10-15 用户授权 G1 时间语义/Depth 新鲜度及独立复核；G0 reset 观察补修已复核。当前实现是支持启动配置的有限产品集合，已经复用 G12-B 的 owner set 和 registry；历史固定双 BTC 是其中一个配置场景。
 
 ## 职责与依赖
 
@@ -63,6 +63,15 @@ bmd-gatewayd --config PATH
 `GetGatewayStatus` 使用 min(一秒, client deadline) 的整次请求观察预算，多个产品共享同一 deadline；超时返回 DEADLINE_EXCEEDED，关闭服务取消观察。无限 RPC deadline 先在 system_clock 单位内截短再转换，避免 macOS 的时间单位转换溢出。服务 drain 后才销毁产品；正在执行的 owner 操作返回后仍须 join，不强行 detach。
 
 `SubscribeMarketState` 尚未实现。服务直接使用 insecure gRPC，仅绑定数值 loopback。公开网络认证/TLS 如果成为实际部署需求，再增加专门交付项。
+
+v0.3 G1 复用 Status 的 `markets[].last_event_utc_ns` 表示当前有效 generation 最后
+Projection-Applied Depth 的 receive UTC；只有 runtime Live/Synchronized、recovery Live、
+单 active transport 且来源匹配才有值，其余 absent/unknown，零仍有 presence。
+这是从历史 G10“任意 normalized WebSocket 事件且跨恢复保留”含义的明确收窄；
+transport 全流时间仍在内部 recovery observation 保留，消费者须更新解释。没有 Wire 变更。
+owner 只在 Applied 提交可选 UTC/monotonic/provenance；重复/缓冲/Gap 不刷新，reset 清除。
+时间证据不等于 freshness SLA；客户端墙钟年龄须检查回退，安静市场不自动 Gap/重同步。
+USD-M 深度 E→event-time、T→transaction-time，trade-time absent，T=0/缺失各自保持。
 
 ## 构建与历史
 

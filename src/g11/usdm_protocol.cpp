@@ -105,7 +105,7 @@ void populate_depth_metadata(market::DepthUpdate &event,
   metadata->set_schema_version("depth-update.v1");
   metadata->set_exchange_event_time_ms(exchange_event_time_ms);
   if (transaction_time_ms.has_value()) {
-    metadata->set_exchange_trade_time_ms(*transaction_time_ms);
+    metadata->set_exchange_transaction_time_ms(*transaction_time_ms);
   }
   metadata->set_receive_time_utc_ns(received_at.utc_ns);
   metadata->set_receive_monotonic_ns(received_at.monotonic_ns);

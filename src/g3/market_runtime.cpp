@@ -994,6 +994,7 @@ private:
       observation_.last_gap.reset();
       observation_.last_install.reset();
       observation_.last_apply.reset();
+      observation_.last_applied_depth.reset();
       observation_.adapter_error.reset();
       observation_.fault_reason.reset();
       observation_.last_update_id.reset();
@@ -1150,6 +1151,17 @@ private:
     {
       std::lock_guard lock{mutex_};
       observation_.last_apply = apply_result;
+      if (apply_result.disposition == core::ApplyDisposition::Applied) {
+        const auto &metadata = input.update.metadata();
+        observation_.last_applied_depth = AppliedDepthObservation{
+            metadata.has_receive_time_utc_ns()
+                ? std::optional<std::uint64_t>{metadata.receive_time_utc_ns()}
+                : std::nullopt,
+            metadata.has_receive_monotonic_ns()
+                ? std::optional<std::uint64_t>{metadata.receive_monotonic_ns()}
+                : std::nullopt,
+            input.provenance.connection_generation};
+      }
     }
     if (apply_result.disposition == core::ApplyDisposition::Applied) {
       publish_applied_update(input.update, input.provenance

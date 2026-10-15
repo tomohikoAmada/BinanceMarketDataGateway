@@ -700,10 +700,63 @@ void in_progress_owner_stall_times_out_without_detaching() {
   REQUIRE(std::holds_alternative<g3::CapturedSnapshot>(snapshot));
 }
 
+void applied_depth_observation_tracks_only_committed_updates() {
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  REQUIRE(!runtime.observe().last_applied_depth.has_value());
+  REQUIRE_EQ(runtime.start(), g3::StartResult::Started);
+  auto bridge = make_update(101U, 101U, "4.000");
+  bridge.mutable_metadata()->set_receive_time_utc_ns(0U);
+  bridge.mutable_metadata()->set_receive_monotonic_ns(0U);
+  REQUIRE_EQ(runtime.submit_depth_update(bridge, {1U}),
+             g3::AdmissionResult::Accepted);
+  REQUIRE(!runtime.observe().last_applied_depth.has_value());
+  REQUIRE_EQ(runtime.submit_snapshot(make_snapshot(), {1U}),
+             g3::AdmissionResult::Accepted);
+  const auto committed = runtime.observe().last_applied_depth;
+  REQUIRE(committed.has_value());
+  REQUIRE_EQ(committed->receive_time_utc_ns, std::optional<std::uint64_t>{0U});
+  REQUIRE_EQ(committed->receive_monotonic_ns, std::optional<std::uint64_t>{0U});
+  REQUIRE_EQ(committed->connection_generation,
+             std::optional<std::uint64_t>{1U});
+  auto duplicate = bridge;
+  duplicate.mutable_metadata()->set_receive_time_utc_ns(999U);
+  duplicate.mutable_metadata()->set_receive_monotonic_ns(999U);
+  REQUIRE_EQ(runtime.submit_depth_update(duplicate, {1U}),
+             g3::AdmissionResult::Accepted);
+  REQUIRE_EQ(runtime.observe().last_applied_depth, committed);
+  auto gap = make_update(103U, 103U, "5.000");
+  REQUIRE_EQ(runtime.submit_depth_update(gap, {1U}),
+             g3::AdmissionResult::Accepted);
+  REQUIRE_EQ(runtime.observe().state, g3::RuntimeState::NeedsResync);
+  REQUIRE_EQ(runtime.observe().last_applied_depth, committed);
+  REQUIRE_EQ(runtime.reset_for_rebootstrap(),
+             g3::RebootstrapResetResult::Reset);
+  REQUIRE(!runtime.observe().last_applied_depth.has_value());
+  auto next = bridge;
+  next.mutable_metadata()->clear_receive_time_utc_ns();
+  next.mutable_metadata()->clear_receive_monotonic_ns();
+  REQUIRE_EQ(runtime.submit_snapshot(make_snapshot(), {2U}),
+             g3::AdmissionResult::Accepted);
+  REQUIRE(!runtime.observe().last_applied_depth.has_value());
+  REQUIRE_EQ(runtime.submit_depth_update(next, {2U}),
+             g3::AdmissionResult::Accepted);
+  const auto missing_times = runtime.observe().last_applied_depth;
+  REQUIRE(missing_times.has_value());
+  REQUIRE(!missing_times->receive_time_utc_ns.has_value());
+  REQUIRE(!missing_times->receive_monotonic_ns.has_value());
+  REQUIRE_EQ(missing_times->connection_generation,
+             std::optional<std::uint64_t>{2U});
+  REQUIRE_EQ(runtime.reset_live_for_planned_rebootstrap(),
+             g3::PlannedRebootstrapResetResult::Reset);
+  REQUIRE(!runtime.observe().last_applied_depth.has_value());
+}
+
 } // namespace
 
 int main() {
   const std::vector<std::pair<std::string_view, std::function<void()>>> tests{
+      {"APPLIED_DEPTH_OBSERVATION",
+       applied_depth_observation_tracks_only_committed_updates},
       {"NORMAL_SERIALIZED_BOOTSTRAP", normal_serialized_bootstrap},
       {"OWNER_ONLY_PROJECTION_ACCESS", owner_only_projection_access},
       {"SOURCE_RECEIVE_ORDER", source_receive_order},

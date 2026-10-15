@@ -26,6 +26,8 @@ bmd-gatewayd --config examples/gateway.json
 
 提供 `SubscribeOrderBook`、`SubscribeEvents` 和 `GetGatewayStatus`。Spot 事件为 DIFF_DEPTH / AGG_TRADE / BOOK_TICKER，USD-M 事件仅 DIFF_DEPTH。`SubscribeMarketState` 尚未实现。
 
+v0.3 G1 起，`GetGatewayStatus.markets[].last_event_utc_ns` 表示当前 generation 最后经 Projection **Applied Depth 的接收 UTC**；重同步、Gap、来源或时间未知时为空，零时间保持 present。该字段从历史“任意 WebSocket 事件时间”收窄，trade/ticker 活跃不会再掩盖停止更新的簿。Live 表示序列同步，不承诺数据年龄；客户端遇墙钟回退时须将年龄视为未知。安静市场不会自动触发 Gap 或重同步。USD-M 深度 `T` 已更正为 transaction-time，trade-time 留空；[G1 证据](docs/GATEWAY_G1_V03_EVIDENCE.md)。
+
 ## 构建与验证
 
 独立 Foundation（不包含生产 daemon）：

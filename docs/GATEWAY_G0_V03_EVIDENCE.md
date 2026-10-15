@@ -1,6 +1,6 @@
 # Gateway G0 v0.3 — 2026-10-12
 
-状态：实现及本机离线验证完成，待独立复核。本记录的 G0 是 2026-10-12
+状态：实现、本机离线验证及 2026-10-15 独立复核完成，PR #35 已合并。本记录的 G0 是 2026-10-12
 BinanceMarketData v0.3 总计划/Gateway 模块计划中的安全与可用性修复，
 不是 [历史 G0 Foundation](G0_EVIDENCE.md)。已阅读 `Milestone Plan` 全部六份文档。
 
@@ -10,7 +10,10 @@ reset 时，原 `recovery.observe()` 仍可能阻塞 Status/startup。新增 rec
 与 production 整组观察共用已有 deadline，startup 非阻塞检查 gate。
 回归将 owner 暂停在 planned reset 中，确认 runtime FIFO barrier 已可通过时，
 Status 仍遵守 20ms deadline，并可由 stop token 取消；RAII watchdog 保证失败清理。
-验证结果与独立复核结论将在通过后补记。
+补修 `29e7baa`：完整 production Release 22/22（12.49s）、格式/diff 检查通过；
+独立子代理复核通过，五组重点测试 5/5，原探针现在遵守期限和取消。
+日志见 `build/v03-g0/review-fix-ctest.log` 和
+`build/v03-g0-independent-review-20261015/repro-after-fix.log`。PR #35 已合并。
 
 ## 基线与去重
 
@@ -86,6 +89,9 @@ git diff --check
 无关扩展容忍是本地兼容策略，不宣称观测到了真实交易所扩展/恢复事故。
 
 ## 完成边界
+
+下段保留 2026-10-12 初次 G0 交付范围；2026-10-16 G1 已完成的当前状态见
+[CURRENT_STATE](CURRENT_STATE.md) 和 [G1 证据](GATEWAY_G1_V03_EVIDENCE.md)。
 
 仅 G01/G03/G05/G10 测试清理。新版 G1/G2/G3 未启动；USD-M T 映射/depth freshness、
 四产品正式 acceptance、production CI、API 联合预算和性能/VPS 资格仍留在相应后续阶段。

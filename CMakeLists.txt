@@ -463,6 +463,8 @@ if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
         add_executable(bmd_gateway_g11_usdm_protocol_tests
             tests/g11_usdm_protocol_tests.cpp
         )
+        target_compile_definitions(bmd_gateway_g11_usdm_protocol_tests PRIVATE
+            BMD_GATEWAY_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
         set_target_properties(
             bmd_gateway_g11_usdm_protocol_tests
             PROPERTIES
@@ -1171,6 +1173,8 @@ if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
         add_executable(bmd_gateway_production_tests
             tests/production_gateway_tests.cpp
         )
+        target_compile_definitions(bmd_gateway_production_tests PRIVATE
+            BMD_GATEWAY_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
         set_target_properties(
             bmd_gateway_production_tests
             PROPERTIES

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <exception>
 #include <future>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -413,6 +414,111 @@ void active_event_observation_persists_in_source_order() {
              std::optional<std::uint64_t>{90U});
 }
 
+void status_last_event_tracks_applied_depth() {
+  g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  auto state = std::make_shared<FakeAttemptState>();
+  g5::detail::RecoveryTestOptions options;
+  options.attempt_factory = [state](g3::MarketRuntime &owner,
+                                    const g3::RuntimeClock &,
+                                    std::uint64_t generation) {
+    return std::make_unique<FakeAttempt>(owner, generation, state);
+  };
+  options.backoff_waiter = [](std::chrono::seconds, std::stop_token token) {
+    std::mutex mutex;
+    std::condition_variable_any condition;
+    std::unique_lock lock{mutex};
+    condition.wait(lock, token, [] { return false; });
+    return false;
+  };
+  g5::SpotRecovery recovery{runtime, fixed_clock(), std::move(options)};
+  g9::EventPublication events{"gw-depth-time", fixed_clock()};
+  std::uint64_t utc = 1000U;
+  g10::GatewayStatusAssembler assembler{
+      runtime, recovery, events, [&] { return g3::ClockSample{utc, 100U}; },
+      "gw-depth-time"};
+  REQUIRE(assembler.prepare_start_baseline());
+  REQUIRE_EQ(recovery.start(), g5::RecoveryStartResult::Started);
+  REQUIRE_EQ(recovery.wait_for_generation_live(1U).state,
+             g5::RecoveryState::Live);
+  REQUIRE(events.open_generation(1U));
+  auto collect = [&] {
+    const auto result = assembler.collect();
+    REQUIRE(std::holds_alternative<g10::gateway_wire::GatewayStatusSnapshot>(
+        result));
+    return std::get<g10::gateway_wire::GatewayStatusSnapshot>(result);
+  };
+  // FakeAttempt's initial Applied Depth has no receive time: unknown stays
+  // absent.
+  REQUIRE(!collect().markets(0).has_last_event_utc_ns());
+  auto parsed = g4::parse_depth_frame(
+      R"({"e":"depthUpdate","E":1,"s":"BTCUSDT","U":102,"u":102,"b":[["100.00","3.000"]],"a":[]})",
+      {2000U, 200U}, "g10-source");
+  REQUIRE_EQ(
+      runtime.submit_depth_update(std::get<market::DepthUpdate>(parsed), {1U}),
+      g3::AdmissionResult::Accepted);
+  const auto depth = runtime.observe().last_applied_depth;
+  const auto first = collect();
+  REQUIRE(first.markets(0).has_last_event_utc_ns());
+  REQUIRE_EQ(first.markets(0).last_event_utc_ns(), 2000U);
+  for (const auto stream :
+       {common::STREAM_AGG_TRADE, common::STREAM_BOOK_TICKER}) {
+    auto frame =
+        stream == common::STREAM_AGG_TRADE
+            ? R"({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":3,"s":"BTCUSDT","a":1,"p":"100.00","q":"1.000","f":1,"l":1,"T":2,"m":false,"M":true}})"
+            : R"({"stream":"btcusdt@bookTicker","data":{"u":103,"s":"BTCUSDT","b":"100.00","B":"1.000","a":"101.00","A":"1.000"}})";
+    const auto activity =
+        g4::parse_combined_event_frame(frame, {9999U, 300U}, "g10-source");
+    REQUIRE(std::holds_alternative<g4::NormalizedMarketEvent>(activity));
+    REQUIRE_EQ(
+        events.publish(std::make_shared<const g4::NormalizedMarketEvent>(
+                           std::get<g4::NormalizedMarketEvent>(activity)),
+                       1U),
+        g9::EventPublishResult::Published);
+  }
+  {
+    std::lock_guard lock{state->mutex};
+    state->observation.last_event_utc_ns = 9999U;
+  }
+  utc = 10000U;
+  const auto active_trade = collect();
+  REQUIRE_EQ(recovery.observe().last_event_utc_ns,
+             std::optional<std::uint64_t>{9999U});
+  REQUIRE_EQ(active_trade.markets(0).last_event_utc_ns(), 2000U);
+  REQUIRE_EQ(active_trade.observed_time_utc_ns() -
+                 active_trade.markets(0).last_event_utc_ns(),
+             8000U);
+  REQUIRE_EQ(runtime.observe().last_applied_depth, depth);
+  REQUIRE_EQ(runtime.observe().reset_count, 0U);
+  REQUIRE_EQ(runtime.observe().state, g3::RuntimeState::Live);
+  auto zero = std::get<market::DepthUpdate>(parsed);
+  zero.set_first_update_id(103U);
+  zero.set_final_update_id(103U);
+  zero.mutable_metadata()->set_receive_time_utc_ns(0U);
+  REQUIRE_EQ(runtime.submit_depth_update(zero, {1U}),
+             g3::AdmissionResult::Accepted);
+  const auto present_zero = collect();
+  REQUIRE(present_zero.markets(0).has_last_event_utc_ns());
+  REQUIRE_EQ(present_zero.markets(0).last_event_utc_ns(), 0U);
+  auto unknown_source = zero;
+  unknown_source.set_first_update_id(104U);
+  unknown_source.set_final_update_id(104U);
+  REQUIRE_EQ(runtime.submit_depth_update(unknown_source),
+             g3::AdmissionResult::Accepted);
+  REQUIRE(!collect().markets(0).has_last_event_utc_ns());
+  auto known_source = zero;
+  known_source.set_first_update_id(105U);
+  known_source.set_final_update_id(105U);
+  REQUIRE_EQ(runtime.submit_depth_update(known_source, {1U}),
+             g3::AdmissionResult::Accepted);
+  REQUIRE(collect().markets(0).has_last_event_utc_ns());
+  auto gap = std::get<market::DepthUpdate>(parsed);
+  gap.set_first_update_id(107U);
+  gap.set_final_update_id(107U);
+  REQUIRE_EQ(runtime.submit_depth_update(gap, {1U}),
+             g3::AdmissionResult::Accepted);
+  REQUIRE(!collect().markets(0).has_last_event_utc_ns());
+}
+
 void status_observation_is_bounded_during_owner_reset() {
   g3::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
   std::promise<void> rotate;
@@ -489,6 +595,7 @@ void status_observation_is_bounded_during_owner_reset() {
 
 int main() {
   try {
+    status_last_event_tracks_applied_depth();
     status_observation_is_bounded_during_owner_reset();
     runtime_state_mapping();
     basic_snapshot_and_uptime();
@@ -496,7 +603,8 @@ int main() {
     uptime_regression_and_clock_failure();
     active_event_observation_persists_in_source_order();
   } catch (const std::exception &error) {
-    return error.what() == nullptr ? 1 : 1;
+    std::cerr << error.what() << '\n';
+    return 1;
   }
   return 0;
 }

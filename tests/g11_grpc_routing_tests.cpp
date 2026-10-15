@@ -782,6 +782,22 @@ void loopback_routing_ids_status_and_generation_cuts() {
   REQUIRE(!spot_event->Read(&event_item));
   REQUIRE(spot_event->Finish().ok());
   REQUIRE_EQ(products.usdm().recovery().observe().connection_generation, 1U);
+  grpc::ClientContext generation_status_context;
+  set_deadline(generation_status_context);
+  wire::GatewayStatusSnapshot generation_status;
+  REQUIRE(stub->GetGatewayStatus(&generation_status_context, status_request,
+                                 &generation_status)
+              .ok());
+  REQUIRE_EQ(generation_status.markets(0).connection_generation(), 2U);
+  REQUIRE_EQ(generation_status.markets(0).last_event_utc_ns(),
+             make_update(common::MARKET_SPOT, 2U, 101U)
+                 .metadata()
+                 .receive_time_utc_ns());
+  REQUIRE_EQ(generation_status.markets(1).connection_generation(), 1U);
+  REQUIRE_EQ(generation_status.markets(1).last_event_utc_ns(),
+             make_update(common::MARKET_USD_M_PERPETUAL, 1U, 102U)
+                 .metadata()
+                 .receive_time_utc_ns());
   REQUIRE_EQ(products.usdm().runtime().observe().resident_subscription_count,
              1U);
   REQUIRE_EQ(products.usdm().event_publication().observe().active_subscriptions,

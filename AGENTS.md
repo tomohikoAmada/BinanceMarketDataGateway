@@ -14,8 +14,10 @@ permission steps inferred from old milestone freezes.
 
 Historical G0-G11 and G12-A/B/C are complete. The 2026-10-12 BinanceMarketData
 v0.3 overall and Gateway module plans now define G0-G3; these new labels do not
-reopen historical dependency proof. This change implements only v0.3 G0 and
-awaits independent review. G1/G2/G3 are not started. High performance, low latency, low CPU/RSS
+reopen historical dependency proof. G0's independent review and reset-observation
+fix are complete. The user authorized v0.3 G1 on 2026-10-15; implementation,
+offline validation and independent review completed on 2026-10-16. G2/G3 are
+not started. High performance, low latency, low CPU/RSS
 and safe stable behavior are delivery requirements; no multi-product performance
 budget has yet been established. Do not label future acceptance complete
 because configurable code exists. Keep Foundation independently buildable.
