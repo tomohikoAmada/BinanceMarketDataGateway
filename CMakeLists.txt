@@ -30,7 +30,7 @@ option(BMD_GATEWAY_BUILD_G10_STATUS
 option(BMD_GATEWAY_BUILD_G11_MULTI_MARKET
        "Build G11 fixed Spot/USD-M BTCUSDT multi-market runtime" OFF)
 option(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON
-       "Build the post-G11 long-running fixed two-product bmd-gatewayd" OFF)
+       "Build the configured-product production bmd-gatewayd" OFF)
 option(BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION
        "Instrument the real fixed two-product production daemon" OFF)
 option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
@@ -1170,6 +1170,23 @@ if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
         set_tests_properties(gateway_production_acceptance_config_tests
                              PROPERTIES TIMEOUT 10)
 
+        add_executable(bmd_gateway_four_product_integration_tests
+            tests/four_product_integration_tests.cpp)
+        set_target_properties(bmd_gateway_four_product_integration_tests
+            PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+        target_include_directories(bmd_gateway_four_product_integration_tests
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+        target_compile_definitions(bmd_gateway_four_product_integration_tests PRIVATE
+            BMD_GATEWAY_FOUR_PRODUCT_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/examples/gateway.json")
+        target_link_libraries(bmd_gateway_four_product_integration_tests
+            PRIVATE bmd_gateway_production)
+        bmd_gateway_apply_warnings(bmd_gateway_four_product_integration_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_four_product_integration_tests)
+        add_test(NAME gateway_four_product_integration_tests
+                 COMMAND bmd_gateway_four_product_integration_tests)
+        set_tests_properties(gateway_four_product_integration_tests
+                             PROPERTIES TIMEOUT 60)
+
         add_executable(bmd_gateway_production_tests
             tests/production_gateway_tests.cpp
         )
@@ -1281,6 +1298,8 @@ if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
                 CXX_STANDARD_REQUIRED YES
                 CXX_EXTENSIONS NO
         )
+        target_link_libraries(bmd_gateway_production_daemon_process_tests
+            PRIVATE bmd_gateway_production)
         bmd_gateway_apply_warnings(
             bmd_gateway_production_daemon_process_tests)
         bmd_gateway_apply_sanitizers(

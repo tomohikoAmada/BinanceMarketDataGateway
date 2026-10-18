@@ -1,0 +1,17 @@
+include(production-ci)
+
+# Native codegen executables only: select Conan Center's published GNU17 tools.
+# Host/runtime settings and package IDs remain C++20 in production-ci.
+[settings]
+grpc/*:compiler.cppstd=gnu17
+protobuf/*:compiler.cppstd=gnu17
+abseil/*:compiler.cppstd=gnu17
+re2/*:compiler.cppstd=gnu17
+
+[options]
+grpc/*:csharp_plugin=True
+grpc/*:node_plugin=True
+grpc/*:objective_c_plugin=True
+grpc/*:php_plugin=True
+grpc/*:python_plugin=True
+grpc/*:ruby_plugin=True

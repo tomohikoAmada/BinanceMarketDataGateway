@@ -77,7 +77,7 @@ USD-M 深度 E→event-time、T→transaction-time，trade-time absent，T=0/缺
 
 Foundation 是独立、无网络无线程的历史最小配置/生命周期 seam；生产目标由 `BMD_GATEWAY_BUILD_PRODUCTION_DAEMON=ON` 启用。Contracts message-only 依赖与单独 gRPC artifact 的选择继续显式保留；G1 冻结 upstream smoke 不随 main 漂移而重新固定。
 
-依赖不使用 floating FetchContent。Gateway 的 offline runtime 测试和 sanitizer 图已经可以本机构建；GitHub 现有默认 CI 只覆盖 Foundation，补生产 CI 是 M3 的要求。
+依赖不使用 floating FetchContent。Gateway 的 offline runtime 测试和 sanitizer 图已经可以本机构建；GitHub G2 已补 production Release/offline job：固定 Conan lock/profile，普通 PR 从二进制缓存构建 `bmd-gatewayd` 并测试；首次缓存准备单独手动执行，最终实跑状态见 [G2 证据](docs/GATEWAY_G2_V03_EVIDENCE.md)。
 
 旧 fixed-two 的 recovery 和 performance 记录保留为历史事实。当前配置生产代码的完成，不等同于四产品真实验收或容量证明。性能改动必须由实际瓶颈和同条件前后测量支持，不引入 speculative lock-free、busy polling、affinity、自定义 allocator 或 worker framework。
 

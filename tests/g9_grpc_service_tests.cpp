@@ -227,9 +227,9 @@ void request_validation_policy() {
   REQUIRE(std::holds_alternative<g9::ValidatedEventSubscription>(
       g7::validate_event_request(request, "gw-g9")));
 
-  const auto invalid = [](wire::EventSubscriptionRequest request) {
+  const auto invalid = [](wire::EventSubscriptionRequest candidate) {
     REQUIRE_EQ(std::get<g7::RequestValidationError>(
-                   g7::validate_event_request(request, "gw-g9")),
+                   g7::validate_event_request(candidate, "gw-g9")),
                g7::RequestValidationError::InvalidArgument);
   };
   request.set_schema_version("wrong.v1");

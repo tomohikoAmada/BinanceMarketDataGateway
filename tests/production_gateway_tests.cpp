@@ -15,6 +15,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <functional>
 #include <future>
@@ -209,13 +210,42 @@ private:
   std::uint16_t port_{0U};
 };
 
+void performance_preflight_matches_build_mode() {
+  constexpr auto name = "BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT";
+  const auto *previous = std::getenv(name);
+  const std::optional<std::string> saved =
+      previous == nullptr ? std::nullopt : std::optional<std::string>{previous};
+  REQUIRE(setenv(name, "/definitely/missing/stale-performance.json", 1) == 0);
+  const production::DaemonConfig config{
+      "127.0.0.1:50051",
+      {g11::spot_btcusdt_key(),
+       {common::VENUE_BINANCE, common::MARKET_SPOT, "ETHUSDT"},
+       g11::usdm_btcusdt_key(),
+       {common::VENUE_BINANCE, common::MARKET_USD_M_PERPETUAL, "ETHUSDT"}}};
+  std::ostringstream errors;
+  const auto accepted =
+      production::performance_baseline_preflight(config, errors);
+  const auto restored =
+      saved.has_value() ? setenv(name, saved->c_str(), 1) : unsetenv(name);
+  REQUIRE(restored == 0);
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  REQUIRE(!accepted);
+  REQUIRE(errors.str().find("reason=composition") != std::string::npos);
+#else
+  REQUIRE(accepted);
+  REQUIRE(errors.str().empty());
+#endif
+}
+
 void normal_start_stop() {
   auto configured = support::gateway_products();
   auto gateway = make_gateway(std::move(configured));
   REQUIRE(gateway.start().code == production::StartCode::Serving);
   const auto serving = gateway.observe();
-  const auto &spot = product(serving, g11::spot_btcusdt_key());
-  const auto &usdm = product(serving, g11::usdm_btcusdt_key());
+  const auto spot_key = g11::spot_btcusdt_key();
+  const auto usdm_key = g11::usdm_btcusdt_key();
+  const auto &spot = product(serving, spot_key);
+  const auto &usdm = product(serving, usdm_key);
   REQUIRE(serving.state == production::GatewayState::Serving);
   REQUIRE(serving.selected_port > 0);
   REQUIRE(spot.recovery.state == g5::RecoveryState::Live);
@@ -523,8 +553,10 @@ void post_start_failure_isolated() {
   REQUIRE(terminal.terminal);
 
   const auto serving = gateway.observe();
-  const auto &spot = product(serving, g11::spot_btcusdt_key());
-  const auto &usdm = product(serving, g11::usdm_btcusdt_key());
+  const auto spot_key = g11::spot_btcusdt_key();
+  const auto usdm_key = g11::usdm_btcusdt_key();
+  const auto &spot = product(serving, spot_key);
+  const auto &usdm = product(serving, usdm_key);
   REQUIRE(serving.state == production::GatewayState::Serving);
   REQUIRE(spot.recovery.state == g5::RecoveryState::Live);
   REQUIRE(usdm.recovery.terminal);
@@ -963,6 +995,8 @@ void contracts_c0_time_reaches_projection_and_both_grpc_streams() {
 
 int main() {
   const std::vector<std::pair<std::string_view, std::function<void()>>> tests{
+      {"PERFORMANCE_PREFLIGHT_MATCHES_BUILD_MODE",
+       performance_preflight_matches_build_mode},
       {"NORMAL_PRODUCTION_START_STOP", normal_start_stop},
       {"CONTRACTS_C0_TIME_PROJECTION_GRPC",
        contracts_c0_time_reaches_projection_and_both_grpc_streams},

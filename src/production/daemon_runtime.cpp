@@ -436,12 +436,14 @@ struct GatewayTotals final {
   return result;
 }
 
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
 [[nodiscard]] bool
 legacy_performance_composition(const std::vector<g11::MarketKey> &market_keys) {
   return market_keys.size() == 2U &&
          market_keys[0] == g11::spot_btcusdt_key() &&
          market_keys[1] == g11::usdm_btcusdt_key();
 }
+#endif
 
 } // namespace
 
@@ -460,12 +462,17 @@ void write_product_identity(std::ostream &output, const g11::MarketKey &key) {
 
 bool performance_baseline_preflight(const DaemonConfig &config,
                                     std::ostream &errors) {
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
   const auto *path = std::getenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT");
   if (path != nullptr && *path != '\0' &&
       !legacy_performance_composition(config.market_keys)) {
     errors << "performance_baseline_export=unsupported reason=composition\n";
     return false;
   }
+#else
+  static_cast<void>(config);
+  static_cast<void>(errors);
+#endif
   return true;
 }
 

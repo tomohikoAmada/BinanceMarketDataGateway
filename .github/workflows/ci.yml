@@ -1,8 +1,19 @@
-name: Gateway foundation
+name: Gateway CI
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      prepare_dependencies:
+        description: Prepare the pinned Linux production binary cache (one-time / dependency changes)
+        type: boolean
+        default: false
+      binary_seed_run:
+        description: Optional successful preparation run ID to reuse its binary archive on main
+        type: string
+        default: ''
+
 
 permissions:
   contents: read
@@ -79,3 +90,93 @@ jobs:
       - uses: actions/checkout@v4
       - name: clang-format
         run: scripts/format-check.sh
+
+  production-dependencies:
+    name: Prepare production binaries (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.prepare_dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CONAN_HOME: ${{ github.workspace }}/.cache/production-conan
+      CC: gcc-13
+      CXX: g++-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'conan==2.31.2' 'protobuf==6.33.5' 'pytest==8.4.2'
+      - uses: actions/cache/restore@v4
+        id: binaries
+        with:
+          path: .cache/production-conan
+          key: production-linux-gcc13-v1-${{ hashFiles('conanfile.py', 'conan.lock', 'profiles/production-ci', 'profiles/production-ci-build', 'scripts/ci/production-dependencies.sh') }}
+      - name: Restore prepared binary archive from another branch
+        if: steps.binaries.outputs.cache-hit != 'true' && inputs.binary_seed_run != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: production-binaries-${{ hashFiles('conanfile.py', 'conan.lock', 'profiles/production-ci', 'profiles/production-ci-build', 'scripts/ci/production-dependencies.sh') }}
+          run-id: ${{ inputs.binary_seed_run }}
+          github-token: ${{ github.token }}
+          path: build/production-binary-seed
+      - name: Import binary archive
+        if: steps.binaries.outputs.cache-hit != 'true' && inputs.binary_seed_run != ''
+        run: conan cache restore build/production-binary-seed/production-binaries.tgz
+      - name: Prepare pinned binaries only when absent
+        if: steps.binaries.outputs.cache-hit != 'true' && inputs.binary_seed_run == ''
+        run: scripts/ci/production-dependencies.sh prepare
+      - name: Verify binary-only resolution
+        run: scripts/ci/production-dependencies.sh consume
+      - name: Export binaries for main cache initialization
+        run: conan cache save '*:*' --no-source --file=build/production-binaries.tgz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-binaries-${{ hashFiles('conanfile.py', 'conan.lock', 'profiles/production-ci', 'profiles/production-ci-build', 'scripts/ci/production-dependencies.sh') }}
+          path: build/production-binaries.tgz
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/cache/save@v4
+        if: steps.binaries.outputs.cache-hit != 'true'
+        with:
+          path: .cache/production-conan
+          key: ${{ steps.binaries.outputs.cache-primary-key }}
+
+  production:
+    name: Production Release / four-product offline
+    needs: production-dependencies
+    if: always() && (needs.production-dependencies.result == 'skipped' || needs.production-dependencies.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CONAN_HOME: ${{ github.workspace }}/.cache/production-conan
+      CC: gcc-13
+      CXX: g++-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'conan==2.31.2'
+      - name: Restore pinned binaries (no source fallback)
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/production-conan
+          key: production-linux-gcc13-v1-${{ hashFiles('conanfile.py', 'conan.lock', 'profiles/production-ci', 'profiles/production-ci-build', 'scripts/ci/production-dependencies.sh') }}
+          fail-on-cache-miss: true
+      - name: Resolve offline binaries
+        run: scripts/ci/production-dependencies.sh consume
+      - name: Configure production graph
+        run: >-
+          cmake -S . -B build/production -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/build/production-deps/conan_toolchain.cmake
+          -DBMD_GATEWAY_BUILD_PRODUCTION_DAEMON=ON
+          -DBMD_GATEWAY_BUILD_TESTS=ON
+          -DBMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE=OFF
+      - name: Build real daemon and offline tests
+        run: cmake --build build/production --parallel 4
+      - name: Production offline regression
+        run: ctest --test-dir build/production --output-on-failure
