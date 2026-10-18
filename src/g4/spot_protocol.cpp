@@ -78,14 +78,14 @@ string_field(const Json &object, std::string_view name) {
                             : value.substr(decimal + 1U);
   const auto digits = [](std::string_view text) {
     return std::all_of(text.begin(), text.end(),
-                       [](char value) { return value >= '0' && value <= '9'; });
+                       [](char digit) { return digit >= '0' && digit <= '9'; });
   };
   if (whole.empty() || !digits(whole) ||
       (decimal != std::string_view::npos && fraction.empty()) ||
       !digits(fraction)) {
     return false;
   }
-  const auto nonzero = [](char value) { return value != '0'; };
+  const auto nonzero = [](char digit) { return digit != '0'; };
   return allow_zero || std::any_of(value.begin(), value.end(), nonzero);
 }
 
@@ -204,7 +204,7 @@ DecimalScaleResult decimal_scale_from_quantum(std::string_view quantum) {
                             : quantum.substr(decimal + 1U);
   const auto all_digits = [](std::string_view text) {
     return std::all_of(text.begin(), text.end(),
-                       [](char value) { return value >= '0' && value <= '9'; });
+                       [](char digit) { return digit >= '0' && digit <= '9'; });
   };
   if (whole.empty() || !all_digits(whole) ||
       (decimal != std::string_view::npos && fraction.empty()) ||
@@ -214,7 +214,7 @@ DecimalScaleResult decimal_scale_from_quantum(std::string_view quantum) {
   }
 
   const bool nonzero_whole = std::any_of(
-      whole.begin(), whole.end(), [](char value) { return value != '0'; });
+      whole.begin(), whole.end(), [](char digit) { return digit != '0'; });
   const auto significant_end = fraction.find_last_not_of('0');
   if (!nonzero_whole && significant_end == std::string_view::npos) {
     return error(ProtocolErrorCode::InvalidQuantum, "quantum",
