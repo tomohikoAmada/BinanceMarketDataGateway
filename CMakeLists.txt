@@ -1170,6 +1170,21 @@ if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
         set_tests_properties(gateway_production_acceptance_config_tests
                              PROPERTIES TIMEOUT 10)
 
+        add_executable(bmd_gateway_projection_p1_measurements
+            tests/projection_p1_measurements.cpp)
+        set_target_properties(bmd_gateway_projection_p1_measurements
+            PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+        target_include_directories(bmd_gateway_projection_p1_measurements
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+        target_compile_definitions(bmd_gateway_projection_p1_measurements PRIVATE
+            BMD_GATEWAY_FOUR_PRODUCT_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/examples/gateway.json")
+        target_link_libraries(bmd_gateway_projection_p1_measurements PRIVATE bmd_gateway_production)
+        bmd_gateway_apply_warnings(bmd_gateway_projection_p1_measurements)
+        bmd_gateway_apply_sanitizers(bmd_gateway_projection_p1_measurements)
+        add_test(NAME gateway_projection_p1_smoke COMMAND bmd_gateway_projection_p1_measurements
+            8 1 8 1000 "${CMAKE_CURRENT_BINARY_DIR}/p1-smoke.json")
+        set_tests_properties(gateway_projection_p1_smoke PROPERTIES TIMEOUT 30)
+
         add_executable(bmd_gateway_four_product_integration_tests
             tests/four_product_integration_tests.cpp)
         set_target_properties(bmd_gateway_four_product_integration_tests

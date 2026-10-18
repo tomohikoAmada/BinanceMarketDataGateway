@@ -64,3 +64,11 @@ BMD-RL-01 属 G3 的联合交付要求：按 Spot/USD-M 各自窗口列实际 en
 历史依据：[2026-10-04 审查](CODE_REVIEW_2026-10-04.md)、
 [旧阶段计划](MILESTONES_PRE_REVIEW_2026-10-04.md)、
 [历史 G0 Foundation](G0_EVIDENCE.md)、[G1 proof](../scripts/g1-candidate-proof.sh)。
+
+## Projection P1 measurement support — 2026-10-18
+
+Owner-authorized offline attribution reuses the G2 configured production graph.
+The opt-in trace/export extension and test-only fixed-depth/paired-campaign
+driver are documented in [performance instrumentation](PERFORMANCE_BASELINE_INSTRUMENTATION.md).
+This is Projection P1 evidence preparation, not completion of Gateway G3,
+real Binance networking, Recorder co-deployment or resource/API budget approval.

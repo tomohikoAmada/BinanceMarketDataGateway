@@ -228,13 +228,8 @@ void performance_preflight_matches_build_mode() {
   const auto restored =
       saved.has_value() ? setenv(name, saved->c_str(), 1) : unsetenv(name);
   REQUIRE(restored == 0);
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
-  REQUIRE(!accepted);
-  REQUIRE(errors.str().find("reason=composition") != std::string::npos);
-#else
   REQUIRE(accepted);
   REQUIRE(errors.str().empty());
-#endif
 }
 
 void normal_start_stop() {

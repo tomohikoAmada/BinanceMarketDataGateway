@@ -193,16 +193,9 @@ bool ProductionGateway::write_performance_baseline(std::ostream &output) const {
       return false;
     }
   }
-  if (products_.size() != 2U) {
-    return false;
+  for (const auto &product : products_.products()) {
+    product->performance_baseline().write_json_lines(output);
   }
-  const auto *spot = products_.find(g11::spot_btcusdt_key());
-  const auto *usdm = products_.find(g11::usdm_btcusdt_key());
-  if (spot == nullptr || usdm == nullptr) {
-    return false;
-  }
-  spot->performance_baseline().write_json_lines(output);
-  usdm->performance_baseline().write_json_lines(output);
   return output.good();
 }
 #endif

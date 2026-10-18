@@ -244,7 +244,7 @@ make_performance_baseline(const MarketKey &key, const g3::RuntimeClock &clock,
                           performance::PerformanceBaselineLimits limits) {
   return std::make_shared<performance::ProductTraceBuffer>(
       measurement_product(key), [clock] { return clock().monotonic_ns; },
-      limits);
+      limits, key.symbol);
 }
 
 [[nodiscard]] g3::RuntimeLimits runtime_limits_with_baseline(

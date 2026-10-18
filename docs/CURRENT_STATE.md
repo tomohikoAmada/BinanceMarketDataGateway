@@ -18,7 +18,7 @@ M4_PERFORMANCE_STABILITY_LIVE_ACCEPTANCE_AND_DELIVERY=NOT_STARTED
 PERFORMANCE_AND_RESOURCE_BUDGETS=NOT_ESTABLISHED
 MULTI_PRODUCT_PERFORMANCE_ACCEPTANCE=NOT_COMPLETE
 PROJECTION_MULTI_PRODUCT_API_CHANGE_REQUIRED=NO
-PROJECTION_PERFORMANCE_ASSESSMENT=PLANNED
+PROJECTION_PERFORMANCE_ASSESSMENT=P1_OFFLINE_MEASUREMENT_COMPLETE_BUDGET_DECISION_PENDING_G3
 CURRENT_PLAN=docs/MILESTONES.md
 PRODUCTION_DAEMON=bmd-gatewayd
 PRODUCTION_CONFIG=--config PATH
@@ -64,3 +64,7 @@ Release/offline job，普通 PR 只用锁定二进制缓存；手动准备入口
 G2 本机完整生产图及必要 sanitizer、GitHub/main/PR 二进制消费实跑均通过。
 
 高性能、安全稳定、低延迟与低 CPU/内存消耗是必需交付目标，尚未完成多产品质量验收。Projection 已在生产路径使用；多交易对不需要新增 Projection API，但其每批全簿复制/重建应进入性能评估。是否修改 Core 由测量与目标预算决定，见 [配套评估](PROJECTION_INTEGRATION_REVIEW_2026-10-04.md)。
+
+Projection P1（2026-10-18）复用 G2 fixture 测四产品成本，增加可选 Adapter/checked apply/
+owner CPU/Write 点位及精确多产品导出；普通构建语义不变。离线结果与边界由 Projection
+`docs/PROJECTION_P1_RESULT.md` 共同记录。该工作不授予 G3/VPS/API 联合预算资格。
