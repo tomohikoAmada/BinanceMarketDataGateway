@@ -58,3 +58,11 @@ GNU17 查询同样缺少 gRPC，不更改已选运行组合。手动准备增加
 archive：主分支初始化从同一依赖 key 的成功 run 导入后执行 --build=never 验证，
 避免为 GitHub branch scope 再编一次。普通 PR 仍无 source fallback。准备限时调整为
 180 分钟，普通生产图 CI 仍为 15 分钟；正在运行的首次任务不因提交而重启。
+
+首次 60 分钟配置的准备任务 `39119072225` 在确认双 gRPC 编译后主动取消，原记录保留；
+长限时过渡任务 `39120460290` 在工具 profile 收敛后取消。对 Conan Center 的确切包清单
+进一步查询发现 codegen 通用 GNU17 binary 可用，使用独立 `production-ci-build`，只调整
+build context 工具标准/插件打包选项；运行侧全部 C++20 设置、版本/RREV、package IDs
+保持相同。预解析确认为 build grpc `469bc9791dc5bc8f188c552f6591bf26a02c8822` Download，
+build protobuf `f5d75c5ca3a4d6147cbb99a5f8f5d03d2a2471a1` Download；host grpc 仍为原
+`033609c8701f6294de7cdccb75ad53e5e4fa4842`。避免源码准备第二份完整 gRPC，无版本 repin。

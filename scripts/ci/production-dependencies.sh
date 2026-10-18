@@ -6,7 +6,7 @@ set -euo pipefail
 mode="${1:-consume}"
 mkdir -p build/production-deps
 profile=profiles/production-ci
-args=(--lockfile=conan.lock -pr:h="$profile" -pr:b="$profile" -o with_g7_grpc=True)
+args=(--lockfile=conan.lock -pr:h="$profile" -pr:b=profiles/production-ci-build -o with_g7_grpc=True)
 
 if [[ "$mode" == prepare ]]; then
     mkdir -p build/ci-upstream

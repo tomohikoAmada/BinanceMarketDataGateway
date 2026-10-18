@@ -113,12 +113,12 @@ jobs:
         id: binaries
         with:
           path: .cache/production-conan
-          key: production-linux-gcc13-v1-${{ hashFiles('conanfile.py', 'conan.lock', 'profiles/production-ci', 'scripts/ci/production-dependencies.sh') }}
+          key: production-linux-gcc13-v1-${{ hashFiles('conanfile.py', 'conan.lock', 'profiles/production-ci', 'profiles/production-ci-build', 'scripts/ci/production-dependencies.sh') }}
       - name: Restore prepared binary archive from another branch
         if: steps.binaries.outputs.cache-hit != 'true' && inputs.binary_seed_run != ''
         uses: actions/download-artifact@v4
         with:
-          name: production-binaries-${{ hashFiles('conanfile.py', 'conan.lock', 'profiles/production-ci', 'scripts/ci/production-dependencies.sh') }}
+          name: production-binaries-${{ hashFiles('conanfile.py', 'conan.lock', 'profiles/production-ci', 'profiles/production-ci-build', 'scripts/ci/production-dependencies.sh') }}
           run-id: ${{ inputs.binary_seed_run }}
           github-token: ${{ github.token }}
           path: build/production-binary-seed
@@ -134,7 +134,7 @@ jobs:
         run: conan cache save '*:*' --no-source --file=build/production-binaries.tgz
       - uses: actions/upload-artifact@v4
         with:
-          name: production-binaries-${{ hashFiles('conanfile.py', 'conan.lock', 'profiles/production-ci', 'scripts/ci/production-dependencies.sh') }}
+          name: production-binaries-${{ hashFiles('conanfile.py', 'conan.lock', 'profiles/production-ci', 'profiles/production-ci-build', 'scripts/ci/production-dependencies.sh') }}
           path: build/production-binaries.tgz
           compression-level: 0
           retention-days: 14
@@ -165,7 +165,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .cache/production-conan
-          key: production-linux-gcc13-v1-${{ hashFiles('conanfile.py', 'conan.lock', 'profiles/production-ci', 'scripts/ci/production-dependencies.sh') }}
+          key: production-linux-gcc13-v1-${{ hashFiles('conanfile.py', 'conan.lock', 'profiles/production-ci', 'profiles/production-ci-build', 'scripts/ci/production-dependencies.sh') }}
           fail-on-cache-miss: true
       - name: Resolve offline binaries
         run: scripts/ci/production-dependencies.sh consume
