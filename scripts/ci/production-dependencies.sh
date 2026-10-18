@@ -4,6 +4,7 @@ set -euo pipefail
 # The ordinary PR path only consumes binaries. Preparing a missing cache is an
 # explicit workflow_dispatch action; upstream source work never runs in PRs.
 mode="${1:-consume}"
+mkdir -p build/production-deps
 profile=profiles/production-ci
 args=(--lockfile=conan.lock -pr:h="$profile" -pr:b="$profile" -o with_g7_grpc=True)
 
