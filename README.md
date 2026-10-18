@@ -60,8 +60,8 @@ GitHub CI 保留独立 Foundation 检查，另用 Ubuntu 24.04 / GCC 13 构建�
 首次接入、缓存过期或依赖变更后，在 **main** 手动运行 Gateway CI，勾选
 `prepare_dependencies`。该入口才允许从固定 Contracts/Projection SHA 准备缺少的二进制；
 缓存按 lock/profile/preparation script 隔离，后续 PR 复用 main 缓存。
-从分支首次接入时，在同一分支已有缓存后再手动运行一次以导出二进制归档；合并后
-main 准备填写该成功 run 的 `binary_seed_run`，直接导入同一批二进制。归档保留 14 天，
+从分支首次接入时，成功的准备 job 会导出二进制归档；合并后 main 准备填写该
+prepare job 所在 run 的 `binary_seed_run`，直接导入同一批二进制。归档保留 14 天，
 无需为转移 GitHub 分支范围再冷编依赖。依赖变更需先准备对应缓存。
 Host/runtime 使用 C++20 固定 profile；独立 build profile 只为 native protoc/gRPC codegen
 选择同版本/RREV 的现成 GNU17 工具二进制，不更改运行侧包身份。

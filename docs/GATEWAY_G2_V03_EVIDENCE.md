@@ -66,3 +66,10 @@ build context 工具标准/插件打包选项；运行侧全部 C++20 设置、�
 保持相同。预解析确认为 build grpc `469bc9791dc5bc8f188c552f6591bf26a02c8822` Download，
 build protobuf `f5d75c5ca3a4d6147cbb99a5f8f5d03d2a2471a1` Download；host grpc 仍为原
 `033609c8701f6294de7cdccb75ad53e5e4fa4842`。避免源码准备第二份完整 gRPC，无版本 repin。
+
+准备 job `39120599182/117655242817` 已成功生成并验证固定二进制归档；整个 run 后续
+因首次启用 Linux 生产全图暴露历史 GCC `-Wshadow` 而失败，不记为整轮通过。
+`spot_protocol.cpp` 四处 lambda 参数及 G9 测试的一处 lambda 参数仅重命名消除遮蔽，
+无语义变化；独立子代理复核通过。G9 定点回归 1/1（0.64s）及格式通过。
+首个 PR ref 因 main 尚无缓存明确失败；分支 push 已验证恢复缓存和离线解析成功，
+最终构建/测试重跑后再合并并初始化 main，不把缓存缺失改成源码 fallback。
