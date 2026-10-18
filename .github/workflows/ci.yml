@@ -101,7 +101,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install 'conan==2.31.2' 'protobuf==6.33.5'
+      - run: python -m pip install 'conan==2.31.2' 'protobuf==6.33.5' 'pytest==8.4.2'
       - uses: actions/cache/restore@v4
         id: binaries
         with:
