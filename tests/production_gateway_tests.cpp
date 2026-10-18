@@ -242,8 +242,10 @@ void normal_start_stop() {
   auto gateway = make_gateway(std::move(configured));
   REQUIRE(gateway.start().code == production::StartCode::Serving);
   const auto serving = gateway.observe();
-  const auto &spot = product(serving, g11::spot_btcusdt_key());
-  const auto &usdm = product(serving, g11::usdm_btcusdt_key());
+  const auto spot_key = g11::spot_btcusdt_key();
+  const auto usdm_key = g11::usdm_btcusdt_key();
+  const auto &spot = product(serving, spot_key);
+  const auto &usdm = product(serving, usdm_key);
   REQUIRE(serving.state == production::GatewayState::Serving);
   REQUIRE(serving.selected_port > 0);
   REQUIRE(spot.recovery.state == g5::RecoveryState::Live);
@@ -551,8 +553,10 @@ void post_start_failure_isolated() {
   REQUIRE(terminal.terminal);
 
   const auto serving = gateway.observe();
-  const auto &spot = product(serving, g11::spot_btcusdt_key());
-  const auto &usdm = product(serving, g11::usdm_btcusdt_key());
+  const auto spot_key = g11::spot_btcusdt_key();
+  const auto usdm_key = g11::usdm_btcusdt_key();
+  const auto &spot = product(serving, spot_key);
+  const auto &usdm = product(serving, usdm_key);
   REQUIRE(serving.state == production::GatewayState::Serving);
   REQUIRE(spot.recovery.state == g5::RecoveryState::Live);
   REQUIRE(usdm.recovery.terminal);

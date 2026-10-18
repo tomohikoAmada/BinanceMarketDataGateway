@@ -73,3 +73,8 @@ build protobuf `f5d75c5ca3a4d6147cbb99a5f8f5d03d2a2471a1` Download；host grpc �
 无语义变化；独立子代理复核通过。G9 定点回归 1/1（0.64s）及格式通过。
 首个 PR ref 因 main 尚无缓存明确失败；分支 push 已验证恢复缓存和离线解析成功，
 最终构建/测试重跑后再合并并初始化 main，不把缓存缺失改成源码 fallback。
+
+Linux 全图继续发现旧验收客户端忽略 write 返回值、旧测试临时 key 触发 GCC13
+`-Wdangling-reference`。保留单次 best-effort write 并保存返回值；两组 lookup key
+改为有名 const lvalue（返回引用始终属于 observation）。没有禁用告警或改运行策略；
+受影响离线回归 2/2（0.97s）、格式及子代理复核通过，继续全图验证。

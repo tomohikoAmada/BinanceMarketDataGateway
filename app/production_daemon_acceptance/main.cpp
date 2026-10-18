@@ -75,7 +75,8 @@ public:
                          const_cast<char *>(config_path.c_str()), nullptr};
       execv(daemon_path.c_str(), child_argv);
       constexpr char message[] = "daemon_execv=failed\n";
-      static_cast<void>(write(STDERR_FILENO, message, sizeof(message) - 1U));
+      const auto written = write(STDERR_FILENO, message, sizeof(message) - 1U);
+      static_cast<void>(written);
       _exit(127);
     }
 
