@@ -10,6 +10,7 @@ namespace {
 namespace common = binance_market_data::common::v1;
 namespace wire = binance_market_data::gateway::v1;
 namespace g3 = binance_market_data::gateway::g3;
+namespace g4 = binance_market_data::gateway::g4;
 namespace g5 = binance_market_data::gateway::g5;
 namespace g7 = binance_market_data::gateway::g7;
 namespace g9 = binance_market_data::gateway::g9;

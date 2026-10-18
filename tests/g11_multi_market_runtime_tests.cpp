@@ -354,7 +354,7 @@ void configured_set_cardinality_duplicates_order_and_stability() {
   REQUIRE_EQ(twenty.size(), 20U);
   REQUIRE_EQ(twenty.registry().entries().size(), 20U);
   auto too_many_entries = twenty.registry().entries();
-  too_many_entries.push_back(too_many_entries.front());
+  too_many_entries.push_back(one.registry().entries().front());
   REQUIRE(rejects_registry(std::move(too_many_entries)));
 
   const g11::MarketKey duplicate_key{common_wire::VENUE_BINANCE,
