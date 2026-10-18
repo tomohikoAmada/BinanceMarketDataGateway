@@ -1,5 +1,6 @@
 #include "daemon_config.hpp"
 #include "daemon_runtime.hpp"
+#include "four_product_test_support.hpp"
 #include "production_test_support.hpp"
 #include "termination_signals.hpp"
 
@@ -82,6 +83,12 @@ int main(int argc, char **argv) {
     } else if (std::string_view{scenario} == "spot-recovery") {
       recover_spot = true;
     }
+  }
+  const auto &config = std::get<production::DaemonConfig>(parsed);
+  if (config.market_keys.size() == 4U) {
+    auto four = production::four_product_test::configure(config);
+    return production::run_production_service(
+        four.config, std::move(four.specs), signals, std::cout, std::cerr);
   }
   auto configured = support::gateway_products(spot_mode);
   auto trigger_recovery = [state = configured.spot] {

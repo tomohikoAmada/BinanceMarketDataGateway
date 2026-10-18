@@ -1,5 +1,12 @@
+#include "event_publication.hpp"
+#include "gateway_status.hpp"
+#include "grpc_service.hpp"
+
+#include <binance_market_data/gateway/v1/gateway_service.grpc.pb.h>
+
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <memory>
 #include <netinet/in.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -21,6 +28,11 @@
 #include <vector>
 
 namespace {
+namespace common = binance_market_data::common::v1;
+namespace wire = binance_market_data::gateway::v1;
+namespace g7 = binance_market_data::gateway::g7;
+namespace g9 = binance_market_data::gateway::g9;
+namespace g10 = binance_market_data::gateway::g10;
 
 class TestFailure final : public std::exception {
 public:
@@ -104,6 +116,12 @@ private:
       static_cast<void>(
           setenv("BMD_GATEWAY_TEST_SCENARIO", scenario_value.c_str(), 1));
     }
+#if !defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    // An ordinary daemon must ignore stale instrumentation settings, including
+    // a composition the historical exporter does not support.
+    static_cast<void>(setenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT",
+                             "/definitely/missing/stale-performance.json", 1));
+#endif
     std::vector<char *> argv;
     argv.reserve(arguments.size() + 2U);
     argv.push_back(const_cast<char *>(path.c_str()));
@@ -233,9 +251,10 @@ void cli_processes(const std::string &daemon) {
 void signal_process(const std::string &fixture, int signal,
                     bool prove_still_running, std::string_view scenario = {}) {
   const auto endpoint = "127.0.0.1:" + std::to_string(available_port());
-  ConfigFile config{"{\"grpc_listen\":\"" + endpoint +
-                    "\",\"spot_symbols\":[\"BTCUSDT\"],"
-                    "\"usdm_symbols\":[\"BTCUSDT\"]}"};
+  const bool four = scenario.empty();
+  const auto symbols = four ? "[\"BTCUSDT\",\"ETHUSDT\"]" : "[\"BTCUSDT\"]";
+  ConfigFile config{"{\"grpc_listen\":\"" + endpoint + "\",\"spot_symbols\":" +
+                    symbols + ",\"usdm_symbols\":" + symbols + "}"};
   auto child = spawn(fixture, {"--config", config.path()}, scenario);
   std::string output;
   const auto deadline =
@@ -252,12 +271,76 @@ void signal_process(const std::string &fixture, int signal,
     std::this_thread::sleep_for(std::chrono::milliseconds{5});
   }
   REQUIRE(serving);
-  REQUIRE(output.find("gateway_state=starting stage=runtime products=2 ") !=
-          std::string::npos);
-  REQUIRE(output.find("gateway_state=serving products=2 grpc_port=") !=
-          std::string::npos);
+  const std::string count = four ? "4" : "2";
+  REQUIRE(output.find("gateway_state=starting stage=runtime products=" + count +
+                      " ") != std::string::npos);
+  REQUIRE(output.find("gateway_state=serving products=" + count +
+                      " grpc_port=") != std::string::npos);
   REQUIRE(output.find("spot_generation=") == std::string::npos);
   REQUIRE(output.find("usdm_generation=") == std::string::npos);
+  std::vector<std::unique_ptr<grpc::ClientContext>> contexts;
+  std::vector<std::unique_ptr<grpc::ClientReader<wire::OrderBookStreamItem>>>
+      books;
+  std::vector<std::unique_ptr<grpc::ClientReader<wire::GatewayEventEnvelope>>>
+      events;
+  if (four) {
+    auto stub = wire::BinanceMarketDataGatewayService::NewStub(
+        grpc::CreateChannel(endpoint, grpc::InsecureChannelCredentials()));
+    for (const auto market :
+         {common::MARKET_SPOT, common::MARKET_USD_M_PERPETUAL}) {
+      for (const auto symbol : {"BTCUSDT", "ETHUSDT"}) {
+        contexts.push_back(std::make_unique<grpc::ClientContext>());
+        contexts.back()->set_deadline(std::chrono::system_clock::now() +
+                                      std::chrono::seconds{15});
+        wire::OrderBookSubscriptionRequest request;
+        request.set_request_id("signal-book");
+        request.set_schema_version(g7::kOrderBookRequestSchema);
+        request.set_venue(common::VENUE_BINANCE);
+        request.set_market(market);
+        request.set_symbol(symbol);
+        request.set_initial_snapshot_mode(
+            common::INITIAL_SNAPSHOT_MODE_REQUIRED);
+        request.add_supported_snapshot_schema_versions(g7::kSnapshotSchema);
+        request.add_supported_update_schema_versions(g7::kUpdateSchema);
+        books.push_back(
+            stub->SubscribeOrderBook(contexts.back().get(), request));
+        wire::OrderBookStreamItem item;
+        REQUIRE(books.back()->Read(&item) && item.has_subscription_accepted());
+        REQUIRE(books.back()->Read(&item) && item.has_snapshot());
+        REQUIRE(item.snapshot().symbol() == symbol);
+        REQUIRE(item.snapshot().market() == market);
+        contexts.push_back(std::make_unique<grpc::ClientContext>());
+        contexts.back()->set_deadline(std::chrono::system_clock::now() +
+                                      std::chrono::seconds{15});
+        wire::EventSubscriptionRequest event_request;
+        event_request.set_request_id("signal-event");
+        event_request.set_schema_version(g9::kEventRequestSchema);
+        auto *selector = event_request.add_selectors();
+        selector->set_venue(common::VENUE_BINANCE);
+        selector->set_market(market);
+        selector->set_symbol(symbol);
+        selector->set_stream(common::STREAM_DIFF_DEPTH);
+        event_request.set_delivery_mode(
+            common::DELIVERY_MODE_CONTIGUOUS_EVENTS);
+        event_request.add_supported_payload_schema_versions(
+            g9::kDepthEventSchema);
+        events.push_back(
+            stub->SubscribeEvents(contexts.back().get(), event_request));
+        wire::GatewayEventEnvelope event;
+        REQUIRE(events.back()->Read(&event) &&
+                event.has_subscription_accepted());
+      }
+    }
+    grpc::ClientContext status_context;
+    status_context.set_deadline(std::chrono::system_clock::now() +
+                                std::chrono::seconds{2});
+    wire::GatewayStatusRequest request;
+    request.set_request_id("signal-status");
+    request.set_schema_version(g10::kStatusRequestSchema);
+    wire::GatewayStatusSnapshot response;
+    REQUIRE(stub->GetGatewayStatus(&status_context, request, &response).ok());
+    REQUIRE(response.markets_size() == 4);
+  }
   if (prove_still_running) {
     int status = 0;
     REQUIRE(waitpid(child.pid, &status, WNOHANG) == 0);
@@ -272,6 +355,18 @@ void signal_process(const std::string &fixture, int signal,
   REQUIRE(output.find("gateway_state=stopped contexts=0 transports=0 "
                       "subscriptions=0 owners_joined=yes") !=
           std::string::npos);
+  for (auto &reader : books) {
+    wire::OrderBookStreamItem item;
+    while (reader->Read(&item)) {
+    }
+    static_cast<void>(reader->Finish());
+  }
+  for (auto &reader : events) {
+    wire::GatewayEventEnvelope item;
+    while (reader->Read(&item)) {
+    }
+    static_cast<void>(reader->Finish());
+  }
   if (scenario == "spot-recovery") {
     constexpr std::string_view prefix{
         "gateway_recovery_failure venue=VENUE_BINANCE market=MARKET_SPOT "
