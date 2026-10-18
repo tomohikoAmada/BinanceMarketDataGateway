@@ -12,10 +12,10 @@
 | --- | --- | --- |
 | G0：安全、协议兼容与可用性 | G01 数值 loopback；G03 无关 JSON 扩展兼容且身份/类型/序列不放宽；G05 owner 观察/Status/startup 有界且生命周期安全；G10 测试 RAII join/有界同步 | 完成；2026-10-15 独立复核补修 reset gate 观察，PR #35 已合并；[证据](GATEWAY_G0_V03_EVIDENCE.md) |
 | G1：数据语义与最小新鲜度 | USD-M T transaction-time 映射按共同 fixture 修正；Status last_event 明确收窄为当前有效 Applied Depth receive UTC；不增加 Health 服务或安静市场强制重同步 | 完成实现、完整离线验证及独立复核（2026-10-16）；沿用 Wire/依赖 pin；[证据](GATEWAY_G1_V03_EVIDENCE.md) |
-| G2：四产品生产路径与最小 CI | Spot BTC/ETH + USD-M BTC/ETH，JSON→metadata→spec→各自 transport/Projection→Book/Event/Status；故障与慢消费者隔离、48 contexts、活动 RPC 退出、失败回滚；Foundation 之外真实 production build/smoke | 进行中（2026-10-18 用户授权）；[工作证据](GATEWAY_G2_V03_EVIDENCE.md) |
+| G2：四产品生产路径与最小 CI | Spot BTC/ETH + USD-M BTC/ETH，JSON→metadata→spec→各自 transport/Projection→Book/Event/Status；故障与慢消费者隔离、48 contexts、活动 RPC 退出、失败回滚；Foundation 之外真实 production build/smoke | 完成（2026-10-18）；完整离线及 sanitizer、独立复核、Linux/main/PR CI 通过，PR #37 已合并；[证据](GATEWAY_G2_V03_EVIDENCE.md) |
 | G3：共同负载、API 联合预算与交付 | 批准硬件/负载/CPU/RSS/p99 等现实预算；四产品有界真实行情与同 VPS 共同运行；完成 BMD-RL-01 分市场分窗口预算、离线恢复及授权的低扰动联合观察；只优化实测热点 | 未启动；原 M4/G12-E 质量/交付验收仍未关闭 |
 
-2026-10-15 用户授权完成 G1，并独立复核待审分支。2026-10-18 用户授权 G2；四产品离线组合已验证，production CI 与交付进行中。G3 生产窗口仍单独安排。
+2026-10-15 用户授权完成 G1，并独立复核待审分支。2026-10-18 用户授权 G2；四产品离线组合、production CI、独立复核与合并交付完成。G3 生产窗口仍单独安排。
 
 ## 保留的实现与设计边界
 
@@ -42,7 +42,7 @@ G0 在生产图执行 Release、ASan、UBSan、TSan；G1 执行 Release、ASan+U
 
 历史 G1 四包/link/message-lineage proof 只在依赖打包、ABI 或导出边界实质变化时复跑。
 不要求每 PR 冷编全部 Protobuf/gRPC/Boost/Projection/Contracts，不把线上长跑放进普通 PR。
-G2 正在补充单一 production Release CI；普通 PR 只读取固定二进制缓存，首次准备为手动入口。最终 GitHub/main 验证见 [G2 证据](GATEWAY_G2_V03_EVIDENCE.md)。
+G2 已补单一 production Release CI；普通 PR 只读取固定二进制缓存，首次准备为手动入口。最终 GitHub/main 验证见 [G2 证据](GATEWAY_G2_V03_EVIDENCE.md)。
 
 ## 质量与交付仍需证明
 

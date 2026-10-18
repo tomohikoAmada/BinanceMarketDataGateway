@@ -17,8 +17,9 @@ v0.3 overall and Gateway module plans now define G0-G3; these new labels do not
 reopen historical dependency proof. G0's independent review and reset-observation
 fix are complete. The user authorized v0.3 G1 on 2026-10-15; implementation,
 offline validation and independent review completed on 2026-10-16. G2 was
-authorized on 2026-10-18; four-product offline verification is complete and
-production CI/delivery are in progress. G3 is not started. High performance, low latency, low CPU/RSS
+authorized on 2026-10-18; four-product offline verification, production CI,
+independent review and PR merge are complete. G3 is not started.
+High performance, low latency, low CPU/RSS
 and safe stable behavior are delivery requirements; no multi-product performance
 budget has yet been established. Do not label future acceptance complete
 because configurable code exists. Keep Foundation independently buildable.

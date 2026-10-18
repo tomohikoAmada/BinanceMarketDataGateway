@@ -1,6 +1,6 @@
 # Gateway architecture
 
-当前开发计划：[docs/MILESTONES.md](docs/MILESTONES.md)，依据 2026-10-12 BinanceMarketData v0.3 总计划及 Gateway 模块计划。2026-10-15 用户授权 G1 时间语义/Depth 新鲜度及独立复核；G0 reset 观察补修已复核。当前实现是支持启动配置的有限产品集合，已经复用 G12-B 的 owner set 和 registry；历史固定双 BTC 是其中一个配置场景。
+当前开发计划：[docs/MILESTONES.md](docs/MILESTONES.md)，依据 2026-10-12 BinanceMarketData v0.3 总计划及 Gateway 模块计划。G0 reset 观察补修、G1 时间语义/Depth 新鲜度及独立复核已完成；2026-10-18 G2 四产品离线集成及最小生产 CI 已复核合并。当前实现是支持启动配置的有限产品集合，已经复用 G12-B 的 owner set 和 registry；历史固定双 BTC 是其中一个配置场景。G3 真实网络与性能/API 预算验收未启动。
 
 ## 职责与依赖
 
