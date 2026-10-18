@@ -52,3 +52,9 @@ Foundation 独立 1/1，格式通过。日志 `build/v03-g2/`（初轮 Release �
 production/preflight、历史性能 baseline、进程退出。普通构建四产品八个活动 RPC；
 instrumented 进程 fixture 维持历史双 BTC，因为 exporter 本轮未泛化。
 默认生产构建不读取该历史环境变量；没有新增配置、线程、Wire 或上游 pin。
+
+GitHub 首次准备的实测耗时主要在 gRPC 编译；本机没有 Linux 固定包，Conan 的兼容
+GNU17 查询同样缺少 gRPC，不更改已选运行组合。手动准备增加有限保留的 Conan binary
+archive：主分支初始化从同一依赖 key 的成功 run 导入后执行 --build=never 验证，
+避免为 GitHub branch scope 再编一次。普通 PR 仍无 source fallback。准备限时调整为
+180 分钟，普通生产图 CI 仍为 15 分钟；正在运行的首次任务不因提交而重启。

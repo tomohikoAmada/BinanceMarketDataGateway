@@ -59,7 +59,10 @@ GitHub CI 保留独立 Foundation 检查，另用 Ubuntu 24.04 / GCC 13 构建�
 普通 PR 只恢复二进制缓存并执行 `--build=never --no-remote`；无缓存时明确失败。
 首次接入、缓存过期或依赖变更后，在 **main** 手动运行 Gateway CI，勾选
 `prepare_dependencies`。该入口才允许从固定 Contracts/Projection SHA 准备缺少的二进制；
-缓存按 lock/profile/preparation script 隔离，后续 PR 复用 main 缓存。依赖变更需先准备对应缓存。
+缓存按 lock/profile/preparation script 隔离，后续 PR 复用 main 缓存。
+从分支首次接入时，在同一分支已有缓存后再手动运行一次以导出二进制归档；合并后
+main 准备填写该成功 run 的 `binary_seed_run`，直接导入同一批二进制。归档保留 14 天，
+无需为转移 GitHub 分支范围再冷编依赖。依赖变更需先准备对应缓存。
 历史 G1 upstream smoke 仍保持单独显式入口，不随本 CI 重复执行。ASan、UBSan、TSan 可分别启用 `BMD_GATEWAY_ENABLE_ASAN` / `BMD_GATEWAY_ENABLE_UBSAN` / `BMD_GATEWAY_ENABLE_TSAN`。
 
 保留的双 BTC 生命周期验收客户端须使用双 BTC 配置，与 daemon 使用同一个文件；它不证明四产品验收：
