@@ -35,3 +35,9 @@ G3 的真实 Binance/VPS、资源/延迟预算和 BMD-RL-01 联合预算/观察�
   已补固定 pytest，重跑中。普通 push 在缓存尚未存在时明确失败，无隐式冷编 fallback。
 - GitHub cache 有 branch scope；需合并后 main 手动准备一次并验证 consume-only。
   不以 feature 分支结果代替 main 后续 PR 可用性。
+
+本机完整生产 Release、ASan+UBSan、TSan 均 23/23；强化 terminal 断言后再验
+Release 23/23 (6.03s)、ASan+UBSan 23/23 (6.05s)、TSan 23/23 (30.58s)。
+新测及信号进程测试各本机重复十次，独立 reviewer 各重复二十次；均通过。
+Foundation 独立 1/1，格式通过。日志 `build/v03-g2/`（初轮 Release 日志在 `build/v03-g1/`）。
+后续仅补可选 instrumented 编译模式的 preflight 测试，未更改 runtime 行为。

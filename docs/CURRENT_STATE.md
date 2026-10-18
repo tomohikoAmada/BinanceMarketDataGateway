@@ -1,6 +1,6 @@
 # Current Gateway state
 
-更新日期：2026-10-16。执行 BinanceMarketData v0.3 总计划及 Gateway 模块计划；G0 reset 观察补修已复核合并，G1 时间映射与 Depth 新鲜度已完成实现、离线验证及独立复核。当前导航见 [MILESTONES](MILESTONES.md)，证据见 [G0 v0.3](GATEWAY_G0_V03_EVIDENCE.md) 和 [G1 v0.3](GATEWAY_G1_V03_EVIDENCE.md)。旧阶段编号及 [2026-10-04 审查](CODE_REVIEW_2026-10-04.md)仅作实现/修复历史，不与新版 G0 混同。
+更新日期：2026-10-18。执行 BinanceMarketData v0.3 总计划及 Gateway 模块计划；G0 reset 观察补修已复核合并，G1 时间映射与 Depth 新鲜度已完成实现、离线验证及独立复核。当前导航见 [MILESTONES](MILESTONES.md)，证据见 [G0 v0.3](GATEWAY_G0_V03_EVIDENCE.md) 和 [G1 v0.3](GATEWAY_G1_V03_EVIDENCE.md)。旧阶段编号及 [2026-10-04 审查](CODE_REVIEW_2026-10-04.md)仅作实现/修复历史，不与新版 G0 混同。
 
 ```text
 G0_THROUGH_G11=COMPLETE
@@ -11,7 +11,7 @@ M1_REVIEW_AND_BASELINE=COMPLETE
 M2_CONFIGURED_PRODUCTION=IMPLEMENTED_OFFLINE_VERIFIED
 V03_G0=COMPLETE_REVIEWED_MERGED
 V03_G1=COMPLETE_OFFLINE_VERIFIED_REVIEWED
-V03_G2=IN_PROGRESS
+V03_G2=OFFLINE_VERIFIED_CI_IN_PROGRESS
 V03_G3=NOT_STARTED
 M3_FOUR_PRODUCT_ACCEPTANCE_AND_PRODUCTION_CI=NOT_COMPLETE_V03_G2_SCOPE
 M4_PERFORMANCE_STABILITY_LIVE_ACCEPTANCE_AND_DELIVERY=NOT_STARTED
@@ -47,7 +47,10 @@ Depth receive UTC；缺少来源/时间或簿失效时 absent。历史任意流�
 没有新 Wire/服务/线程或安静市场自动重同步。共同 fixture、真实 parser→Projection→
 loopback Book/Event/Status、sanitizer 与独立审查已通过，四产品/VPS 验收仍留后续阶段。
 
-四产品配置示例见 [examples/gateway.json](../examples/gateway.json)。配置范围的离线检查已实现，完整四产品生产组合、CI runtime 覆盖及真实行情验收属新版 G2/G3（原 M3/M4），尚未完成。历史固定双 BTC 的真实验收和性能基线不能直接作为此版本多产品验收或容量证明。
+四产品配置示例见 [examples/gateway.json](../examples/gateway.json)。G2 四产品离线组合、
+故障/慢消费者/48 contexts/回滚和活动 RPC 信号退出已通过本机生产全图与 sanitizer；
+最小 production CI 已实现，GitHub 二进制缓存准备及最终交付正在进行，见 [G2 证据](GATEWAY_G2_V03_EVIDENCE.md)。
+真实行情及 VPS/API/性能验收仍属 G3。历史固定双 BTC 的真实验收和性能基线不能直接作为此版本多产品验收或容量证明。
 
 2026-10-04 已修复 owner 线程创建异常清理死锁、旧验收客户端参数/serving 字段不匹配、官方 combined `serverShutdown` 识别问题。测试 hook 只位于已有内部 RuntimeTestOptions，不进入配置或生产流程。
 
@@ -55,6 +58,8 @@ v0.3 G0 已将无认证 gRPC 限为数值 IPv4 127/8 或 IPv6 ::1，拒绝 wildc
 
 owner FIFO 观察使用 deadline/stop token，超时不返回陈旧 Live。Status 整次请求共享最多一秒等待，服务关闭取消观察；启动 readiness 非阻塞检查，不因 owner 暂停越过原来的全产品绝对截止时间。G10 测试用 RAII join 与有界同步。真实正在执行的 owner 操作仍需返回后 join，未 detach 或提前销毁产品；这不是强制中断任意阻塞回调的能力。
 
-默认 CMake/现有 GitHub CI 仍为 Foundation 图；生产图必须显式启用。此次本机验证覆盖生产图，CI 补齐是新版 G2 的交付项。
+默认 CMake 仍为独立 Foundation 图；生产图必须显式启用。GitHub 已补单一 production
+Release/offline job，普通 PR 只用锁定二进制缓存；手动准备入口才允许构建固定上游。
+G2 本机生产图已验证，GitHub/main 缓存实跑仍在进行。
 
 高性能、安全稳定、低延迟与低 CPU/内存消耗是必需交付目标，尚未完成多产品质量验收。Projection 已在生产路径使用；多交易对不需要新增 Projection API，但其每批全簿复制/重建应进入性能评估。是否修改 Core 由测量与目标预算决定，见 [配套评估](PROJECTION_INTEGRATION_REVIEW_2026-10-04.md)。

@@ -251,7 +251,12 @@ void cli_processes(const std::string &daemon) {
 void signal_process(const std::string &fixture, int signal,
                     bool prove_still_running, std::string_view scenario = {}) {
   const auto endpoint = "127.0.0.1:" + std::to_string(available_port());
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+  // The optional historical trace exporter still accepts only two BTC keys.
+  const bool four = false;
+#else
   const bool four = scenario.empty();
+#endif
   const auto symbols = four ? "[\"BTCUSDT\",\"ETHUSDT\"]" : "[\"BTCUSDT\"]";
   ConfigFile config{"{\"grpc_listen\":\"" + endpoint + "\",\"spot_symbols\":" +
                     symbols + ",\"usdm_symbols\":" + symbols + "}"};
