@@ -41,3 +41,14 @@ Release 23/23 (6.03s)、ASan+UBSan 23/23 (6.05s)、TSan 23/23 (30.58s)。
 新测及信号进程测试各本机重复十次，独立 reviewer 各重复二十次；均通过。
 Foundation 独立 1/1，格式通过。日志 `build/v03-g2/`（初轮 Release 日志在 `build/v03-g1/`）。
 后续仅补可选 instrumented 编译模式的 preflight 测试，未更改 runtime 行为。
+
+## 最终独立复核与可选构建
+
+新子代理只读复核当前分支及最终两项测试增量，无剩余 actionable findings。
+已修复其三个发现：固定 Contracts exported recipe 源码 SHA、fresh CI 输出目录、
+旧 session 不能把错误 Book 或客户端超时当正常结束。缓存 main scope 单独验收。
+
+可选 instrumented production 的四项重点回归 4/4（6.13s）：四产品直接组合、
+production/preflight、历史性能 baseline、进程退出。普通构建四产品八个活动 RPC；
+instrumented 进程 fixture 维持历史双 BTC，因为 exporter 本轮未泛化。
+默认生产构建不读取该历史环境变量；没有新增配置、线程、Wire 或上游 pin。
