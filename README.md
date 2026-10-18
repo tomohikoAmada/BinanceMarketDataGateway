@@ -2,7 +2,7 @@
 
 以高性能、安全稳定、低延迟、低 CPU/内存消耗为目标的 C++20 币安实时行情网关。通过启动配置选择多个 Spot / USD-M 永续交易对，获取行情、维护 Projection 订单簿、处理恢复与连接轮换，并通过 gRPC 向下游提供数据。Gateway 不负责历史存储，也不依赖 Recorder。
 
-当前支持 1..8 个精确产品，每产品独立 transport/owner/Projection/recovery，共享一个 gRPC 服务。四产品生产路径离线集成与最小生产 CI 已完成，见 [G2 证据](docs/GATEWAY_G2_V03_EVIDENCE.md)；真实网络、VPS 及性能/稳定性预算验收仍属 [G3](docs/MILESTONES.md)。
+当前支持 1..20 个精确产品，每产品独立 transport/owner/Projection/recovery，共享一个 gRPC 服务。20 产品离线 P1 测量正在进行，配置上限不代表生产容量已验收。四产品生产路径离线集成与最小生产 CI 已完成，见 [G2 证据](docs/GATEWAY_G2_V03_EVIDENCE.md)；真实网络、VPS 及性能/稳定性预算验收仍属 [G3](docs/MILESTONES.md)。
 
 ## 配置与运行
 
@@ -18,7 +18,7 @@
 bmd-gatewayd --config examples/gateway.json
 ```
 
-可以只配置其中一个市场；总数必须为 1..8，同一 symbol 的现货和永续是不同产品。symbol 使用币安的精确大写标识，不自动修正大小写，且需要通过 exchangeInfo 交易资格与精度验证。配置变更后重启。
+可以只配置其中一个市场；总数必须为 1..20，同一 symbol 的现货和永续是不同产品。symbol 使用币安的精确大写标识，不自动修正大小写，且需要通过 exchangeInfo 交易资格与精度验证。配置变更后重启。
 
 全部配置产品首次同步成功后才开始服务；启动失败会回滚，运行后单个产品故障独立恢复。SIGINT/SIGTERM 会停止订阅和 transport，并清理 owner。进程流式 context 总上限为 48。无认证 gRPC 必须使用数值 loopback（IPv4 127/8 或 IPv6 ::1）；hostname、wildcard 和非 loopback 配置被拒绝。
 

@@ -400,7 +400,7 @@ ConfiguredProductRuntimeSet::prepare(
   if (specifications.empty() ||
       specifications.size() > kMaximumConfiguredProducts) {
     throw std::invalid_argument{
-        "configured products require between one and eight specifications"};
+        "configured products require between one and twenty specifications"};
   }
   std::sort(specifications.begin(), specifications.end(),
             [](const auto &left, const auto &right) {

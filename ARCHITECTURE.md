@@ -23,7 +23,7 @@ bmd-gatewayd --config PATH
   -> fetch exchangeInfo once per configured market
   -> resolve NumericSpec for every exact MarketKey
   -> ProductionGateway
-       +-- ConfiguredProductRuntimeSet (1..8 stable owned ProductRuntime)
+       +-- ConfiguredProductRuntimeSet (1..20 stable owned ProductRuntime)
        |     +-- immutable MarketKey
        |     +-- MarketRuntime / private BookProjection / one owner thread
        |     +-- product-local order-book and event publication
@@ -34,13 +34,13 @@ bmd-gatewayd --config PATH
 
 `MarketKey = (venue, market, exact symbol)`。同一 symbol 的 Spot 与 USD-M 是两个产品。配置不自动修改大小写；小写 stream route 只是网络编码。当前 Binance route 支持大写 ASCII 字母/数字，exchangeInfo 负责存在性、市场资格与精度验证。
 
-配置严格拒绝未知字段、重复 JSON 字段、同市场重复 symbol、空总集合、超过八个产品和无效 endpoint。任何一个 symbol 的缺失、非交易状态、市场资格或不支持的数值规格都会使启动失败。配置验证不做网络 I/O；metadata 获取独立进行，并受网络阶段超时约束。变更配置需要重启，没有运行时 registry 增删。
+配置严格拒绝未知字段、重复 JSON 字段、同市场重复 symbol、空总集合、超过二十个产品和无效 endpoint。任何一个 symbol 的缺失、非交易状态、市场资格或不支持的数值规格都会使启动失败。配置验证不做网络 I/O；metadata 获取独立进行，并受网络阶段超时约束。变更配置需要重启，没有运行时 registry 增删。
 
 无认证 gRPC 只接受数值 IPv4 127/8 或 IPv6 ::1；hostname、wildcard 和非 loopback 均拒绝。配置与直接构造检查非零端口；绑定边界重复校验，内部离线测试可用 loopback port 0。复用已有 Boost 地址解析，不做 DNS，不给 Foundation 加网络依赖。
 
 交易所 JSON 只检查所需字段及已知语义，允许无关扩展对象/数组。Spot depth 的 pu 仍拒绝；USD-M pu 的类型/presence 保持已有 Adapter/Core 边界，Gateway 不增设序列分类器。自身配置的未知字段拒绝与上游协议扩展兼容是不同边界。
 
-八个产品是资源政策，可在新容量证据后调整，不是币安限制。当前使用小集合线性查询和 stable unique_ptr owner；没有通用注册框架或共享多 symbol WebSocket。
+二十个产品是资源政策，可在新容量证据后调整，不是币安限制。当前使用小集合线性查询和 stable unique_ptr owner；没有通用注册框架或共享多 symbol WebSocket。
 
 ## 并发与生命周期
 

@@ -18,7 +18,7 @@ reopen historical dependency proof. G0's independent review and reset-observatio
 fix are complete. The user authorized v0.3 G1 on 2026-10-15; implementation,
 offline validation and independent review completed on 2026-10-16. G2 was
 authorized on 2026-10-18; four-product offline verification, production CI,
-independent review and PR merge are complete. G3 is not started.
+independent review and PR merge are complete. The owner authorized the v0.4 twenty-key offline P1 increment on 2026-10-19; G3 shared-VPS/API qualification remains open.
 High performance, low latency, low CPU/RSS
 and safe stable behavior are delivery requirements; no multi-product performance
 budget has yet been established. Do not label future acceptance complete
@@ -30,7 +30,7 @@ because configurable code exists. Keep Foundation independently buildable.
   gRPC. Contracts owns proto/wire; Projection owns numeric semantics, order
   book and Spot/USD-M sequencing (including `pu`). No Recorder dependency.
 - Reuse `ConfiguredProductRuntimeSet` and the immutable registry. Exact
-  `MarketKey = (venue, market, exact symbol)`, 1..8 configured products, one
+  `MarketKey = (venue, market, exact symbol)`, 1..20 configured products, one
   isolated ProductRuntime/private Projection/owner/recovery/transport per key.
   The process-global streaming context cap remains 48, not 48 per product.
 - All configured products must initially reach Live/Synchronized. Any startup
@@ -49,7 +49,7 @@ because configurable code exists. Keep Foundation independently buildable.
   acceptance-only hook or expose test controls in configuration.
 - Do not copy proto files or add floating dependencies. Preserve the separate,
   explicit frozen G1 upstream smoke; do not repin it merely for newer upstream main.
-- Eight products is a resource bound, not measured capacity. Historical fixed-two
+- Twenty products is a resource bound, not measured capacity. Historical fixed-two
   performance evidence is not multi-product proof. Optimize only an evidenced
   problem; keep changes small and avoid speculative concurrency frameworks.
 

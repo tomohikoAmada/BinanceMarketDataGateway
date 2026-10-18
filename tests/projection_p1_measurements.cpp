@@ -1,6 +1,6 @@
 // Offline measurement driver: reuse G2's production graph and external-I/O
 // seam.
-#include "four_product_test_support.hpp"
+#include "projection_p1_profile.hpp"
 #include <barrier>
 #include <binance_market_data/gateway/v1/gateway_service.grpc.pb.h>
 #include <fstream>
@@ -12,6 +12,7 @@ namespace {
 namespace fixture = binance_market_data::gateway::production::four_product_test;
 namespace production = binance_market_data::gateway::production;
 namespace support = production::test_support;
+namespace profile_fixture = production::p1_test;
 namespace g3 = binance_market_data::gateway::g3;
 namespace g4 = binance_market_data::gateway::g4;
 namespace g7 = binance_market_data::gateway::g7;
@@ -52,11 +53,12 @@ Json stats(std::vector<std::uint64_t> values) {
           {"max_ns", values.back()}};
 }
 
-std::string frame(const g11::MarketKey &key, std::uint64_t id,
-                  std::size_t batch, std::size_t depth) {
+std::string frame(const profile_fixture::Workload &work, std::uint64_t id) {
+  const auto &key = work.key;
   Json bids = Json::array();
-  for (std::size_t j = 0; j < batch; ++j) {
-    bids.push_back({std::to_string(10000U - j % depth), id % 2U ? "2" : "3"});
+  for (std::size_t j = 0; j < work.batch; ++j) {
+    bids.push_back({work.bid(j % work.depth),
+                    profile_fixture::multiple(work.step, id % 2U ? 2U : 3U)});
   }
   Json value{{"e", "depthUpdate"},
              {"E", 1700000000000ULL + id},
@@ -182,16 +184,36 @@ void wait_clients(const std::vector<std::unique_ptr<Client>> &clients,
 }
 
 int run(int argc, char **argv) {
-  fixture::check(argc == 6);
-  const auto depth = std::stoul(argv[1]);
-  const auto batch = std::stoul(argv[2]);
-  const auto count = std::stoul(argv[3]);
-  const auto interval = std::stoul(argv[4]);
-  fixture::check(depth > 0U && depth <= 10000U && batch > 0U &&
-                 batch <= depth && count > 0U && count <= 16000U &&
-                 interval <= 1000000U);
-  auto config = fixture::configure_file(BMD_GATEWAY_FOUR_PRODUCT_CONFIG);
+  fixture::check(argc == 6 ||
+                 (argc == 5 && std::string{argv[1]} == "--profile"));
+  const bool mixed = argc == 5;
+  const auto output_path = std::string{argv[mixed ? 4 : 5]};
+  std::optional<profile_fixture::Profile> profile;
+  auto config = [&] {
+    if (mixed) {
+      profile = profile_fixture::load(argv[2], argv[3]);
+      return profile->configure(BMD_GATEWAY_TWENTY_PRODUCT_CONFIG);
+    }
+    return fixture::configure_file(BMD_GATEWAY_FOUR_PRODUCT_CONFIG);
+  }();
   const auto keys = config.config.market_keys;
+  std::vector<profile_fixture::Workload> workloads;
+  if (mixed)
+    workloads = profile->products;
+  else {
+    const auto depth = std::stoul(argv[1]);
+    const auto batch = std::stoul(argv[2]);
+    const auto count = std::stoul(argv[3]);
+    const auto interval = std::stoul(argv[4]);
+    for (const auto &key : keys)
+      workloads.push_back({key, depth, batch, count, interval, "1", "1",
+                           10000U - depth, 10000U});
+  }
+  for (const auto &work : workloads) {
+    fixture::check(work.depth > 0U && work.depth <= 10000U && work.batch > 0U &&
+                   work.batch <= work.depth && work.count > 0U &&
+                   work.count <= 16000U && work.interval <= 1000000U);
+  }
   production::GatewayOptions options;
   options.allow_ephemeral_listen_for_testing = true;
   production::ProductionGateway gateway{std::move(config.specs),
@@ -203,40 +225,41 @@ int run(int argc, char **argv) {
           "127.0.0.1:" + std::to_string(gateway.observe().selected_port),
           grpc::InsecureChannelCredentials()));
   std::vector<std::unique_ptr<Client>> clients;
-  std::array<std::vector<std::string>, 4> frames;
-  for (std::size_t p = 0; p < 4U; ++p) {
+  std::vector<std::vector<std::string>> frames(keys.size());
+  for (std::size_t p = 0; p < keys.size(); ++p) {
     auto *product = gateway.products_for_testing().find(keys[p]);
-    auto seed = fixture::depth(keys[p], 1U, 102U);
+    const auto &work = workloads[p];
+    const auto bootstrap = mixed ? work.sample() : fixture::sample(keys[p]);
+    auto seed = fixture::depth(keys[p], 1U, 102U, {}, bootstrap);
     seed.clear_bids();
     seed.clear_asks();
     auto *remove_bid = seed.add_bids();
-    remove_bid->set_price(fixture::sample(keys[p]).bid);
+    remove_bid->set_price(bootstrap.bid);
     remove_bid->set_quantity("0");
     auto *remove_ask = seed.add_asks();
-    remove_ask->set_price(fixture::sample(keys[p]).ask);
+    remove_ask->set_price(bootstrap.ask);
     remove_ask->set_quantity("0");
-    for (std::size_t j = 0; j < depth; ++j) {
+    for (std::size_t j = 0; j < work.depth; ++j) {
       auto *bid = seed.add_bids();
-      bid->set_price(std::to_string(10000U - j));
-      bid->set_quantity("1");
+      bid->set_price(work.bid(j));
+      bid->set_quantity(work.step);
       auto *ask = seed.add_asks();
-      ask->set_price(std::to_string(20000U + j));
-      ask->set_quantity("1");
+      ask->set_price(work.ask(j));
+      ask->set_quantity(work.step);
     }
     fixture::check(product->runtime().submit_depth_update(seed, {1U}) ==
                    g3::AdmissionResult::Accepted);
     fixture::check(product->runtime().observe().last_update_id == 102U);
     clients.push_back(std::make_unique<Client>(
-        *stub, keys[p], count, depth,
-        std::chrono::seconds{30 + count * interval / 1000000U}));
-    for (std::size_t i = 0; i < warmup + count; ++i) {
-      frames[p].push_back(frame(keys[p], first - warmup + i, batch, depth));
+        *stub, keys[p], work.count, work.depth,
+        std::chrono::seconds{30 + work.count * work.interval / 1000000U}));
+    for (std::size_t i = 0; i < warmup + work.count; ++i) {
+      frames[p].push_back(frame(work, first - warmup + i));
     }
   }
-  std::array<std::vector<std::uint64_t>, 4> starts;
-  for (auto &v : starts) {
-    v.resize(count);
-  }
+  std::vector<std::vector<std::uint64_t>> starts(keys.size());
+  for (std::size_t p = 0; p < keys.size(); ++p)
+    starts[p].resize(workloads[p].count);
   const auto submit = [&](std::size_t p, std::size_t i) {
     auto *product = gateway.products_for_testing().find(keys[p]);
     const auto t0 = now();
@@ -271,22 +294,23 @@ int run(int argc, char **argv) {
                        ) == g3::AdmissionResult::Accepted);
   };
   for (std::size_t i = 0; i < warmup; ++i) {
-    for (std::size_t p = 0; p < 4U; ++p) {
+    for (std::size_t p = 0; p < keys.size(); ++p) {
       submit(p, i);
     }
     wait_clients(clients, 2U * (i + 1U));
   }
-  std::barrier start_gate{5};
+  std::barrier start_gate{static_cast<std::ptrdiff_t>(keys.size() + 1U)};
   std::atomic<bool> producers_ok{true};
   std::vector<std::jthread> producers;
-  for (std::size_t p = 0; p < 4U; ++p) {
+  for (std::size_t p = 0; p < keys.size(); ++p) {
     producers.emplace_back([&, p] {
       start_gate.arrive_and_wait();
       try {
         const auto begin = Clock::now();
-        for (std::size_t i = 0; i < count; ++i) {
+        const auto &work = workloads[p];
+        for (std::size_t i = 0; i < work.count; ++i) {
           std::this_thread::sleep_until(
-              begin + std::chrono::microseconds{i * interval});
+              begin + std::chrono::microseconds{i * work.interval});
           submit(p, i + warmup);
         }
       } catch (...) {
@@ -302,19 +326,22 @@ int run(int argc, char **argv) {
     producer.join();
   }
   fixture::check(producers_ok.load());
-  wait_clients(clients, 2U * (warmup + count));
+  for (std::size_t p = 0; p < keys.size(); ++p) {
+    const auto deadline = Clock::now() + std::chrono::seconds{10};
+    while (clients[p]->received.load() != 2U * (warmup + workloads[p].count)) {
+      fixture::check(clients[p]->valid.load() && Clock::now() < deadline);
+      std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+  }
   const auto ended = now();
   rusage after{};
   fixture::check(getrusage(RUSAGE_SELF, &after) == 0);
   Json result{{"schema", "projection-p1-offline.v1"},
-              {"depth_per_side", depth},
-              {"batch_levels", batch},
-              {"events_per_product", count},
-              {"interval_us", interval},
+              {"workload_mode", mixed ? "twenty_mixed" : "four_equal"},
               {"wall_ns", ended - began},
               {"process_cpu_us", cpu_us(after) - cpu_us(before)},
               {"process_cpu_includes",
-               "four owners + producer/parser + loopback "
+               "configured owners + producer/parser + loopback "
                "server AND clients + recovery"},
               {"products", Json::array()}};
 #ifdef __APPLE__
@@ -327,7 +354,9 @@ int run(int argc, char **argv) {
 #else
   result["instrumented"] = false;
 #endif
-  for (std::size_t p = 0; p < 4U; ++p) {
+  for (std::size_t p = 0; p < keys.size(); ++p) {
+    const auto &work = workloads[p];
+    const auto count = work.count;
     const auto observed =
         gateway.products_for_testing().find(keys[p])->runtime().observe();
     fixture::check(observed.last_update_id == first + count - 1U &&
@@ -342,9 +371,20 @@ int run(int argc, char **argv) {
     result["products"].push_back(
         {{"market", common::Market_Name(keys[p].market)},
          {"symbol", keys[p].symbol},
+         {"depth_per_side", work.depth},
+         {"batch_levels", work.batch},
+         {"events_per_product", count},
+         {"interval_us", work.interval},
          {"book_client_latency", stats(books)},
          {"event_client_latency", stats(events)},
          {"last_update_id", *observed.last_update_id}});
+  }
+  if (!mixed) {
+    const auto &w = workloads.front();
+    result["depth_per_side"] = w.depth;
+    result["batch_levels"] = w.batch;
+    result["events_per_product"] = w.count;
+    result["interval_us"] = w.interval;
   }
   gateway.stop();
   for (const auto &client : clients) {
@@ -357,9 +397,11 @@ int run(int argc, char **argv) {
                    product.recovery.active_transport_count == 0U);
   }
 #if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
-  std::ofstream traces{std::string{argv[5]} + ".traces.jsonl"};
+  std::ofstream traces{output_path + ".traces.jsonl"};
   fixture::check(gateway.write_performance_baseline(traces));
-  for (const auto &product : gateway.products_for_testing().products()) {
+  for (std::size_t p = 0; p < keys.size(); ++p) {
+    const auto &product = gateway.products_for_testing().products()[p];
+    const auto count = workloads[p].count;
     const auto &buffer = product->performance_baseline();
     fixture::check(buffer.evidence_valid() && buffer.trace_count() == count);
     fixture::check(
@@ -375,7 +417,7 @@ int run(int argc, char **argv) {
     }
   }
 #endif
-  std::ofstream output{argv[5]};
+  std::ofstream output{output_path};
   output << result.dump(2) << '\n';
   output.flush();
   fixture::check(output.good());

@@ -20,7 +20,7 @@ MarketRuntimeRegistry::MarketRuntimeRegistry(
     : entries_{[&entries] {
         if (entries.empty() || entries.size() > kMaximumConfiguredProducts) {
           throw std::invalid_argument{
-              "configured registry requires between one and eight entries"};
+              "configured registry requires between one and twenty entries"};
         }
         std::sort(entries.begin(), entries.end(),
                   [](const auto &left, const auto &right) {

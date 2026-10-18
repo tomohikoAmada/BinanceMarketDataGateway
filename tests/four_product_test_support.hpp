@@ -9,6 +9,7 @@
 
 #include <array>
 #include <fstream>
+#include <limits>
 
 namespace binance_market_data::gateway::production::four_product_test {
 namespace support = test_support;
@@ -58,10 +59,12 @@ inline std::string exchange_info(support::common::Market market) {
   return Json{{"symbols", symbols}}.dump();
 }
 
-inline support::market::DepthUpdate
-depth(const g11::MarketKey &key, std::uint64_t generation, std::uint64_t id,
-      std::optional<std::uint64_t> pu = {}) {
-  const auto values = sample(key);
+inline support::market::DepthUpdate depth(const g11::MarketKey &key,
+                                          std::uint64_t generation,
+                                          std::uint64_t id,
+                                          std::optional<std::uint64_t> pu = {},
+                                          std::optional<Sample> selected = {}) {
+  const auto values = selected.value_or(sample(key));
   Json source{{"e", "depthUpdate"},
               {"E", 1700000000000ULL + id},
               {"s", key.symbol},
@@ -98,8 +101,9 @@ depth(const g11::MarketKey &key, std::uint64_t generation, std::uint64_t id,
 }
 
 inline support::market::ExchangeDepthSnapshot
-snapshot(const g11::MarketKey &key, std::uint64_t generation) {
-  const auto values = sample(key);
+snapshot(const g11::MarketKey &key, std::uint64_t generation,
+         std::optional<Sample> selected = {}) {
+  const auto values = selected.value_or(sample(key));
   Json source{{"lastUpdateId", 100U},
               {"bids", Json::array({{values.bid, values.quantity}})},
               {"asks", Json::array({{values.ask, values.quantity}})}};
@@ -121,9 +125,10 @@ class Attempt final : public g5::detail::RecoveryAttempt {
 public:
   Attempt(g3::MarketRuntime &runtime, g11::MarketKey key,
           std::uint64_t generation, support::AttemptMode mode,
-          std::shared_ptr<support::AttemptState> state)
+          std::shared_ptr<support::AttemptState> state,
+          std::optional<Sample> selected = {})
       : runtime_{runtime}, key_{std::move(key)}, generation_{generation},
-        mode_{mode}, state_{std::move(state)} {
+        mode_{mode}, state_{std::move(state)}, selected_{std::move(selected)} {
     const auto active = state_->active.fetch_add(1U) + 1U;
     auto maximum = state_->maximum_active.load();
     while (maximum < active &&
@@ -137,10 +142,10 @@ public:
       return g4::TransportStartResult::Failed;
     }
     if (mode_ == support::AttemptMode::Live) {
-      check(runtime_.submit_depth_update(depth(key_, generation_, 101U),
-                                         {generation_}) ==
+      check(runtime_.submit_depth_update(
+                depth(key_, generation_, 101U, {}, selected_), {generation_}) ==
             g3::AdmissionResult::Accepted);
-      check(runtime_.submit_snapshot(snapshot(key_, generation_),
+      check(runtime_.submit_snapshot(snapshot(key_, generation_, selected_),
                                      {generation_}) ==
             g3::AdmissionResult::Accepted);
     }
@@ -179,18 +184,21 @@ private:
   const std::uint64_t generation_;
   const support::AttemptMode mode_;
   const std::shared_ptr<support::AttemptState> state_;
+  const std::optional<Sample> selected_;
   std::atomic<bool> stopped_{false};
 };
 
 struct Configuration final {
   DaemonConfig config;
   std::vector<g11::ProductRuntimeSpec> specs;
-  std::array<std::shared_ptr<support::AttemptState>, 4> attempts;
+  std::vector<std::shared_ptr<support::AttemptState>> attempts;
 };
 
-inline Configuration
-configure(DaemonConfig config, std::size_t fail_index = 4U,
-          support::AttemptMode mode = support::AttemptMode::Terminal) {
+inline Configuration configure_with_metadata(
+    DaemonConfig config, const std::string &spot_body,
+    const std::string &usdm_body, const std::vector<Sample> &samples,
+    std::size_t fail_index = std::numeric_limits<std::size_t>::max(),
+    support::AttemptMode mode = support::AttemptMode::Terminal) {
   Configuration result;
   result.config = std::move(config);
   int spot_fetches = 0;
@@ -199,30 +207,33 @@ configure(DaemonConfig config, std::size_t fail_index = 4U,
       result.config.market_keys,
       {[&] {
          ++spot_fetches;
-         return g4::ExchangeInfoResult{g4::ExchangeInfoResponse{
-             exchange_info(support::common::MARKET_SPOT), true}};
+         return g4::ExchangeInfoResult{
+             g4::ExchangeInfoResponse{spot_body, true}};
        },
        [&] {
          ++usdm_fetches;
-         return g4::ExchangeInfoResult{g4::ExchangeInfoResponse{
-             exchange_info(support::common::MARKET_USD_M_PERPETUAL), true}};
+         return g4::ExchangeInfoResult{
+             g4::ExchangeInfoResponse{usdm_body, true}};
        }});
   check(spot_fetches == 1 && usdm_fetches == 1);
   check(std::holds_alternative<ProductionMetadata>(metadata));
   result.specs = make_product_runtime_specs(
       std::get<ProductionMetadata>(std::move(metadata)));
-  check(result.specs.size() == 4U);
+  check(result.specs.size() == result.config.market_keys.size());
+  check(samples.empty() || samples.size() == result.specs.size());
+  result.attempts.resize(result.specs.size());
   for (std::size_t i = 0; i < result.specs.size(); ++i) {
     auto state = std::make_shared<support::AttemptState>();
     result.attempts[i] = state;
     auto &spec = result.specs[i];
     spec.options.recovery_test.attempt_factory =
         [key = spec.key, state,
+         sample = samples.empty() ? std::optional<Sample>{} : samples[i],
          selected = i == fail_index ? mode : support::AttemptMode::Live](
             g3::MarketRuntime &runtime, const g3::RuntimeClock &,
             std::uint64_t generation) {
           return std::make_unique<Attempt>(runtime, key, generation, selected,
-                                           state);
+                                           state, sample);
         };
     spec.options.recovery_test.backoff_waiter = [](std::chrono::seconds,
                                                    std::stop_token token) {
@@ -230,6 +241,15 @@ configure(DaemonConfig config, std::size_t fail_index = 4U,
     };
   }
   return result;
+}
+
+inline Configuration
+configure(DaemonConfig config, std::size_t fail_index = 4U,
+          support::AttemptMode mode = support::AttemptMode::Terminal) {
+  return configure_with_metadata(
+      std::move(config), exchange_info(support::common::MARKET_SPOT),
+      exchange_info(support::common::MARKET_USD_M_PERPETUAL), {}, fail_index,
+      mode);
 }
 
 inline Configuration configure_file(const std::string &path) {
