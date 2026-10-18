@@ -140,3 +140,21 @@ diff checks pass. OFF/ON counts include historical G2 synthetic/G8 tests;
 sanitizer graphs omit those two historical groups. A fresh independent agent
 approved the implementation and measurement methodology; result review is
 recorded with Projection's evidence. No Core or adapter production change.
+
+### Twenty-key P1 increment (2026-10-19)
+
+The same test-only measurement executable also accepts
+`--profile tests/fixtures/projection-p1-twenty.json normal|deep|batch OUTPUT`.
+The frozen profile uses selected official metadata and 24-hour trade-count activity
+tiers for ten Spot and ten USD-M research symbols. It records per-key depth,
+batch, count and interval; trade counts are a synthetic workload proxy, not
+observed depth frequency or an approved deployment list. Each key has one Book
+and one Depth Event stream (40 contexts); the global bound remains 48.
+
+Three alternating OFF/ON pairs per scenario completed. Retained Projection P1
+results identify exact measured commit `8ce41be`, binaries, runner and profile,
+plus a local raw archive with 107 verified data-member hashes. Instrumentation
+adds about 110–111 MiB peak RSS for twenty preallocated buffers; CPU ordering and
+tail latency vary, so no zero-observer-cost or SLA claim is made. Per-key p99 and
+maximum tails remain in the evidence. Projection Core/Adapter/pins are unchanged.
+See [Projection PR #55](https://github.com/tomohikoAmada/BinanceMarketDataProjection/pull/55).

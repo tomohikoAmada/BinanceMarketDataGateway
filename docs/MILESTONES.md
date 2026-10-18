@@ -83,6 +83,13 @@ Book/Event/Status identity, local recovery, all-products-live startup/rollback,
 40 baseline streams and the unchanged global 48-context cap are verified offline.
 Release OFF 26/26 and ON 27/27 pass; paired smoke passes. Fresh independent code/method review is APPROVED. ASan+UBSan 25/25 and focused
 TSan 6/6 pass, including final metadata-error test validation. Full mixed-load
-measurements are in progress.
+measurements are complete: eighteen heterogeneous OFF/ON trials, 127,920 updates
+and 255,840 client deliveries, with independent quantitative/hash/archive review
+APPROVED. OFF CPU means normal/deep/batch are 0.115/1.192/1.242 cores on the local
+M3, including fixture/clients. Tail variability (Book maximum 102.404 ms) is retained;
+this is not a latency SLA. Technical test-correction commit `7266c47` passed all
+seven ordinary jobs in CI `39145975891`, including Linux production 24/24.
+Measured commit `8ce41be` and binaries remain bound to the raw campaign; later
+test-only corrections do not alter production/measurement code.
 This increment does not complete BMD-RL-01, approve a deployment symbol list,
 or qualify shared-VPS/Recorder production capacity.
