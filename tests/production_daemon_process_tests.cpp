@@ -359,13 +359,15 @@ void signal_process(const std::string &fixture, int signal,
     wire::OrderBookStreamItem item;
     while (reader->Read(&item)) {
     }
-    static_cast<void>(reader->Finish());
+    REQUIRE(reader->Finish().error_code() !=
+            grpc::StatusCode::DEADLINE_EXCEEDED);
   }
   for (auto &reader : events) {
     wire::GatewayEventEnvelope item;
     while (reader->Read(&item)) {
     }
-    static_cast<void>(reader->Finish());
+    REQUIRE(reader->Finish().error_code() !=
+            grpc::StatusCode::DEADLINE_EXCEEDED);
   }
   if (scenario == "spot-recovery") {
     constexpr std::string_view prefix{

@@ -53,7 +53,14 @@ cmake --build build/production --parallel 4
 ctest --test-dir build/production --output-on-failure
 ```
 
-依赖配方见 [conanfile.py](conanfile.py)。完整的无开发机缓存构建/CI 是 M3/M4 的交付项，不能把 Foundation 默认构建当作生产构建成功。ASan、UBSan、TSan 可分别启用 `BMD_GATEWAY_ENABLE_ASAN` / `BMD_GATEWAY_ENABLE_UBSAN` / `BMD_GATEWAY_ENABLE_TSAN`。
+依赖配方见 [conanfile.py](conanfile.py)，生产依赖 RREV 固定于 [conan.lock](conan.lock)。
+GitHub CI 保留独立 Foundation 检查，另用 Ubuntu 24.04 / GCC 13 构建真实 `bmd-gatewayd`
+并运行生产图离线回归（包括四产品集成及活动 RPC 信号退出），不访问 Binance。
+普通 PR 只恢复二进制缓存并执行 `--build=never --no-remote`；无缓存时明确失败。
+首次接入、缓存过期或依赖变更后，在 **main** 手动运行 Gateway CI，勾选
+`prepare_dependencies`。该入口才允许从固定 Contracts/Projection SHA 准备缺少的二进制；
+缓存按 lock/profile/preparation script 隔离，后续 PR 复用 main 缓存。依赖变更需先准备对应缓存。
+历史 G1 upstream smoke 仍保持单独显式入口，不随本 CI 重复执行。ASan、UBSan、TSan 可分别启用 `BMD_GATEWAY_ENABLE_ASAN` / `BMD_GATEWAY_ENABLE_UBSAN` / `BMD_GATEWAY_ENABLE_TSAN`。
 
 保留的双 BTC 生命周期验收客户端须使用双 BTC 配置，与 daemon 使用同一个文件；它不证明四产品验收：
 

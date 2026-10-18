@@ -42,7 +42,7 @@ G0 在生产图执行 Release、ASan、UBSan、TSan；G1 执行 Release、ASan+U
 
 历史 G1 四包/link/message-lineage proof 只在依赖打包、ABI 或导出边界实质变化时复跑。
 不要求每 PR 冷编全部 Protobuf/gRPC/Boost/Projection/Contracts，不把线上长跑放进普通 PR。
-目前 GitHub CI 仍只覆盖 Foundation；本轮未改 CI，生产 CI 属新版 G2。
+G2 正在补充单一 production Release CI；普通 PR 只读取固定二进制缓存，首次准备为手动入口。最终 GitHub/main 验证见 [G2 证据](GATEWAY_G2_V03_EVIDENCE.md)。
 
 ## 质量与交付仍需证明
 

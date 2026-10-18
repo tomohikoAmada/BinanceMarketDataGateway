@@ -138,15 +138,31 @@ struct Streams final {
     REQUIRE(item.delivery_metadata().connection_generation() == generation);
     REQUIRE(event.delivery_metadata().connection_generation() == generation);
   }
-  void drain() {
+  void drain(bool recovery_cut = false) {
     wire::OrderBookStreamItem item;
     wire::GatewayEventEnvelope event;
+    bool book_gap = false;
+    bool event_gap = false;
     while (book->Read(&item)) {
+      if (recovery_cut) {
+        REQUIRE(item.has_consumer_gap());
+        book_gap = true;
+      }
     }
     while (events->Read(&event)) {
+      if (recovery_cut) {
+        REQUIRE(event.has_consumer_gap());
+        event_gap = true;
+      }
     }
-    static_cast<void>(book->Finish());
-    static_cast<void>(events->Finish());
+    const auto book_status = book->Finish();
+    const auto event_status = events->Finish();
+    REQUIRE(book_status.error_code() != grpc::StatusCode::DEADLINE_EXCEEDED);
+    REQUIRE(event_status.error_code() != grpc::StatusCode::DEADLINE_EXCEEDED);
+    if (recovery_cut) {
+      REQUIRE(book_gap && event_gap);
+      REQUIRE(book_status.ok() && event_status.ok());
+    }
   }
 };
 
@@ -254,7 +270,7 @@ void pipeline_recovery_slow_consumers_and_shutdown() {
   wire::GatewayEventEnvelope event;
   REQUIRE(streams[3]->events->Read(&event) && event.has_depth_update());
   REQUIRE(event.depth_update().SerializeAsString() == bad.SerializeAsString());
-  streams[3]->drain();
+  streams[3]->drain(true);
   eventually([&] {
     const auto r = failed->recovery().observe();
     return r.connection_generation == 2U && r.state == g5::RecoveryState::Live;
@@ -313,7 +329,7 @@ void all_four_must_be_live() {
   config =
       fixture::configure(config.config, 3U, support::AttemptMode::NeverLive);
   auto configured_options = options();
-  configured_options.initial_startup_timeout = std::chrono::milliseconds{100};
+  configured_options.initial_startup_timeout = std::chrono::seconds{1};
   production::ProductionGateway gateway{std::move(config.specs),
                                         support::fixed_clock(), "four-timeout",
                                         "127.0.0.1:0", configured_options};
