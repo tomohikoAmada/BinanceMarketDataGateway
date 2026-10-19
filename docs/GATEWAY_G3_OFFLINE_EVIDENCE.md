@@ -5,6 +5,8 @@
 [PR #38](https://github.com/tomohikoAmada/BinanceMarketDataGateway/pull/38)
 已有P1扩容实现，不重做G0/G1/G2，不改历史四产品资格。
 
+状态：G3-a离线完成、独立复核及CI通过，PR #38交付；最终head与合并记录见该PR。
+
 ## 完成范围
 
 - [x] JSON、ConfiguredProductRuntimeSet::prepare 和 immutable registry 共用有限20上限，21拒绝；原1..8配置兼容。
@@ -15,7 +17,7 @@
 - [x] 慢session有界终止、活动RPC关闭/drain、所有owners joined、contexts/transport/subscriptions归零。
 - [x] P1按实际配置Key导出、OFF/ON实测及独立复核已交付，见[插桩证据](PERFORMANCE_BASELINE_INSTRUMENTATION.md)。
 - [x] 本轮完整Release/sanitizer、Foundation、format及独立增量复核通过。
-- [ ] 最终production CI及PR合并（进行中，完成后在下表记录）。
+- [x] 技术提交`b4d3625`的最终production CI及全部普通检查通过，reviewed PR #38交付。
 
 G3-a关闭不等于G3整体关闭。G3-b / BMD-RL-01（Recorder+Gateway同IP分市场窗口、429/418/Retry-After联合恢复预算）、最终部署名单、授权实网与G3-c共享VPS资源预算仍OPEN。
 
@@ -78,7 +80,9 @@ transport、pending/resident订阅、Event订阅及全局contexts均清零。
 | format / diff检查 | 通过 |
 | 新子代理复核`origin/main...9d92c96` | APPROVED，无阻断缺陷 |
 | 新增deadline/集中恢复测试独立复核 | APPROVED，无剩余发现；独立重跑20集成六组PASS |
-| 最终GitHub production/普通CI、PR合并 | 待交付 |
+| Linux/GCC13 production | 技术提交`b4d3625`，24/24（7.17s），含20产品集成（2.43s） |
+| 最终GitHub普通CI | [PR run 39180483378](https://github.com/tomohikoAmada/BinanceMarketDataGateway/actions/runs/39180483378)及[push run 39180480384](https://github.com/tomohikoAmada/BinanceMarketDataGateway/actions/runs/39180480384)全部7个普通job通过；prepare按设计跳过 |
+| 交付 | [PR #38](https://github.com/tomohikoAmada/BinanceMarketDataGateway/pull/38)；本表后续只补文档收尾，技术受测提交不变；最终head/合并记录以PR为准 |
 
 重现入口（使用已经配置并启用production的固定二进制build）：
 

@@ -13,7 +13,7 @@
 | G0：安全、协议兼容与可用性 | G01 数值 loopback；G03 无关 JSON 扩展兼容且身份/类型/序列不放宽；G05 owner 观察/Status/startup 有界且生命周期安全；G10 测试 RAII join/有界同步 | 完成；2026-10-15 独立复核补修 reset gate 观察，PR #35 已合并；[证据](GATEWAY_G0_V03_EVIDENCE.md) |
 | G1：数据语义与最小新鲜度 | USD-M T transaction-time 映射按共同 fixture 修正；Status last_event 明确收窄为当前有效 Applied Depth receive UTC；不增加 Health 服务或安静市场强制重同步 | 完成实现、完整离线验证及独立复核（2026-10-16）；沿用 Wire/依赖 pin；[证据](GATEWAY_G1_V03_EVIDENCE.md) |
 | G2：四产品生产路径与最小 CI | Spot BTC/ETH + USD-M BTC/ETH，JSON→metadata→spec→各自 transport/Projection→Book/Event/Status；故障与慢消费者隔离、48 contexts、活动 RPC 退出、失败回滚；Foundation 之外真实 production build/smoke | 完成（2026-10-18）；完整离线及 sanitizer、独立复核、Linux/main/PR CI 通过，PR #37 已合并；[证据](GATEWAY_G2_V03_EVIDENCE.md) |
-| G3：共同负载、API 联合预算与交付 | v0.4先完成20keys G3-a离线配置/路由/启动恢复/48 contexts与P1；G3-b完成BMD-RL-01；G3-c冻结现实资源预算并在授权同VPS真实负载下验收 | G3-a离线验证及独立复核完成，最终CI/合并交付进行中；[证据](GATEWAY_G3_OFFLINE_EVIDENCE.md)。G3-b/G3-c与原M4/G12-E未关闭 |
+| G3：共同负载、API 联合预算与交付 | v0.4先完成20keys G3-a离线配置/路由/启动恢复/48 contexts与P1；G3-b完成BMD-RL-01；G3-c冻结现实资源预算并在授权同VPS真实负载下验收 | G3-a完成离线验证、独立复核及production CI，PR #38交付；[证据](GATEWAY_G3_OFFLINE_EVIDENCE.md)。G3-b/G3-c与原M4/G12-E未关闭 |
 
 2026-10-15 用户授权完成 G1，并独立复核待审分支。2026-10-18 用户授权 G2；四产品离线组合、production CI、独立复核与合并交付完成。G3 生产窗口仍单独安排。
 
@@ -105,7 +105,7 @@ or qualify shared-VPS/Recorder production capacity.
 - [x] Fresh independent code review and final test increment review APPROVED.
 - [x] Release OFF 26/26, ON 27/27, ASan+UBSan ON 25/25; independent Foundation 1/1 and format/diff checks pass.
 - [x] TSan ON focused concurrency/lifecycle 6/6 (five groups plus production regression).
-- [ ] Final production CI and PR merge delivery (in progress).
+- [x] Final technical commit `b4d3625`: Linux production 24/24 and all seven ordinary jobs pass on both push/PR runs `39180480384` / `39180483378`; reviewed PR #38 delivers the increment (final head/merge record at the PR).
 
 The bounded profile is one Book + one Depth Event per key (40 contexts). A 60-stream
 all-supported-events profile is outside the retained 48 cap. BMD-RL-01/G3-b and
