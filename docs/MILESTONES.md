@@ -1,6 +1,6 @@
 # Gateway milestone plan
 
-更新日期：2026-10-18。当前执行依据是同级 `Milestone Plan` 目录中的
+更新日期：2026-10-19。当前执行依据是同级 `Milestone Plan` 目录中的
 `01_BinanceMarketData_总体_Milestone_Plan.md` 和 `03_Gateway_Milestone_Plan.md`
 （v0.4，保留v0.3已完成事实）；已阅读该目录全部六份文档。本页记录本仓执行状态与边界。
 历史 G0–G11、G12-A/B/C 已完成，新版 G0–G3 编号不代表重做历史阶段。
@@ -13,7 +13,7 @@
 | G0：安全、协议兼容与可用性 | G01 数值 loopback；G03 无关 JSON 扩展兼容且身份/类型/序列不放宽；G05 owner 观察/Status/startup 有界且生命周期安全；G10 测试 RAII join/有界同步 | 完成；2026-10-15 独立复核补修 reset gate 观察，PR #35 已合并；[证据](GATEWAY_G0_V03_EVIDENCE.md) |
 | G1：数据语义与最小新鲜度 | USD-M T transaction-time 映射按共同 fixture 修正；Status last_event 明确收窄为当前有效 Applied Depth receive UTC；不增加 Health 服务或安静市场强制重同步 | 完成实现、完整离线验证及独立复核（2026-10-16）；沿用 Wire/依赖 pin；[证据](GATEWAY_G1_V03_EVIDENCE.md) |
 | G2：四产品生产路径与最小 CI | Spot BTC/ETH + USD-M BTC/ETH，JSON→metadata→spec→各自 transport/Projection→Book/Event/Status；故障与慢消费者隔离、48 contexts、活动 RPC 退出、失败回滚；Foundation 之外真实 production build/smoke | 完成（2026-10-18）；完整离线及 sanitizer、独立复核、Linux/main/PR CI 通过，PR #37 已合并；[证据](GATEWAY_G2_V03_EVIDENCE.md) |
-| G3：共同负载、API 联合预算与交付 | 批准硬件/负载/CPU/RSS/p99 等现实预算；四产品有界真实行情与同 VPS 共同运行；完成 BMD-RL-01 分市场分窗口预算、离线恢复及授权的低扰动联合观察；只优化实测热点 | 20keys 离线 P1 增量进行中；API/共同VPS预算与原 M4/G12-E 验收仍未关闭 |
+| G3：共同负载、API 联合预算与交付 | v0.4先完成20keys G3-a离线配置/路由/启动恢复/48 contexts与P1；G3-b完成BMD-RL-01；G3-c冻结现实资源预算并在授权同VPS真实负载下验收 | G3-a离线验证及独立复核完成，最终CI/合并交付进行中；[证据](GATEWAY_G3_OFFLINE_EVIDENCE.md)。G3-b/G3-c与原M4/G12-E未关闭 |
 
 2026-10-15 用户授权完成 G1，并独立复核待审分支。2026-10-18 用户授权 G2；四产品离线组合、production CI、独立复核与合并交付完成。G3 生产窗口仍单独安排。
 
@@ -93,3 +93,20 @@ Measured commit `8ce41be` and binaries remain bound to the raw campaign; later
 test-only corrections do not alter production/measurement code.
 This increment does not complete BMD-RL-01, approve a deployment symbol list,
 or qualify shared-VPS/Recorder production capacity.
+
+## G3-a offline closeout — 2026-10-19
+
+- [x] Reconciled all six v0.4 plans with the existing PR #38 implementation; kept G0/G1/G2 historical scope.
+- [x] Verified 20 accepted / 21 rejected at configuration, preparation and registry; no new runtime framework or upstream pin.
+- [x] Verified exact 20-key parser/Projection/Book/Event/Status routing, per-market metadata reuse and heterogeneous precision.
+- [x] Kept the process cap at 48: 40 baseline streams, 48 accepted, 49th RESOURCE_EXHAUSTED, cancel/reuse and final zero contexts; per-product limits unchanged.
+- [x] Added explicit startup elapsed bound and deterministic late-Live/shared-deadline coverage using existing seams; all 20 failure positions roll back.
+- [x] Added two rounds of all-product recovery, short Live between rounds, old-session Gap and new-generation subscriptions; max one transport per key.
+- [x] Fresh independent code review and final test increment review APPROVED.
+- [x] Release OFF 26/26, ON 27/27, ASan+UBSan ON 25/25; independent Foundation 1/1 and format/diff checks pass.
+- [x] TSan ON focused concurrency/lifecycle 6/6 (five groups plus production regression).
+- [ ] Final production CI and PR merge delivery (in progress).
+
+The bounded profile is one Book + one Depth Event per key (40 contexts). A 60-stream
+all-supported-events profile is outside the retained 48 cap. BMD-RL-01/G3-b and
+shared-VPS/API/live/resource qualification remain OPEN; see [G3-a evidence](GATEWAY_G3_OFFLINE_EVIDENCE.md).

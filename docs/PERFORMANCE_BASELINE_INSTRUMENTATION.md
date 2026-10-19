@@ -108,6 +108,10 @@ Core; it is not a pure-Core span. CPU differences cover this update-processing
 segment only, not all owner-thread CPU. Clock-read errors invalidate evidence.
 Zero extension timestamps mean the stage was not observed.
 
+For bootstrap-buffered updates, dequeue and eventual apply may span other owner
+work; the CPU delta is not pure per-update CPU attribution in that case. The P1
+campaign records normal updates after all products are Live.
+
 Delivery `write_begin_ns` is sampled after envelope materialization immediately
 before synchronous Write. T4→write_begin includes queue/wake/materialization;
 write_begin→T5 measures server Write completion, not client processing.

@@ -146,7 +146,7 @@ jobs:
           key: ${{ steps.binaries.outputs.cache-primary-key }}
 
   production:
-    name: Production Release / four-product offline
+    name: Production Release / four- and twenty-product offline
     needs: production-dependencies
     if: always() && (needs.production-dependencies.result == 'skipped' || needs.production-dependencies.result == 'success')
     runs-on: ubuntu-24.04

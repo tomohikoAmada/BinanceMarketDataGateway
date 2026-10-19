@@ -389,7 +389,7 @@ void startup_rollback() {
   stopped(gateway, config);
 }
 
-void all_four_must_be_live() {
+void all_products_must_be_live() {
   auto config = configuration();
   config = configuration(config.config.market_keys.size() - 1U,
                          support::AttemptMode::NeverLive);
@@ -398,23 +398,140 @@ void all_four_must_be_live() {
   production::ProductionGateway gateway{std::move(config.specs),
                                         support::fixed_clock(), "four-timeout",
                                         "127.0.0.1:0", configured_options};
-  bool observed_three_live = false;
+  bool observed_other_products_live = false;
+  const auto began = std::chrono::steady_clock::now();
   const auto result = gateway.start([&] {
     const auto observed = gateway.observe();
     if (std::all_of(observed.products.begin(), observed.products.end() - 1,
                     [](const auto &p) {
                       return p.runtime.state == g3::RuntimeState::Live;
                     })) {
-      observed_three_live = true;
+      observed_other_products_live = true;
       REQUIRE(observed.state == production::GatewayState::Starting);
       REQUIRE(observed.selected_port == 0);
     }
     return false;
   });
-  REQUIRE(observed_three_live);
+  REQUIRE(observed_other_products_live);
   REQUIRE(result.code == production::StartCode::InitialStartupTimeout);
+  REQUIRE(std::chrono::steady_clock::now() - began < std::chrono::seconds{5});
   stopped(gateway, config);
 }
+
+#if defined(BMD_GATEWAY_TWENTY_INTEGRATION)
+void late_initial_live_keeps_shared_deadline() {
+  auto config = configuration();
+  config.specs.back().options.runtime_test.owner_starts_paused = true;
+  const auto keys = config.config.market_keys;
+  auto configured_options = options();
+  configured_options.initial_startup_timeout = std::chrono::seconds{1};
+  const auto origin = std::chrono::steady_clock::time_point{};
+  bool expired = false;
+  std::size_t clock_calls = 0U;
+  production::ProductionGateway *gateway_ptr = nullptr;
+  configured_options.startup_now = [&] {
+    ++clock_calls;
+    if (clock_calls == 1U) {
+      for (const auto &attempt : config.attempts)
+        REQUIRE(attempt->starts.load() == 0U);
+    } else if (clock_calls == 2U) {
+      eventually([&] {
+        const auto &products = gateway_ptr->products_for_testing().products();
+        return std::all_of(products.begin(), products.end() - 1,
+                           [](const auto &p) {
+                             return p->runtime().observe().state ==
+                                        g3::RuntimeState::Live &&
+                                    p->recovery().observe().state ==
+                                        g5::RecoveryState::Live;
+                           }) &&
+               config.attempts.back()->starts.load() == 1U;
+      });
+    }
+    return expired ? origin + std::chrono::seconds{1} : origin;
+  };
+  production::ProductionGateway gateway{
+      std::move(config.specs), support::fixed_clock(), "twenty-late-live",
+      "127.0.0.1:0", configured_options};
+  gateway_ptr = &gateway;
+  std::size_t stop_checks = 0U;
+  bool late_live = false;
+  const auto result = gateway.start([&] {
+    if (++stop_checks == 3U) {
+      auto *last = gateway.products_for_testing().find(keys.back());
+      const auto before =
+          last->runtime().observe_until(std::chrono::steady_clock::now());
+      REQUIRE(!before || before->state != g3::RuntimeState::Live);
+      expired = true;
+      last->runtime().release_owner_for_testing();
+      late_live = last->recovery().wait_for_generation_live(1U).state ==
+                  g5::RecoveryState::Live;
+      REQUIRE(last->runtime().observe().state == g3::RuntimeState::Live);
+      REQUIRE(gateway.observe().selected_port == 0);
+    }
+    return false;
+  });
+  REQUIRE(late_live);
+  REQUIRE(clock_calls == 3U);
+  REQUIRE(result.code == production::StartCode::InitialStartupTimeout);
+  REQUIRE(gateway.observe().selected_port == 0);
+  stopped(gateway, config);
+}
+
+void repeated_all_product_recovery() {
+  auto config = configuration();
+  const auto keys = config.config.market_keys;
+  production::ProductionGateway gateway{
+      std::move(config.specs), support::fixed_clock(), "twenty-recovery",
+      "127.0.0.1:0", options()};
+  REQUIRE(gateway.start().code == production::StartCode::Serving);
+  auto stub = stub_for(gateway);
+  for (std::uint64_t generation = 1U; generation <= 3U; ++generation) {
+    std::vector<std::unique_ptr<Streams>> streams;
+    for (const auto &key : keys)
+      streams.push_back(std::make_unique<Streams>(*stub, key));
+    REQUIRE(gateway.observe().tracked_contexts == 40U);
+    for (std::size_t i = 0U; i < keys.size(); ++i)
+      streams[i]->read(publish(gateway, keys[i], 102U, generation), generation);
+    const auto live = status(*stub);
+    REQUIRE(live.markets_size() == 20);
+    for (std::size_t i = 0U; i < keys.size(); ++i) {
+      REQUIRE(live.markets(static_cast<int>(i)).market() == keys[i].market);
+      REQUIRE(live.markets(static_cast<int>(i)).symbol() == keys[i].symbol);
+      REQUIRE(live.markets(static_cast<int>(i)).state() ==
+              common::STREAM_LIFECYCLE_STATE_LIVE);
+    }
+    if (generation == 3U) {
+      gateway.stop();
+      for (auto &stream : streams)
+        stream->drain();
+      break;
+    }
+    // Submit every product's sequence gap before waiting for any recovery.
+    std::vector<support::market::DepthUpdate> gaps;
+    for (const auto &key : keys)
+      gaps.push_back(publish(gateway, key, 104U, generation));
+    for (std::size_t i = 0U; i < keys.size(); ++i) {
+      wire::GatewayEventEnvelope event;
+      REQUIRE(streams[i]->events->Read(&event) && event.has_depth_update());
+      REQUIRE(event.depth_update().SerializeAsString() ==
+              gaps[i].SerializeAsString());
+      streams[i]->drain(true);
+    }
+    eventually([&] { return gateway.observe().tracked_contexts == 0U; });
+    for (std::size_t i = 0U; i < keys.size(); ++i) {
+      auto *product = gateway.products_for_testing().find(keys[i]);
+      const auto recovered =
+          product->recovery().wait_for_generation_live(generation + 1U);
+      REQUIRE(recovered.state == g5::RecoveryState::Live);
+      REQUIRE(recovered.connection_generation == generation + 1U);
+      REQUIRE(config.attempts[i]->starts.load() == generation + 1U);
+      REQUIRE(config.attempts[i]->active.load() == 1U);
+      REQUIRE(config.attempts[i]->maximum_active.load() == 1U);
+    }
+  }
+  stopped(gateway, config);
+}
+#endif
 
 void global_context_limit() {
   auto config = configuration();
@@ -466,8 +583,14 @@ int main() {
     startup_rollback();
     std::cout
         << "CONFIGURED_PRODUCT_START_FAILURE_AND_EXCEPTION_ROLLBACK=PASS\n";
-    all_four_must_be_live();
+    all_products_must_be_live();
     std::cout << "CONFIGURED_PRODUCT_ALL_INITIAL_LIVE_REQUIRED=PASS\n";
+#if defined(BMD_GATEWAY_TWENTY_INTEGRATION)
+    late_initial_live_keeps_shared_deadline();
+    std::cout << "TWENTY_PRODUCT_LATE_LIVE_SHARED_DEADLINE=PASS\n";
+    repeated_all_product_recovery();
+    std::cout << "TWENTY_PRODUCT_REPEATED_ALL_RECOVERY=PASS\n";
+#endif
     global_context_limit();
     std::cout << "CONFIGURED_PRODUCT_GLOBAL_48_CONTEXTS=PASS\n";
   } catch (const std::exception &error) {

@@ -1,6 +1,6 @@
 # Gateway architecture
 
-当前开发计划：[docs/MILESTONES.md](docs/MILESTONES.md)，依据 2026-10-12 BinanceMarketData v0.3 总计划及 Gateway 模块计划。G0 reset 观察补修、G1 时间语义/Depth 新鲜度及独立复核已完成；2026-10-18 G2 四产品离线集成及最小生产 CI 已复核合并。当前实现是支持启动配置的有限产品集合，已经复用 G12-B 的 owner set 和 registry；历史固定双 BTC 是其中一个配置场景。G3 真实网络与性能/API 预算验收未启动。
+当前开发计划：[docs/MILESTONES.md](docs/MILESTONES.md)，依据 BinanceMarketData v0.4 总计划及 Gateway 模块计划，保留v0.3已完成事实。G0 reset 观察补修、G1 时间语义/Depth 新鲜度及独立复核已完成；2026-10-18 G2 四产品离线集成及最小生产 CI 已复核合并。2026-10-19 G3-a已验证20产品、48 contexts、精确路由、统一启动deadline/回滚及局部/全产品重复恢复，见[离线证据](docs/GATEWAY_G3_OFFLINE_EVIDENCE.md)。当前实现复用 G12-B 的 owner set 和 registry；历史固定双 BTC 是其中一个配置场景。G3-b联合API预算和G3-c共享VPS/真实网络及资源预算仍未验收。
 
 ## 职责与依赖
 
@@ -59,6 +59,10 @@ bmd-gatewayd --config PATH
 `SubscribeOrderBook` 只发布 Projection 已 Applied 的数据。`SubscribeEvents` 需要恰好一个 V1 selector；Spot 支持 DIFF_DEPTH / AGG_TRADE / BOOK_TICKER，USD-M 仅 DIFF_DEPTH。深度事件为 PRE_PROJECTION_NORMALIZED，不代表已应用到订单簿。
 
 每产品 order-book resident 与 Event active 各上限 8；各普通队列 64，另有一个 terminal slot。慢消费者按 session 终止。进程级 TryCancel tracker 总上限 48，与产品数无关；注册/取消握手保护 ServerContext 生命周期。昂贵 unary status 并发上限为一，不占 streaming tracker。status 采用已有 runtime/recovery/publication 观察，没有第二健康框架。
+
+G3-a离线订阅画像为20产品各一条Book和一条Depth Event，共40 contexts；48满额后新增流
+返回RESOURCE_EXHAUSTED，取消后可复用。全部Spot三类Event加Book及USD-M Depth加Book共60，
+超出现行48容量；本轮未要求或提高该cap。
 
 `GetGatewayStatus` 使用 min(一秒, client deadline) 的整次请求观察预算，多个产品共享同一 deadline；超时返回 DEADLINE_EXCEEDED，关闭服务取消观察。无限 RPC deadline 先在 system_clock 单位内截短再转换，避免 macOS 的时间单位转换溢出。服务 drain 后才销毁产品；正在执行的 owner 操作返回后仍须 join，不强行 detach。
 

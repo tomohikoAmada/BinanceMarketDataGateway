@@ -19,6 +19,10 @@ fix are complete. The user authorized v0.3 G1 on 2026-10-15; implementation,
 offline validation and independent review completed on 2026-10-16. G2 was
 authorized on 2026-10-18; four-product offline verification, production CI,
 independent review and PR merge are complete. The owner authorized the v0.4 twenty-key offline P1 increment on 2026-10-19; G3 shared-VPS/API qualification remains open.
+The owner also authorized G3-a offline closeout: twenty-key routing, the unchanged
+global 48-context cap, startup rollback/shared deadline, and repeated all-product
+recovery are verified and independently reviewed; delivery status is recorded in
+docs/GATEWAY_G3_OFFLINE_EVIDENCE.md. G3-b/BMD-RL-01 and G3-c remain open.
 High performance, low latency, low CPU/RSS
 and safe stable behavior are delivery requirements; no multi-product performance
 budget has yet been established. Do not label future acceptance complete
