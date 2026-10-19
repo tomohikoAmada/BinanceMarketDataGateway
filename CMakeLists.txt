@@ -389,6 +389,16 @@ if(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT)
         add_test(NAME gateway_g4_spot_protocol_tests
                  COMMAND bmd_gateway_g4_spot_protocol_tests)
 
+        add_executable(bmd_gateway_public_api_budget_tests
+            tests/public_api_budget_tests.cpp)
+        target_include_directories(bmd_gateway_public_api_budget_tests PRIVATE src/g4)
+        target_compile_features(bmd_gateway_public_api_budget_tests PRIVATE cxx_std_20)
+        target_link_libraries(bmd_gateway_public_api_budget_tests PRIVATE Threads::Threads)
+        bmd_gateway_apply_warnings(bmd_gateway_public_api_budget_tests)
+        bmd_gateway_apply_sanitizers(bmd_gateway_public_api_budget_tests)
+        add_test(NAME gateway_public_api_budget_tests
+                 COMMAND bmd_gateway_public_api_budget_tests)
+
         add_executable(bmd_gateway_g4_spot_transport_tests
             tests/g4_spot_transport_tests.cpp
         )
