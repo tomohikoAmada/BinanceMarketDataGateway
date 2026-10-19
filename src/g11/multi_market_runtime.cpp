@@ -244,7 +244,7 @@ make_performance_baseline(const MarketKey &key, const g3::RuntimeClock &clock,
                           performance::PerformanceBaselineLimits limits) {
   return std::make_shared<performance::ProductTraceBuffer>(
       measurement_product(key), [clock] { return clock().monotonic_ns; },
-      limits);
+      limits, key.symbol);
 }
 
 [[nodiscard]] g3::RuntimeLimits runtime_limits_with_baseline(
@@ -400,7 +400,7 @@ ConfiguredProductRuntimeSet::prepare(
   if (specifications.empty() ||
       specifications.size() > kMaximumConfiguredProducts) {
     throw std::invalid_argument{
-        "configured products require between one and eight specifications"};
+        "configured products require between one and twenty specifications"};
   }
   std::sort(specifications.begin(), specifications.end(),
             [](const auto &left, const auto &right) {

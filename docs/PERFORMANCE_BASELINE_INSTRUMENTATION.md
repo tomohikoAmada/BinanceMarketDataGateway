@@ -92,3 +92,73 @@ time-at-capacity tracking, probabilistic sampling, continuous aggregation, and
 per-event logging. CPU and RSS remain external campaign measurements; occupancy
 samples, maxima, and existing bounded-queue Full/terminalization transitions
 are sufficient queue evidence for this first measurement facility.
+
+## Projection P1 extension — 2026-10-18
+
+The configured production exporter now writes every configured product after
+shutdown, with its exact market/symbol identity. The legacy two-BTC restriction
+is removed; normal builds still ignore the export environment variable.
+Historical fixed-two baseline acceptance above is unchanged.
+
+Additive trace fields: `adapted_ns` (successful inbound adaptation, immediately
+before checked apply), `owner_done_ns` (after update publication/state work),
+`owner_cpu_begin_ns`/`owner_cpu_end_ns` (CLOCK_THREAD_CPUTIME_ID at T2 and done).
+`adapted_ns`→T3 includes `AdaptedDepthBatch::apply_to` binding/vector work and
+Core; it is not a pure-Core span. CPU differences cover this update-processing
+segment only, not all owner-thread CPU. Clock-read errors invalidate evidence.
+Zero extension timestamps mean the stage was not observed.
+
+For bootstrap-buffered updates, dequeue and eventual apply may span other owner
+work; the CPU delta is not pure per-update CPU attribution in that case. The P1
+campaign records normal updates after all products are Live.
+
+Delivery `write_begin_ns` is sampled after envelope materialization immediately
+before synchronous Write. T4→write_begin includes queue/wake/materialization;
+write_begin→T5 measures server Write completion, not client processing.
+
+The test-only `bmd_gateway_projection_p1_measurements DEPTH BATCH COUNT INTERVAL_US
+OUTPUT` reuses the G2 fixture/production graph, seeds equal fixed-depth books,
+warms up 32 events/product and exercises four owners plus eight real loopback
+streams. It preconstructs JSON input and validates complete ordered deliveries,
+market identity, final accepted IDs, no trace overflow and stopped owners.
+`gateway_projection_p1_smoke` covers it in normal and instrumented builds.
+No production acceptance hook/configuration, new library public API, network
+host or dependency pin is introduced. CPU/RSS include in-process client/fixture
+work; this driver does not establish production daemon capacity or VPS budgets.
+Results and reproduction are shared with Projection's
+`docs/PROJECTION_P1_RESULT.md`; Gateway G3 remains unqualified.
+
+P1 local campaign completed: three scenarios × OFF/ON × three processes,
+27,600 Applied traced updates and 55,200 traced successful server writes;
+normal builds delivered the same update counts through both branches. Every
+trial preserved all four identities, final IDs and ordered complete delivery;
+no ingress Full, slow-client terminalization, trace overflow or clock error.
+On the eight-core Apple M3 host (24 GiB), OFF whole-process CPU means were
+0.057 / 0.925 / 0.983 cores for D1000/B10/10Hz, D5000/B10/100Hz and
+D5000/B100/100Hz. These CPU values include embedded loopback clients and
+fixtures. They are not a four-core VPS or Recorder co-load acceptance.
+
+Local validation: OFF Release 24/24, ON Release 25/25; ASan+UBSan production
+23/23 and final measurement/instrumentation 2/2; focused TSan 5/5; format and
+diff checks pass. OFF/ON counts include historical G2 synthetic/G8 tests;
+sanitizer graphs omit those two historical groups. A fresh independent agent
+approved the implementation and measurement methodology; result review is
+recorded with Projection's evidence. No Core or adapter production change.
+
+### Twenty-key P1 increment (2026-10-19)
+
+The same test-only measurement executable also accepts
+`--profile tests/fixtures/projection-p1-twenty.json normal|deep|batch OUTPUT`.
+The frozen profile uses selected official metadata and 24-hour trade-count activity
+tiers for ten Spot and ten USD-M research symbols. It records per-key depth,
+batch, count and interval; trade counts are a synthetic workload proxy, not
+observed depth frequency or an approved deployment list. Each key has one Book
+and one Depth Event stream (40 contexts); the global bound remains 48.
+
+Three alternating OFF/ON pairs per scenario completed. Retained Projection P1
+results identify exact measured commit `8ce41be`, binaries, runner and profile,
+plus a local raw archive with 107 verified data-member hashes. Instrumentation
+adds about 110–111 MiB peak RSS for twenty preallocated buffers; CPU ordering and
+tail latency vary, so no zero-observer-cost or SLA claim is made. Per-key p99 and
+maximum tails remain in the evidence. Projection Core/Adapter/pins are unchanged.
+See [Projection PR #55](https://github.com/tomohikoAmada/BinanceMarketDataProjection/pull/55).

@@ -1,6 +1,7 @@
 #include "performance_baseline.hpp"
 
 #include <algorithm>
+#include <ctime>
 #include <limits>
 #include <ostream>
 #include <stdexcept>
@@ -75,9 +76,14 @@ void write_optional_time(std::ostream &output, std::string_view name,
 } // namespace
 
 ProductTraceBuffer::ProductTraceBuffer(Product product, MonotonicClock clock,
-                                       PerformanceBaselineLimits limits)
-    : product_{product}, clock_{std::move(clock)}, limits_{limits},
-      traces_(limits.trace_capacity),
+                                       PerformanceBaselineLimits limits,
+                                       std::string symbol)
+    : product_{product},
+      product_identity_{std::string{product == Product::Spot
+                                        ? "BINANCE/SPOT/"
+                                        : "BINANCE/USD_M_PERPETUAL/"} +
+                        symbol},
+      clock_{std::move(clock)}, limits_{limits}, traces_(limits.trace_capacity),
       order_book_deliveries_(limits.delivery_capacity_per_kind),
       event_deliveries_(limits.delivery_capacity_per_kind) {
   if (!clock_ || limits_.trace_capacity == 0U ||
@@ -137,6 +143,14 @@ void ProductTraceBuffer::record_t2(TraceToken trace) noexcept {
     return;
   }
   evidence->t2_ns = sample_monotonic();
+  timespec cpu{};
+  if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu) == 0) {
+    evidence->owner_cpu_begin_ns =
+        static_cast<std::uint64_t>(cpu.tv_sec) * 1000000000ULL +
+        static_cast<std::uint64_t>(cpu.tv_nsec);
+  } else {
+    clock_error_count_.fetch_add(1U, std::memory_order_relaxed);
+  }
   evidence->stage_mask = static_cast<std::uint8_t>(evidence->stage_mask | kT2);
 }
 
@@ -149,6 +163,26 @@ void ProductTraceBuffer::record_t3(TraceToken trace,
   evidence->t3_ns = sample_monotonic();
   evidence->t3_disposition = disposition;
   evidence->stage_mask = static_cast<std::uint8_t>(evidence->stage_mask | kT3);
+}
+
+void ProductTraceBuffer::record_adapted(TraceToken trace) noexcept {
+  if (auto *evidence = resolve(trace)) {
+    evidence->adapted_ns = sample_monotonic();
+  }
+}
+
+void ProductTraceBuffer::record_owner_done(TraceToken trace) noexcept {
+  if (auto *evidence = resolve(trace)) {
+    evidence->owner_done_ns = sample_monotonic();
+    timespec cpu{};
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu) == 0) {
+      evidence->owner_cpu_end_ns =
+          static_cast<std::uint64_t>(cpu.tv_sec) * 1000000000ULL +
+          static_cast<std::uint64_t>(cpu.tv_nsec);
+    } else {
+      clock_error_count_.fetch_add(1U, std::memory_order_relaxed);
+    }
+  }
 }
 
 DeliveryToken ProductTraceBuffer::record_t4(TraceToken trace, DeliveryKind kind,
@@ -184,6 +218,16 @@ DeliveryToken ProductTraceBuffer::record_t4(TraceToken trace, DeliveryKind kind,
         std::max(queue_evidence_.event_max_occupancy, occupancy);
   }
   return {this, kind, static_cast<std::uint32_t>(row)};
+}
+
+void ProductTraceBuffer::record_write_begin(DeliveryToken delivery) noexcept {
+  if (!delivery.valid() || delivery.owner != this) {
+    return;
+  }
+  auto &storage = delivery_storage(delivery.kind);
+  if (delivery.row < storage.size() && storage[delivery.row].trace_id != 0U) {
+    storage[delivery.row].write_begin_ns = sample_monotonic();
+  }
 }
 
 void ProductTraceBuffer::record_t5(DeliveryToken delivery) noexcept {
@@ -269,7 +313,7 @@ void ProductTraceBuffer::write_json_lines(std::ostream &output) const {
   const auto queue = queue_evidence();
   output << "{\"record\":\"campaign\",\"schema\":\"bmd-gateway-"
             "performance-baseline.v1\",\"product\":\""
-         << to_string(product_) << "\",\"trace_capacity\":" << trace_capacity()
+         << product_identity_ << "\",\"trace_capacity\":" << trace_capacity()
          << ",\"delivery_capacity_per_kind\":" << delivery_capacity_per_kind()
          << ",\"trace_count\":" << trace_count()
          << ",\"trace_storage_overflow\":" << trace_storage_overflow()
@@ -301,7 +345,7 @@ void ProductTraceBuffer::write_json_lines(std::ostream &output) const {
 
   for (std::size_t index = 0U; index < trace_count_; ++index) {
     const auto &evidence = traces_[index];
-    output << "{\"record\":\"trace\",\"product\":\"" << to_string(product_)
+    output << "{\"record\":\"trace\",\"product\":\"" << product_identity_
            << "\",\"trace_id\":" << evidence.trace_id;
     write_optional_time(output, "t0_ns", evidence.t0_ns,
                         (evidence.stage_mask & kT0) != 0U);
@@ -313,6 +357,10 @@ void ProductTraceBuffer::write_json_lines(std::ostream &output) const {
                         (evidence.stage_mask & kT2) != 0U);
     write_optional_time(output, "t3_ns", evidence.t3_ns,
                         (evidence.stage_mask & kT3) != 0U);
+    output << ",\"adapted_ns\":" << evidence.adapted_ns
+           << ",\"owner_done_ns\":" << evidence.owner_done_ns
+           << ",\"owner_cpu_begin_ns\":" << evidence.owner_cpu_begin_ns
+           << ",\"owner_cpu_end_ns\":" << evidence.owner_cpu_end_ns;
     output << ",\"t3_disposition\":\"" << to_string(evidence.t3_disposition)
            << "\",\"ingress_occupancy_q\":" << evidence.ingress_occupancy_q
            << ",\"book_delivery_count\":" << book_counts[index]
@@ -331,7 +379,7 @@ void ProductTraceBuffer::write_json_lines(std::ostream &output) const {
     const auto &storage = deliveries(kind);
     for (std::size_t index = 0U; index < delivery_count(kind); ++index) {
       const auto &evidence = storage[index];
-      output << "{\"record\":\"delivery\",\"product\":\"" << to_string(product_)
+      output << "{\"record\":\"delivery\",\"product\":\"" << product_identity_
              << "\",\"kind\":\"" << to_string(kind)
              << "\",\"trace_id\":" << evidence.trace_id
              << ",\"subscriber_ordinal\":" << evidence.subscriber_ordinal
@@ -339,6 +387,7 @@ void ProductTraceBuffer::write_json_lines(std::ostream &output) const {
              << ",\"t4_ns\":" << evidence.t4_ns;
       write_optional_time(output, "t5_ns", evidence.t5_ns,
                           evidence.t5_observed);
+      output << ",\"write_begin_ns\":" << evidence.write_begin_ns;
       output << ",\"queue_occupancy_t4\":" << evidence.queue_occupancy_t4
              << ",\"missing_stage_reason\":\""
              << (evidence.t5_observed ? "none" : "grpc_write_not_completed")

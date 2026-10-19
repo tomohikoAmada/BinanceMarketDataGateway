@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <iosfwd>
+#include <string>
 #include <vector>
 
 namespace binance_market_data::gateway::performance {
@@ -70,6 +71,10 @@ struct TraceEvidence final {
   std::size_t ingress_occupancy_q{0U};
   T3Disposition t3_disposition{T3Disposition::Unobserved};
   std::uint8_t stage_mask{0U};
+  std::uint64_t adapted_ns{0U};
+  std::uint64_t owner_done_ns{0U};
+  std::uint64_t owner_cpu_begin_ns{0U};
+  std::uint64_t owner_cpu_end_ns{0U};
 };
 
 struct DeliveryEvidence final {
@@ -80,6 +85,7 @@ struct DeliveryEvidence final {
   std::uint64_t t5_ns{0U};
   std::size_t queue_occupancy_t4{0U};
   bool t5_observed{false};
+  std::uint64_t write_begin_ns{0U};
 };
 
 struct QueueEvidence final {
@@ -98,7 +104,8 @@ struct QueueEvidence final {
 class ProductTraceBuffer final {
 public:
   ProductTraceBuffer(Product product, MonotonicClock clock,
-                     PerformanceBaselineLimits limits = {});
+                     PerformanceBaselineLimits limits = {},
+                     std::string symbol = "BTCUSDT");
 
   ProductTraceBuffer(const ProductTraceBuffer &) = delete;
   ProductTraceBuffer &operator=(const ProductTraceBuffer &) = delete;
@@ -109,12 +116,15 @@ public:
   void record_q(TraceToken trace, std::size_t occupancy) noexcept;
   void record_t2(TraceToken trace) noexcept;
   void record_t3(TraceToken trace, T3Disposition disposition) noexcept;
+  void record_adapted(TraceToken trace) noexcept;
+  void record_owner_done(TraceToken trace) noexcept;
 
   [[nodiscard]] DeliveryToken record_t4(TraceToken trace, DeliveryKind kind,
                                         std::uint64_t subscriber_ordinal,
                                         std::uint64_t session_sequence,
                                         std::size_t occupancy) noexcept;
   void record_t5(DeliveryToken delivery) noexcept;
+  void record_write_begin(DeliveryToken delivery) noexcept;
 
   void record_ingress_full() noexcept;
   void record_delivery_full(DeliveryKind kind) noexcept;
@@ -144,6 +154,7 @@ private:
   [[nodiscard]] std::size_t &delivery_size(DeliveryKind kind) noexcept;
 
   const Product product_;
+  const std::string product_identity_;
   MonotonicClock clock_;
   const PerformanceBaselineLimits limits_;
   std::vector<TraceEvidence> traces_;

@@ -1128,6 +1128,11 @@ private:
       return;
     }
 
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    if (limits_.performance_baseline != nullptr) {
+      limits_.performance_baseline->record_adapted(input.trace);
+    }
+#endif
     const auto applied =
         std::get<adapter::AdaptedDepthBatch>(adapted).apply_to(projection_);
     if (std::holds_alternative<adapter::AdapterError>(applied)) {
@@ -1178,6 +1183,11 @@ private:
           input.provenance.connection_generation);
     }
     publish_projection_state();
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    if (limits_.performance_baseline != nullptr) {
+      limits_.performance_baseline->record_owner_done(input.trace);
+    }
+#endif
   }
 
   void publish_applied_update(const market::DepthUpdate &update,

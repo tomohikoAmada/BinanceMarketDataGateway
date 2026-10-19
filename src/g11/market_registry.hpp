@@ -10,7 +10,7 @@
 
 namespace binance_market_data::gateway::g11 {
 
-inline constexpr std::size_t kMaximumConfiguredProducts = 8U;
+inline constexpr std::size_t kMaximumConfiguredProducts = 20U;
 
 struct MarketServices final {
   MarketKey key;

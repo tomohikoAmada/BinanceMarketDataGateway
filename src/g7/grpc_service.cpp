@@ -713,6 +713,11 @@ grpc::Status OrderBookGrpcService::SubscribeOrderBook(
                        "failed to materialize order-book stream item"});
     }
     bool write_succeeded = false;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    if (publication.delivery.valid()) {
+      publication.delivery.owner->record_write_begin(publication.delivery);
+    }
+#endif
     try {
       write_succeeded = options_.write_override
                             ? options_.write_override(*writer, item)
@@ -884,6 +889,11 @@ grpc::Status OrderBookGrpcService::SubscribeEvents(
                        "failed to materialize event stream item"});
     }
     bool write_succeeded = false;
+#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+    if (publication.delivery.valid()) {
+      publication.delivery.owner->record_write_begin(publication.delivery);
+    }
+#endif
     try {
       write_succeeded = options_.event_write_override
                             ? options_.event_write_override(*writer, item)

@@ -135,7 +135,7 @@ void strict_json_rejections() {
       R"json({"grpc_listen":"127.0.0.1:50051","spot_symbols":[],"usdm_symbols":[]})json",
       R"json({"grpc_listen":"127.0.0.1:50051","spot_symbols":["BTCUSDT","BTCUSDT"],"usdm_symbols":[]})json",
       R"json({"grpc_listen":"127.0.0.1:50051","spot_symbols":[],"usdm_symbols":["BTCUSDT","BTCUSDT"]})json",
-      R"json({"grpc_listen":"127.0.0.1:50051","spot_symbols":["1","2","3","4","5","6","7","8","9"],"usdm_symbols":[]})json",
+      R"json({"grpc_listen":"127.0.0.1:50051","spot_symbols":["1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21"],"usdm_symbols":[]})json",
       R"json({"grpc_listen":"127.0.0.1:50051","spot_symbols":["BTCUSDT"],"usdm_symbols":[]} trailing)json"};
   for (const auto &contents : invalid) {
     REQUIRE(
@@ -199,6 +199,15 @@ void configuration_identity_and_cardinality() {
   REQUIRE(eight.market_keys.size() == 8U);
   REQUIRE(std::is_sorted(eight.market_keys.begin(), eight.market_keys.end(),
                          g11::MarketKeyLess{}));
+  std::string twenty_json =
+      R"({"grpc_listen":"127.0.0.1:50051","spot_symbols":[)";
+  for (int i = 0; i < 20; ++i) {
+    if (i != 0)
+      twenty_json += ',';
+    twenty_json += "\"SYMBOL" + std::to_string(i) + "\"";
+  }
+  twenty_json += R"(],"usdm_symbols":[]})";
+  REQUIRE(require_config(load(twenty_json)).market_keys.size() == 20U);
 }
 
 [[nodiscard]] std::string spot_body() {

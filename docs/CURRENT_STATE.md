@@ -1,6 +1,6 @@
 # Current Gateway state
 
-更新日期：2026-10-18。执行 BinanceMarketData v0.3 总计划及 Gateway 模块计划；G0 reset 观察补修已复核合并，G1 时间映射与 Depth 新鲜度已完成实现、离线验证及独立复核。当前导航见 [MILESTONES](MILESTONES.md)，证据见 [G0 v0.3](GATEWAY_G0_V03_EVIDENCE.md)、[G1 v0.3](GATEWAY_G1_V03_EVIDENCE.md) 和 [G2 v0.3](GATEWAY_G2_V03_EVIDENCE.md)。旧阶段编号及 [2026-10-04 审查](CODE_REVIEW_2026-10-04.md)仅作实现/修复历史，不与新版 G0 混同。
+更新日期：2026-10-19。执行 BinanceMarketData v0.4 总计划及 Gateway 模块计划，保留v0.3已完成事实。G3-a二十产品离线扩容、48 contexts、启动/恢复与路由已完成验证、独立复核及production CI，PR #38交付。当前导航见 [MILESTONES](MILESTONES.md)，证据见 [G0 v0.3](GATEWAY_G0_V03_EVIDENCE.md)、[G1 v0.3](GATEWAY_G1_V03_EVIDENCE.md)、[G2 v0.3](GATEWAY_G2_V03_EVIDENCE.md) 和 [G3-a离线](GATEWAY_G3_OFFLINE_EVIDENCE.md)。旧阶段编号及 [2026-10-04 审查](CODE_REVIEW_2026-10-04.md)仅作实现/修复历史，不与新版 G0 混同。
 
 ```text
 G0_THROUGH_G11=COMPLETE
@@ -12,17 +12,20 @@ M2_CONFIGURED_PRODUCTION=IMPLEMENTED_OFFLINE_VERIFIED
 V03_G0=COMPLETE_REVIEWED_MERGED
 V03_G1=COMPLETE_OFFLINE_VERIFIED_REVIEWED
 V03_G2=COMPLETE_OFFLINE_VERIFIED_REVIEWED_MERGED
-V03_G3=NOT_STARTED
+V03_G3=G3A_OFFLINE_VERIFIED_G3B_G3C_OPEN
+V04_G3A=COMPLETE_OFFLINE_VERIFIED_REVIEWED_CI_PASSED
+BMD_RL_01=OPEN
 M3_FOUR_PRODUCT_ACCEPTANCE_AND_PRODUCTION_CI=COMPLETE_OFFLINE_V03_G2_SCOPE
 M4_PERFORMANCE_STABILITY_LIVE_ACCEPTANCE_AND_DELIVERY=NOT_STARTED
 PERFORMANCE_AND_RESOURCE_BUDGETS=NOT_ESTABLISHED
 MULTI_PRODUCT_PERFORMANCE_ACCEPTANCE=NOT_COMPLETE
 PROJECTION_MULTI_PRODUCT_API_CHANGE_REQUIRED=NO
-PROJECTION_PERFORMANCE_ASSESSMENT=PLANNED
+PROJECTION_P1_TWENTY=OFFLINE_MEASUREMENT_REVIEWED_COMPLETE
+PROJECTION_PERFORMANCE_ASSESSMENT=P1_OFFLINE_MEASUREMENT_COMPLETE_BUDGET_DECISION_PENDING_G3
 CURRENT_PLAN=docs/MILESTONES.md
 PRODUCTION_DAEMON=bmd-gatewayd
 PRODUCTION_CONFIG=--config PATH
-CONFIGURED_PRODUCT_COUNT=1..8
+CONFIGURED_PRODUCT_COUNT=1..20
 GLOBAL_TRACKED_STREAMING_CONTEXT_LIMIT=48
 INSECURE_GRPC_LISTEN=NUMERIC_LOOPBACK_ONLY
 OWNER_OBSERVATION_BUDGET=1_SECOND
@@ -32,12 +35,19 @@ INITIAL_READINESS=ALL_CONFIGURED_PRODUCTS_LIVE_SYNCHRONIZED
 LATER_FAILURE=PRODUCT_LOCAL
 HOT_RELOAD=NO
 FOUR_PRODUCT_LIVE_ACCEPTANCE=NOT_COMPLETE
-EIGHT_PRODUCT_CAPACITY=NOT_ESTABLISHED
+TWENTY_PRODUCT_PRODUCTION_CAPACITY=NOT_ESTABLISHED
 ```
 
 生产入口已有 JSON 配置、按市场获取 metadata、逐产品数值规格解析、可配置产品组合、共享首次就绪截止时间、启动回滚和独立恢复。没有固定 BTCUSDT allowlist；普通路由当前支持精确的大写 ASCII 字母/数字 symbol，仍必须通过币安 metadata 验证，不能据此宣称支持币安任意 Unicode symbol。
 
 已有 gRPC：两个市场的 `SubscribeOrderBook`；Spot 的三类事件与 USD-M 的深度事件；动态产品列表的 `GetGatewayStatus`。`SubscribeMarketState` 未实现。每产品 order-book 与 Event admission 各最多 8，普通队列容量各 64；进程 tracked streaming context 总上限 48。
+
+G3-a离线画像为20 Key各一条Book和一条Depth Event，共40 contexts；已验证48满额、
+第49条RESOURCE_EXHAUSTED、取消后复用和Status继续响应。保留48上限；全部已支持流
+同时订阅需60，超出现行容量。20私有owner/精度/路由、全体首次Live、20个失败位置
+整体回滚、迟到Live仍遵守绝对deadline、局部恢复及两轮全20产品恢复均通过。
+研究样本配置见 [gateway-twenty.json](../examples/gateway-twenty.json)，不是最终部署清单。
+G3-b联合API预算与G3-c共享VPS/实网/资源预算仍OPEN。
 
 G1 修正 USD-M Depth `T` 为 transaction-time，trade-time 留空，零/缺失 presence 保持。
 owner 独立记录最后 Applied Depth（UTC/monotonic/provenance），重复/缓冲/Gap 不刷新，reset 清除。
@@ -64,3 +74,9 @@ Release/offline job，普通 PR 只用锁定二进制缓存；手动准备入口
 G2 本机完整生产图及必要 sanitizer、GitHub/main/PR 二进制消费实跑均通过。
 
 高性能、安全稳定、低延迟与低 CPU/内存消耗是必需交付目标，尚未完成多产品质量验收。Projection 已在生产路径使用；多交易对不需要新增 Projection API，但其每批全簿复制/重建应进入性能评估。是否修改 Core 由测量与目标预算决定，见 [配套评估](PROJECTION_INTEGRATION_REVIEW_2026-10-04.md)。
+
+Projection P1（2026-10-18）复用 G2 fixture 测四产品成本，增加可选 Adapter/checked apply/
+owner CPU/Write 点位及精确多产品导出；普通构建语义不变。离线结果与边界由 Projection
+`docs/PROJECTION_P1_RESULT.md` 共同记录。该工作不授予 G3/VPS/API 联合预算资格。
+
+2026-10-19 用户追加授权的20keys离线P1已完成：18次异构成对实验交付127,920更新/255,840客户端消息，独立结果/原始证据审查APPROVED。未扩大48 contexts或产品级8 slots；P2仍CONDITIONAL，G3共享VPS/API预算未验收。技术提交`7266c47`的Linux production 24/24与全部七项普通CI通过（run `39145975891`）；该提交只对实测`8ce41be`补强测试与可移植命名空间查找，production/measurement代码不变。报告/原始包由Projection PR #55记录。

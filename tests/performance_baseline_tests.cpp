@@ -307,7 +307,10 @@ void correlated_branches_and_successful_t5() {
   REQUIRE_EQ(row.t1_ns, 200U);
   REQUIRE(row.q_ns > row.t1_ns);
   REQUIRE(row.t2_ns > row.q_ns);
-  REQUIRE(row.t3_ns > row.t2_ns);
+  REQUIRE(row.adapted_ns > row.t2_ns);
+  REQUIRE(row.t3_ns > row.adapted_ns);
+  REQUIRE(row.owner_done_ns > row.t3_ns);
+  REQUIRE(row.owner_cpu_end_ns >= row.owner_cpu_begin_ns);
   REQUIRE_EQ(row.t3_disposition, performance::T3Disposition::Applied);
 
   REQUIRE_EQ(baseline->delivery_count(performance::DeliveryKind::OrderBook),
@@ -321,7 +324,9 @@ void correlated_branches_and_successful_t5() {
   REQUIRE_EQ(event_delivery.trace_id, trace.trace_id);
   REQUIRE(event_delivery.t4_ns < row.q_ns);
   REQUIRE(book.t4_ns > row.t3_ns);
-  REQUIRE(book.t5_observed && book.t5_ns > book.t4_ns);
+  REQUIRE(book.write_begin_ns > book.t4_ns);
+  REQUIRE(book.t5_observed && book.t5_ns > book.write_begin_ns);
+  REQUIRE(event_delivery.write_begin_ns > event_delivery.t4_ns);
   REQUIRE(event_delivery.t5_observed &&
           event_delivery.t5_ns > event_delivery.t4_ns);
 
@@ -580,7 +585,7 @@ void production_shutdown_precedes_bounded_export() {
   REQUIRE(trailing_campaign == std::string::npos);
 }
 
-void unsupported_composition_preflight_preserves_artifact() {
+void configured_composition_preflight_preserves_artifact() {
   std::string pattern{"/tmp/bmd-gateway-performance-preflight-XXXXXX"};
   const auto descriptor = mkstemp(pattern.data());
   REQUIRE(descriptor >= 0);
@@ -599,9 +604,8 @@ void unsupported_composition_preflight_preserves_artifact() {
       "127.0.0.1:50051",
       {{common::VENUE_BINANCE, common::MARKET_SPOT, "ETHUSDT"}}};
   std::ostringstream diagnostics;
-  REQUIRE(
-      !production::performance_baseline_preflight(unsupported, diagnostics));
-  REQUIRE(diagnostics.str().find("reason=composition") != std::string::npos);
+  REQUIRE(production::performance_baseline_preflight(unsupported, diagnostics));
+  REQUIRE(diagnostics.str().empty());
   std::ifstream artifact{pattern, std::ios::in | std::ios::binary};
   const std::string contents{std::istreambuf_iterator<char>{artifact},
                              std::istreambuf_iterator<char>{}};
@@ -636,8 +640,8 @@ int main() {
        storage_exhaustion_and_queue_evidence_are_measurement_only},
       {"PRODUCTION_SHUTDOWN_PRECEDES_BOUNDED_EXPORT",
        production_shutdown_precedes_bounded_export},
-      {"UNSUPPORTED_COMPOSITION_PREFLIGHT_PRESERVES_ARTIFACT",
-       unsupported_composition_preflight_preserves_artifact},
+      {"CONFIGURED_COMPOSITION_PREFLIGHT_PRESERVES_ARTIFACT",
+       configured_composition_preflight_preserves_artifact},
   };
   for (const auto &[name, test] : tests) {
     try {

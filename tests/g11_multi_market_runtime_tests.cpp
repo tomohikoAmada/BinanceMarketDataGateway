@@ -339,12 +339,23 @@ void configured_set_cardinality_duplicates_order_and_stability() {
   REQUIRE_EQ(eight.size(), 8U);
   REQUIRE_EQ(eight.registry().entries().size(), 8U);
 
-  auto nine_specs = std::vector<g11::ProductRuntimeSpec>{};
-  for (const auto *symbol : {"A", "B", "C", "D", "E", "F", "G", "H", "I"}) {
-    nine_specs.push_back(resolved_spec(
-        {common_wire::VENUE_BINANCE, common_wire::MARKET_SPOT, symbol}));
+  std::vector<g11::ProductRuntimeSpec> twenty_specs;
+  for (std::size_t i = 0; i < 20U; ++i) {
+    twenty_specs.push_back(
+        resolved_spec({common_wire::VENUE_BINANCE, common_wire::MARKET_SPOT,
+                       "SYMBOL" + std::to_string(i)}));
   }
-  REQUIRE(rejects_configured_set(std::move(nine_specs)));
+  auto too_many_specs = twenty_specs;
+  too_many_specs.push_back(resolved_spec(
+      {common_wire::VENUE_BINANCE, common_wire::MARKET_SPOT, "EXTRA"}));
+  REQUIRE(rejects_configured_set(std::move(too_many_specs)));
+  g11::ConfiguredProductRuntimeSet twenty{std::move(twenty_specs),
+                                          fixed_clock(), "gw-twenty"};
+  REQUIRE_EQ(twenty.size(), 20U);
+  REQUIRE_EQ(twenty.registry().entries().size(), 20U);
+  auto too_many_entries = twenty.registry().entries();
+  too_many_entries.push_back(one.registry().entries().front());
+  REQUIRE(rejects_registry(std::move(too_many_entries)));
 
   const g11::MarketKey duplicate_key{common_wire::VENUE_BINANCE,
                                      common_wire::MARKET_SPOT, "ETHUSDT"};

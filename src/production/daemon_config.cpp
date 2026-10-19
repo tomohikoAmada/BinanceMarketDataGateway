@@ -189,7 +189,7 @@ DaemonConfigResult load_daemon_config(std::string_view config_path) {
                     std::move(symbol)});
   }
   if (keys.empty() || keys.size() > g11::kMaximumConfiguredProducts) {
-    return error("configured products require between one and eight symbols");
+    return error("configured products require between one and twenty symbols");
   }
   std::sort(keys.begin(), keys.end(), g11::MarketKeyLess{});
   if (std::adjacent_find(keys.begin(), keys.end()) != keys.end()) {
