@@ -1,7 +1,6 @@
 # G3-b / Recorder R3-b shared-IP offline evidence
 
-2026-10-19 — implementation, joint production-policy proof and new scoped review
-APPROVED. Final validation/PR status is recorded below. G3-c/live qualification
+2026-10-19 — **G3-b / R3-b offline COMPLETE / REVIEWED / CI PASSED / MERGED**. G3-c/live qualification
 and BMD-4 remain open; there was no VPS or Binance API access.
 
 ## Minimal production change
@@ -40,8 +39,8 @@ accounted for; surplus work waits. This is policy composition, not a real-networ
 transport campaign. Production entry/cancel tests and existing20-key actual
 runtime recovery fixtures separately cover binding and recovery semantics.
 
-Companion [Recorder proof and commands](https://github.com/tomohikoAmada/BinanceMarketDataRecorder/blob/codex/shared-api-budget/docs/milestone_acceptance/R3-b-G3-b-shared-api-20261019.md)
-and [scoped review](https://github.com/tomohikoAmada/BinanceMarketDataRecorder/blob/codex/shared-api-budget/docs/reviews/2026-10-19-shared-api-budget-review.md)
+Companion [Recorder proof and commands](https://github.com/tomohikoAmada/BinanceMarketDataRecorder/blob/main/docs/milestone_acceptance/R3-b-G3-b-shared-api-20261019.md)
+and [scoped review](https://github.com/tomohikoAmada/BinanceMarketDataRecorder/blob/main/docs/reviews/2026-10-19-shared-api-budget-review.md)
 record both repositories and the saved per-scenario result.
 
 ## Deployment prerequisites, not live credit
@@ -65,4 +64,16 @@ No deployed R2 source/configuration or restart policy was changed.
   transport budget-wait stop and metadata finite return are included.
 - [x] Complete ASan27/27 and focused TSan4/4 (budget, real transport,
  20-product production integration, production regression) PASS.
-- [ ] UBSan and final PR/CI/merge closeout.
+- [x] Focused UBSan4/4 PASS. Final `1c93304` push/PR runs39250188012/39250228864
+  passed all seven ordinary jobs, including Linux production25/25. Manual
+  dependency preparation correctly skipped; no upstream cold rebuild was needed.
+- [x] [Gateway PR #39](https://github.com/tomohikoAmada/BinanceMarketDataGateway/pull/39)
+  merged as `8d171c1304d1f02d7f02365307dad94de4dc9f84` at20:18:53 Shanghai;
+  [Recorder PR #82](https://github.com/tomohikoAmada/BinanceMarketDataRecorder/pull/82)
+  merged as `d98821c20ea45e8821e7c6dac1b1b7be56d5d3eb` at20:18:48 Shanghai.
+  Both merge trees equal the tested technical heads; Recorder full CI2160/2156
+  (macOS/Ubuntu) passed, including contracts/golden/build/clean wheel.
+
+The certified offline pair is Recorder `45866af` / Gateway `1c93304` (their
+respective merge commits above); an older unlimited-role version is not this
+pair. G3-c/ordinary production observation and BMD-4 remain OPEN.

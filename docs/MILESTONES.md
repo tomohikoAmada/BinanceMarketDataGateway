@@ -120,7 +120,10 @@ shared-VPS/API/live/resource qualification remain OPEN; see [G3-a evidence](GATE
 - [x] Recorder companion policy and five two-process composition scenarios PASS;
   production binding/stop tests and existing20-product recovery cover separate layers.
 - [x] New scoped code review APPROVED; complete Release27/27, format/diff PASS.
-- [ ] Final sanitizer/PR/CI/merge delivery.
+- [x] Full ASan27/27, focusedTSan4/4 andUBSan4/4 PASS. All seven ordinary
+  push/PR CI jobs pass (39250188012/39250228864); Linux production25/25.
+  PR#39 merged as `8d171c1`, companion Recorder#82 as `d98821c`; both merge
+  trees match the tested heads. G3-b/R3-b offline COMPLETE / MERGED.
 
 [Evidence](GATEWAY_G3B_SHARED_API_EVIDENCE.md) states assumptions and validation.
 G3-c/ordinary live observation, actual metadata/current IP users, target VPS

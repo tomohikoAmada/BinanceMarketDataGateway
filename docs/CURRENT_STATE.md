@@ -12,9 +12,10 @@ M2_CONFIGURED_PRODUCTION=IMPLEMENTED_OFFLINE_VERIFIED
 V03_G0=COMPLETE_REVIEWED_MERGED
 V03_G1=COMPLETE_OFFLINE_VERIFIED_REVIEWED
 V03_G2=COMPLETE_OFFLINE_VERIFIED_REVIEWED_MERGED
-V03_G3=G3A_OFFLINE_VERIFIED_G3B_G3C_OPEN
+V03_G3=G3A_G3B_OFFLINE_COMPLETE_G3C_OPEN
 V04_G3A=COMPLETE_OFFLINE_VERIFIED_REVIEWED_CI_PASSED
-BMD_RL_01=OFFLINE_IMPLEMENTED_REVIEWED_FINAL_CHECKS_PENDING
+BMD_RL_01=OFFLINE_COMPLETE_LIVE_OBSERVATION_PENDING
+V04_G3B=COMPLETE_OFFLINE_VERIFIED_REVIEWED_CI_PASSED_MERGED
 M3_FOUR_PRODUCT_ACCEPTANCE_AND_PRODUCTION_CI=COMPLETE_OFFLINE_V03_G2_SCOPE
 M4_PERFORMANCE_STABILITY_LIVE_ACCEPTANCE_AND_DELIVERY=NOT_STARTED
 PERFORMANCE_AND_RESOURCE_BUDGETS=NOT_ESTABLISHED
@@ -90,7 +91,10 @@ owner CPU/Write 点位及精确多产品导出；普通构建语义不变。离�
 - [x] Recorder companion policy and five two-process composition scenarios PASS;
   production binding/stop tests and existing20-product recovery cover separate layers.
 - [x] New scoped code review APPROVED; complete Release27/27, format/diff PASS.
-- [ ] Final sanitizer/PR/CI/merge delivery.
+- [x] Full ASan27/27, focusedTSan4/4 andUBSan4/4 PASS. All seven ordinary
+  push/PR CI jobs pass (39250188012/39250228864); Linux production25/25.
+  PR#39 merged as `8d171c1`, companion Recorder#82 as `d98821c`; both merge
+  trees match the tested heads. G3-b/R3-b offline COMPLETE / MERGED.
 
 [Evidence](GATEWAY_G3B_SHARED_API_EVIDENCE.md) states assumptions and validation.
 G3-c/ordinary live observation, actual metadata/current IP users, target VPS
