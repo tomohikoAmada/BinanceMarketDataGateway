@@ -1,3 +1,4 @@
+#include "public_api_budget.hpp"
 #include "spot_transport.hpp"
 
 #include <boost/asio.hpp>
@@ -524,6 +525,51 @@ int main() {
     return EXIT_FAILURE;
   }
   runtime.stop();
+
+  // Real transport's budget timer must drain on stop without DNS/TCP/HTTP.
+  // All destinations are loopback even if this admission assertion regresses.
+  g4::detail::shared_public_api_budget().reject(false, 418U, "86400");
+  g3::MarketRuntime budget_runtime{{4U, 4U}, clock, numeric_spec()};
+  g4::detail::BinanceTransportConfig config;
+  config.rest_host = config.websocket_host = "127.0.0.1";
+  config.rest_port = config.websocket_port = "1";
+  config.depth_target = "/api/v3/depth?limit=5000";
+  config.websocket_target = "/ws/btcusdt@depth";
+  config.connection_id_prefix = "budget-test-";
+  config.snapshot_request_id = "budget-test-snapshot";
+  config.user_agent = "budget-offline-test";
+  config.depth_frame_parser = [](auto payload, auto at, auto id) {
+    return g4::parse_depth_frame(payload, at, id);
+  };
+  config.depth_snapshot_parser = [](auto payload, auto at, auto id) {
+    return g4::parse_depth_snapshot(payload, at, id);
+  };
+  g4::detail::BinanceTransport waiting{budget_runtime, clock, 1U,
+                                       std::move(config)};
+  const auto before_wait = std::chrono::steady_clock::now();
+  auto start = std::async(std::launch::async, [&] { return waiting.start(); });
+  if (start.wait_for(std::chrono::milliseconds{30}) !=
+      std::future_status::timeout) {
+    return EXIT_FAILURE;
+  }
+  waiting.stop();
+  if (start.get() != g4::TransportStartResult::Stopped ||
+      waiting.observe().terminal_error.has_value() ||
+      std::chrono::steady_clock::now() - before_wait >
+          std::chrono::seconds{1}) {
+    return EXIT_FAILURE;
+  }
+  const auto metadata = g4::detail::fetch_exchange_info_https(
+      {"127.0.0.1", "1", "/api/v3/exchangeInfo",
+       std::chrono::milliseconds{20}});
+  const auto *blocked = std::get_if<g4::NetworkError>(&metadata);
+  if (blocked == nullptr ||
+      blocked->code != g4::NetworkErrorCode::RuntimeAdmission ||
+      std::chrono::steady_clock::now() - before_wait >
+          std::chrono::seconds{1}) {
+    return EXIT_FAILURE;
+  }
+  std::cout << "BUDGET_WAIT_STOP_AND_METADATA_BOUND=PASS\n";
   std::cout << "EXCHANGE_INFO_ASYNC_TIMEOUT=PASS\n"
                "SPOT_SET_METADATA_FULL_EXCHANGE_INFO=PASS\n"
                "WEBSOCKET_IDLE_POLICY=PASS\n"

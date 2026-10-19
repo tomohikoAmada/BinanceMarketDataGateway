@@ -110,3 +110,18 @@ or qualify shared-VPS/Recorder production capacity.
 The bounded profile is one Book + one Depth Event per key (40 contexts). A 60-stream
 all-supported-events profile is outside the retained 48 cap. BMD-RL-01/G3-b and
 shared-VPS/API/live/resource qualification remain OPEN; see [G3-a evidence](GATEWAY_G3_OFFLINE_EVIDENCE.md).
+
+
+## 2026-10-19 G3-b shared-IP offline implementation
+
+- [x] Gateway fixed rolling shares3000 Spot/600 USD-M weight per minute and60
+  WS attempts per5min per market; actual request/connection admission and shared
+  429/418 gate, bounded metadata and clean cancellation implemented.
+- [x] Recorder companion policy and five two-process composition scenarios PASS;
+  production binding/stop tests and existing20-product recovery cover separate layers.
+- [x] New scoped code review APPROVED; complete Release27/27, format/diff PASS.
+- [ ] Final sanitizer/PR/CI/merge delivery.
+
+[Evidence](GATEWAY_G3B_SHARED_API_EVIDENCE.md) states assumptions and validation.
+G3-c/ordinary live observation, actual metadata/current IP users, target VPS
+resources and BMD-4 remain OPEN. No production/VPS/R2 operation occurred.

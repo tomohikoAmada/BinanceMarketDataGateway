@@ -1,5 +1,6 @@
 #include "spot_transport.hpp"
 
+#include "public_api_budget.hpp"
 #include "spot_protocol.hpp"
 
 #include <boost/asio.hpp>
@@ -164,6 +165,16 @@ public:
   }
 
   void start() {
+    if (detail::shared_public_api_budget().delay(
+            detail::is_usdm_host(endpoint_.host), false,
+            detail::public_rest_weight(endpoint_.host, endpoint_.target)) >
+        std::chrono::steady_clock::duration::zero()) {
+      finish(network_error(
+          NetworkErrorCode::RuntimeAdmission, "exchange-info-api-budget",
+          "metadata request exceeds the current IP share or cooldown"));
+      return;
+    }
+
     stream_.set_verify_callback(ssl::host_name_verification(endpoint_.host));
     if (const auto failure =
             configure_tls_stream(stream_.native_handle(), endpoint_.host)) {
@@ -228,6 +239,15 @@ private:
   }
 
   void write_request() {
+    const auto delay = detail::shared_public_api_budget().admit(
+        detail::is_usdm_host(endpoint_.host), false,
+        detail::public_rest_weight(endpoint_.host, endpoint_.target));
+    if (delay > std::chrono::steady_clock::duration::zero()) {
+      finish(network_error(
+          NetworkErrorCode::RuntimeAdmission, "exchange-info-api-budget",
+          "metadata request exceeds the current IP share or cooldown"));
+      return;
+    }
     arm_timeout("exchange-info-http-write");
     http::async_write(
         stream_, request_,
@@ -263,6 +283,9 @@ private:
           }
           auto response = self->parser_.release();
           if (response.result_int() != 200) {
+            detail::shared_public_api_budget().reject(
+                detail::is_usdm_host(self->endpoint_.host),
+                response.result_int(), retry_after_from(response).value_or(""));
             self->finish(network_error(
                 NetworkErrorCode::HttpStatus, "exchange-info-http-status",
                 "Binance exchangeInfo returned non-200", response.result_int(),
@@ -342,6 +365,7 @@ public:
   }
 
   void start() {
+
     stream_.set_verify_callback(ssl::host_name_verification(host_));
     if (const auto failure =
             configure_tls_stream(stream_.native_handle(), host_)) {
@@ -442,6 +466,28 @@ private:
   }
 
   void write_request() {
+    const auto delay = detail::shared_public_api_budget().admit(
+        detail::is_usdm_host(host_), false,
+        detail::public_rest_weight(host_, request_.target()));
+    if (delay > std::chrono::steady_clock::duration::zero()) {
+      timer_pending_ = true;
+      timer_.expires_after(delay);
+      timer_.async_wait([self = shared_from_this()](const ErrorCode &error) {
+        self->timer_pending_ = false;
+        if (self->done_) {
+          return;
+        }
+        if (self->cancel_requested_) {
+          self->complete_cancelled_piece();
+          return;
+        }
+        if (!error) {
+          self->write_request();
+        }
+      });
+      return;
+    }
+
     arm_timeout("depth-http-write");
     io_pending_ = true;
     http::async_write(
@@ -511,6 +557,9 @@ private:
     }
     auto response = parser_.release();
     if (response.result_int() != 200) {
+      detail::shared_public_api_budget().reject(
+          detail::is_usdm_host(host_), response.result_int(),
+          retry_after_from(response).value_or(""));
       return network_error(NetworkErrorCode::HttpStatus, "depth-http-status",
                            "Binance depth request returned non-200",
                            response.result_int(), retry_after_from(response));
@@ -652,6 +701,27 @@ public:
         user_agent_{std::move(user_agent)}, callbacks_{std::move(callbacks)} {}
 
   void start() {
+    const auto delay = detail::shared_public_api_budget().admit(
+        detail::is_usdm_host(host_), true, 1U);
+    if (delay > std::chrono::steady_clock::duration::zero()) {
+      timer_pending_ = true;
+      timer_.expires_after(delay);
+      timer_.async_wait([self = shared_from_this()](const ErrorCode &error) {
+        self->timer_pending_ = false;
+        if (self->done_) {
+          return;
+        }
+        if (self->cancel_requested_) {
+          self->complete_cancelled_piece();
+          return;
+        }
+        if (!error) {
+          self->start();
+        }
+      });
+      return;
+    }
+
     stream_.next_layer().set_verify_callback(
         ssl::host_name_verification(host_));
     if (const auto failure =
@@ -767,7 +837,7 @@ private:
     arm_timeout("websocket-handshake");
     io_pending_ = true;
     stream_.async_handshake(
-        host_, target_,
+        handshake_response_, host_, target_,
         [self = shared_from_this()](const ErrorCode &error_code) {
           self->io_pending_ = false;
           if (self->done_) {
@@ -780,6 +850,17 @@ private:
           }
           self->disarm_timeout();
           if (error_code) {
+            const auto status = self->handshake_response_.result_int();
+            if (status == 429U || status == 418U) {
+              const auto retry = retry_after_from(self->handshake_response_);
+              detail::shared_public_api_budget().reject(
+                  detail::is_usdm_host(self->host_), status,
+                  retry.value_or(""));
+              self->fail(network_error(
+                  NetworkErrorCode::HttpStatus, "websocket-handshake",
+                  "Binance WS rejected admission", status, retry));
+              return;
+            }
             self->fail(error_from_code(NetworkErrorCode::WebSocketHandshake,
                                        "websocket-handshake", error_code));
             return;
@@ -952,6 +1033,7 @@ private:
   websocket::stream<beast::ssl_stream<beast::tcp_stream>> stream_;
   asio::steady_timer timer_;
   beast::flat_buffer buffer_;
+  websocket::response_type handshake_response_;
   g3::RuntimeClock clock_;
   std::string host_;
   std::string port_;

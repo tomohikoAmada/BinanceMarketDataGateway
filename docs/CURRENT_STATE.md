@@ -14,7 +14,7 @@ V03_G1=COMPLETE_OFFLINE_VERIFIED_REVIEWED
 V03_G2=COMPLETE_OFFLINE_VERIFIED_REVIEWED_MERGED
 V03_G3=G3A_OFFLINE_VERIFIED_G3B_G3C_OPEN
 V04_G3A=COMPLETE_OFFLINE_VERIFIED_REVIEWED_CI_PASSED
-BMD_RL_01=OPEN
+BMD_RL_01=OFFLINE_IMPLEMENTED_REVIEWED_FINAL_CHECKS_PENDING
 M3_FOUR_PRODUCT_ACCEPTANCE_AND_PRODUCTION_CI=COMPLETE_OFFLINE_V03_G2_SCOPE
 M4_PERFORMANCE_STABILITY_LIVE_ACCEPTANCE_AND_DELIVERY=NOT_STARTED
 PERFORMANCE_AND_RESOURCE_BUDGETS=NOT_ESTABLISHED
@@ -80,3 +80,18 @@ owner CPU/Write 点位及精确多产品导出；普通构建语义不变。离�
 `docs/PROJECTION_P1_RESULT.md` 共同记录。该工作不授予 G3/VPS/API 联合预算资格。
 
 2026-10-19 用户追加授权的20keys离线P1已完成：18次异构成对实验交付127,920更新/255,840客户端消息，独立结果/原始证据审查APPROVED。未扩大48 contexts或产品级8 slots；P2仍CONDITIONAL，G3共享VPS/API预算未验收。技术提交`7266c47`的Linux production 24/24与全部七项普通CI通过（run `39145975891`）；该提交只对实测`8ce41be`补强测试与可移植命名空间查找，production/measurement代码不变。报告/原始包由Projection PR #55记录。
+
+
+## 2026-10-19 G3-b shared-IP offline implementation
+
+- [x] Gateway fixed rolling shares3000 Spot/600 USD-M weight per minute and60
+  WS attempts per5min per market; actual request/connection admission and shared
+  429/418 gate, bounded metadata and clean cancellation implemented.
+- [x] Recorder companion policy and five two-process composition scenarios PASS;
+  production binding/stop tests and existing20-product recovery cover separate layers.
+- [x] New scoped code review APPROVED; complete Release27/27, format/diff PASS.
+- [ ] Final sanitizer/PR/CI/merge delivery.
+
+[Evidence](GATEWAY_G3B_SHARED_API_EVIDENCE.md) states assumptions and validation.
+G3-c/ordinary live observation, actual metadata/current IP users, target VPS
+resources and BMD-4 remain OPEN. No production/VPS/R2 operation occurred.
