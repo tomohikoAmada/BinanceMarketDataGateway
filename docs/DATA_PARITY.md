@@ -36,12 +36,14 @@ Binance public streams/REST
 | USD-M forceOrder | recorded | not provided | **gap** |
 | exchangeInfo | raw REST recorded | internal startup use, not published | research-only |
 | depth snapshot | raw REST recorded | internal bootstrap use, not published | research-only |
-| OI / long-short ratios / taker volume | recorded | not provided | **gap / decision** |
+| OI / long-short ratios / taker volume | recorded | not provided | research-only for v1 |
 | raw payload bytes | preserved | normalized protobuf only | research-only |
 | gap/capture flags | `capture_flags`, `sequence_gap`, chunk incomplete | Projection state, ConsumerGap, new generation | semantic mapping needed |
 
 Current BMDG is therefore **not yet a live superset of BMDR**. Spot is
-aligned; USD-M is depth-only; REST side data is absent.
+aligned; USD-M is depth-only; REST side data is absent. Until the phases below
+close, fields BMDG does not publish are **research-only** and must not drive a
+live strategy signal.
 
 ## Contract parity
 
@@ -101,9 +103,9 @@ Define **BMDG Live Contract v1** as the only live source for strategies:
    - `source_book_update_id`, `source_trade_id`;
    - `book_synchronized`, quality, gap, `data_freshness_ms`.
 4. `GetGatewayStatus`: add gap/quality/freshness details needed by monitoring.
-5. REST reference data (OI, long/short, taker): either add a bounded polling
-   publication path or explicitly mark research-only. Do not leave the
-   decision implicit.
+5. REST reference data (OI, long/short, taker): **research-only for Live
+   Contract v1**. Do not add it to a live strategy until BMDG publishes a
+   bounded polling path with explicit freshness and staleness semantics.
 
 Projection Core should stay pure. Put mid/spread/microprice and
 `MarketStateSnapshot` composition in a dedicated builder above Core (Adapter or
@@ -126,9 +128,11 @@ funding and OI require exchange data, not book derivation.
   depth/bookTicker/aggTrade/markPrice/forceOrder.
 - **Phase 2**: `MarketStateSnapshot` / `SubscribeMarketState` for
   Projection-computable fields; exact mid/spread/microprice policy.
-- **Phase 3**: REST reference data decision and, if needed, bounded polling
-  publication.
+- **Phase 3**: promote REST reference data only if live strategies require
+  it; add bounded polling publication with freshness/staleness semantics.
 - **Phase 4**: Full BMDR ↔ BMDG replay/live parity campaign on the target VPS.
 
 Until these phases close, research must not use a BMDR-only live-required
-field for production signals. Mark such fields explicitly as research-only.
+field for production signals. In particular, USD-M bookTicker/aggTrade/
+markPrice/forceOrder and all REST side data are research-only until BMDG
+publishes them.

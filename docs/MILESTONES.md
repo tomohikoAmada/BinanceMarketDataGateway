@@ -63,7 +63,8 @@ archived; the v0.3/v0.4 G0-G3 labels do not reopen that history.
   hotspot. P2 (partial transactional update) is conditional on the target
   budget; until then depth limit and product count are the main mitigations.
 - BMDG/BMDR data parity: Spot streams are aligned; USD-M
-  bookTicker/aggTrade/markPrice/forceOrder and REST side data are still gaps.
+  bookTicker/aggTrade/markPrice/forceOrder are Phase 1 gaps. REST side data
+  (OI, long/short, taker) is explicitly research-only for Live Contract v1.
   See [DATA_PARITY](DATA_PARITY.md). Do not use a BMDR-only live-required field
   for production signals until BMDG provides it or it is marked research-only.
 - Consider BMDG hot-path cleanups only with before/after measurements; do

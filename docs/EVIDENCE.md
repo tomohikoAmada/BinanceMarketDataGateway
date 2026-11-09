@@ -26,8 +26,9 @@ This is the current evidence index. Full historical records are in
 - Old `BMD_GATEWAY_*` CMake options configure successfully as deprecated
   aliases.
 - Data parity: Spot depth/bookTicker/aggTrade aligned; USD-M
-  bookTicker/aggTrade/markPrice/forceOrder and REST side data are not yet
-  live-provided. See [DATA_PARITY](DATA_PARITY.md).
+  bookTicker/aggTrade/markPrice/forceOrder are Phase 1 gaps; REST side data is
+  explicitly research-only for Live Contract v1. See
+  [DATA_PARITY](DATA_PARITY.md).
 
 ## G3-a — 20-key offline lifecycle
 
