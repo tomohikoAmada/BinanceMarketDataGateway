@@ -1,5 +1,5 @@
-#include "daemon_config.hpp"
-#include "grpc_service.hpp"
+#include "production/daemon_config.hpp"
+#include "grpc/grpc_service.hpp"
 
 #include <binance_market_data/gateway/v1/config.hpp>
 #include <nlohmann/json.hpp>
@@ -161,7 +161,7 @@ DaemonConfigResult load_daemon_config(std::string_view config_path) {
     return DaemonConfigError{"invalid grpc_listen [" + error->field +
                              "]: " + error->message};
   }
-  if (!g7::valid_loopback_listen_address(listen)) {
+  if (!rpc::valid_loopback_listen_address(listen)) {
     return error(
         "grpc_listen must use a numeric loopback address and a port in "
         "1..65535");
@@ -176,22 +176,22 @@ DaemonConfigResult load_daemon_config(std::string_view config_path) {
     return *failure;
   }
 
-  std::vector<g11::MarketKey> keys;
+  std::vector<runtime::MarketKey> keys;
   keys.reserve(std::get<std::vector<std::string>>(spot).size() +
                std::get<std::vector<std::string>>(usdm).size());
   for (auto &symbol : std::get<std::vector<std::string>>(spot)) {
-    keys.push_back({g11::common_wire::VENUE_BINANCE,
-                    g11::common_wire::MARKET_SPOT, std::move(symbol)});
+    keys.push_back({runtime::common_wire::VENUE_BINANCE,
+                    runtime::common_wire::MARKET_SPOT, std::move(symbol)});
   }
   for (auto &symbol : std::get<std::vector<std::string>>(usdm)) {
-    keys.push_back({g11::common_wire::VENUE_BINANCE,
-                    g11::common_wire::MARKET_USD_M_PERPETUAL,
+    keys.push_back({runtime::common_wire::VENUE_BINANCE,
+                    runtime::common_wire::MARKET_USD_M_PERPETUAL,
                     std::move(symbol)});
   }
-  if (keys.empty() || keys.size() > g11::kMaximumConfiguredProducts) {
+  if (keys.empty() || keys.size() > runtime::kMaximumConfiguredProducts) {
     return error("configured products require between one and twenty symbols");
   }
-  std::sort(keys.begin(), keys.end(), g11::MarketKeyLess{});
+  std::sort(keys.begin(), keys.end(), runtime::MarketKeyLess{});
   if (std::adjacent_find(keys.begin(), keys.end()) != keys.end()) {
     return error("configured products contain a duplicate exact MarketKey");
   }

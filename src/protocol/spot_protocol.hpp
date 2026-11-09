@@ -1,0 +1,101 @@
+#pragma once
+
+#include "runtime/clock.hpp"
+
+#include <binance_market_data/market/v1/market_events.pb.h>
+#include <binance_market_data/projection/v1/numeric/numeric_spec.hpp>
+
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <variant>
+
+namespace binance_market_data::gateway::protocol {
+
+namespace core = projection::v1;
+namespace market = ::binance_market_data::market::v1;
+
+enum class ProtocolErrorCode : std::uint8_t {
+  InvalidJson,
+  InvalidShape,
+  InvalidField,
+  WrongEvent,
+  WrongSymbol,
+  InvalidQuantum,
+  InvalidMarketMetadata,
+};
+
+struct ProtocolError final {
+  ProtocolErrorCode code;
+  std::string field;
+  std::string message;
+
+  friend bool operator==(const ProtocolError &,
+                         const ProtocolError &) = default;
+};
+
+struct SpotMetadata final {
+  std::string tick_size;
+  std::string step_size;
+  core::NumericSpec numeric_spec;
+};
+
+struct ServerShutdown final {
+  std::uint64_t exchange_event_time_ms;
+};
+
+using DecimalScaleResult = std::variant<core::DecimalScale, ProtocolError>;
+using SpotMetadataResult = std::variant<SpotMetadata, ProtocolError>;
+using DepthFrameResult =
+    std::variant<market::DepthUpdate, ServerShutdown, ProtocolError>;
+using NormalizedMarketEvent =
+    std::variant<market::DepthUpdate, market::AggTrade, market::BookTicker>;
+using NormalizedSpotEvent = NormalizedMarketEvent;
+using CombinedFrameResult =
+    std::variant<NormalizedMarketEvent, ServerShutdown, ProtocolError>;
+using DepthSnapshotResult =
+    std::variant<market::ExchangeDepthSnapshot, ProtocolError>;
+
+[[nodiscard]] DecimalScaleResult
+decimal_scale_from_quantum(std::string_view quantum);
+
+[[nodiscard]] SpotMetadataResult parse_exchange_info(std::string_view payload);
+
+// Exact-symbol parser used by the reusable single-product path. The
+// three-argument overloads below remain the historical BTCUSDT seam.
+[[nodiscard]] SpotMetadataResult
+parse_exchange_info(std::string_view payload,
+                    std::string_view requested_symbol);
+
+[[nodiscard]] DepthFrameResult
+parse_depth_frame(std::string_view payload, runtime::ClockSample received_at,
+                  std::string_view connection_id);
+
+[[nodiscard]] DepthFrameResult
+parse_depth_frame(std::string_view payload, runtime::ClockSample received_at,
+                  std::string_view connection_id,
+                  std::string_view requested_symbol);
+
+[[nodiscard]] CombinedFrameResult
+parse_combined_event_frame(std::string_view payload,
+                           runtime::ClockSample received_at,
+                           std::string_view connection_id);
+
+[[nodiscard]] CombinedFrameResult parse_combined_event_frame(
+    std::string_view payload, runtime::ClockSample received_at,
+    std::string_view connection_id, std::string_view requested_symbol);
+
+[[nodiscard]] DepthSnapshotResult
+parse_depth_snapshot(std::string_view payload, runtime::ClockSample received_at,
+                     std::string_view request_id);
+
+[[nodiscard]] DepthSnapshotResult
+parse_depth_snapshot(std::string_view payload, runtime::ClockSample received_at,
+                     std::string_view request_id,
+                     std::string_view requested_symbol);
+
+[[nodiscard]] std::optional<std::string>
+spot_stream_symbol(std::string_view canonical_symbol);
+
+} // namespace binance_market_data::gateway::protocol

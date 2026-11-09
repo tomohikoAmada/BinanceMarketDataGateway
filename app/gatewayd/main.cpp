@@ -1,18 +1,15 @@
-#include "daemon_config.hpp"
-#include "daemon_runtime.hpp"
-#include "production_metadata.hpp"
-#include "termination_signals.hpp"
+#include "production/daemon_config.hpp"
+#include "production/daemon_runtime.hpp"
+#include "production/production_metadata.hpp"
+#include "production/termination_signals.hpp"
 
 #include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <variant>
-
-namespace {
-
 namespace production = binance_market_data::gateway::production;
 
-} // namespace
+namespace {} // namespace
 
 int main(int argc, char **argv) {
   const auto parsed = production::parse_daemon_config(argc, argv);

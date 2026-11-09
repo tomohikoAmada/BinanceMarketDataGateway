@@ -1,29 +1,51 @@
 # Gateway architecture
 
-当前开发计划：[docs/MILESTONES.md](docs/MILESTONES.md)，依据 BinanceMarketData v0.4 总计划及 Gateway 模块计划，保留v0.3已完成事实。G0 reset 观察补修、G1 时间语义/Depth 新鲜度及独立复核已完成；2026-10-18 G2 四产品离线集成及最小生产 CI 已复核合并。2026-10-19 G3-a已验证20产品、48 contexts、精确路由、统一启动deadline/回滚及局部/全产品重复恢复，见[离线证据](docs/GATEWAY_G3_OFFLINE_EVIDENCE.md)。当前实现复用 G12-B 的 owner set 和 registry；历史固定双 BTC 是其中一个配置场景。G3-b联合API预算和G3-c共享VPS/真实网络及资源预算仍未验收。
-
-## 职责与依赖
+## Responsibilities and dependencies
 
 ```text
 Binance public REST / WebSocket
-                |
-                v
-       BinanceMarketDataGateway
-          +--> Contracts Protobuf / opt-in gRPC artifacts
-          +--> Projection ProtoAdapter --> Core
+              |
+              v
+     BinanceMarketDataGateway
+        +--> Contracts Protobuf / opt-in gRPC artifacts
+        +--> Projection ProtoAdapter --> Core
 ```
 
-Contracts 管理消息、服务与 wire 兼容性；Projection 管理定点数、订单簿、Spot/USD-M 序列判断、bootstrap/reset 和快照；Gateway 管理网络、metadata、时间戳、连接恢复/轮换、owner 调度、有限发布队列、订阅与 gRPC。Gateway 不依赖 Recorder，不复制 proto，不添加订单簿或序列分类器。
+- **Contracts** owns messages, services and wire compatibility.
+- **Projection** owns fixed-point numbers, order book and Spot/USD-M sequence
+  semantics (including `pu`).
+- **Gateway** owns transport, metadata, lifecycle, bounded publication and gRPC.
+- Gateway does not depend on Recorder, copy proto files, or add a second
+  sequence classifier.
 
-## 生产组合
+## Domain layout
+
+```text
+src/foundation/     public config/lifecycle seam, no network or threads
+src/protocol/       Spot/USD-M JSON parsers and normalized metadata
+src/transport/      Binance REST/WebSocket transport, routes, API budget
+src/runtime/        MarketRuntime, MarketKey, clock, source provenance
+src/recovery/       RecoveryCoordinator and planned rotation policy
+src/publication/    order-book/event subscriber channels
+src/grpc/           gRPC service/server (namespace `rpc`)
+src/status/         GetGatewayStatus assembler
+src/composition/    ProductRuntime, configured set and immutable registry
+src/production/     daemon config, metadata, startup/shutdown, signals
+src/performance/    opt-in trace/delivery instrumentation
+```
+
+The old `G0`-`G11` labels are historical milestone names, not modules. See
+[CODE_MAP](docs/CODE_MAP.md).
+
+## Production composition
 
 ```text
 bmd-gatewayd --config PATH
-  -> validate JSON (grpc_listen, spot_symbols, usdm_symbols)
+  -> strict JSON config (grpc_listen, spot_symbols, usdm_symbols)
   -> fetch exchangeInfo once per configured market
   -> resolve NumericSpec for every exact MarketKey
   -> ProductionGateway
-       +-- ConfiguredProductRuntimeSet (1..20 stable owned ProductRuntime)
+       +-- ConfiguredProductRuntimeSet (1..20 stable owned products)
        |     +-- immutable MarketKey
        |     +-- MarketRuntime / private BookProjection / one owner thread
        |     +-- product-local order-book and event publication
@@ -32,61 +54,139 @@ bmd-gatewayd --config PATH
        +-- one shared synchronous gRPC server
 ```
 
-`MarketKey = (venue, market, exact symbol)`。同一 symbol 的 Spot 与 USD-M 是两个产品。配置不自动修改大小写；小写 stream route 只是网络编码。当前 Binance route 支持大写 ASCII 字母/数字，exchangeInfo 负责存在性、市场资格与精度验证。
+`MarketKey = (venue, market, exact symbol)`. The same symbol in Spot and USD-M
+is two products. Configuration does not case-fold; the lowercase stream route is
+only transport encoding. Binance routes currently accept uppercase ASCII
+letters/digits; exchangeInfo validates existence, trading status and precision.
 
-配置严格拒绝未知字段、重复 JSON 字段、同市场重复 symbol、空总集合、超过二十个产品和无效 endpoint。任何一个 symbol 的缺失、非交易状态、市场资格或不支持的数值规格都会使启动失败。配置验证不做网络 I/O；metadata 获取独立进行，并受网络阶段超时约束。变更配置需要重启，没有运行时 registry 增删。
+Configuration strictly rejects unknown fields, duplicate JSON keys, duplicate
+MarketKeys, empty sets, more than twenty products and invalid endpoints. Any
+missing/ineligible symbol or unsupported numeric spec fails startup. Validation
+does no network I/O; metadata acquisition is a separate bounded phase. There is
+no hot reload or runtime add/remove.
 
-无认证 gRPC 只接受数值 IPv4 127/8 或 IPv6 ::1；hostname、wildcard 和非 loopback 均拒绝。配置与直接构造检查非零端口；绑定边界重复校验，内部离线测试可用 loopback port 0。复用已有 Boost 地址解析，不做 DNS，不给 Foundation 加网络依赖。
+Insecure gRPC accepts numeric IPv4 `127/8` or IPv6 `::1` only. Hostnames,
+wildcards and non-loopback endpoints are rejected before products start or the
+server binds. Offline tests may use loopback port 0; the production CLI rejects
+port 0.
 
-交易所 JSON 只检查所需字段及已知语义，允许无关扩展对象/数组。Spot depth 的 pu 仍拒绝；USD-M pu 的类型/presence 保持已有 Adapter/Core 边界，Gateway 不增设序列分类器。自身配置的未知字段拒绝与上游协议扩展兼容是不同边界。
+Exchange JSON accepts unrelated extension fields but validates required fields,
+types, exact identity and numeric semantics. Spot depth rejects `pu`; USD-M
+`pu` remains a Projection/Adapter boundary. Gateway does not add a second
+sequence classifier.
 
-二十个产品是资源政策，可在新容量证据后调整，不是币安限制。当前使用小集合线性查询和 stable unique_ptr owner；没有通用注册框架或共享多 symbol WebSocket。
+Twenty products is a resource policy, not a Binance limit or measured capacity.
+The implementation uses small linear lookups and stable `unique_ptr` owners; it
+does not add a generic registry framework or a shared multiplexed transport.
 
-## 并发与生命周期
+## Concurrency and lifecycle
 
-- MarketRuntime 接收完整事件；有界 ingress 与 bootstrap buffer 分离；Projection 的读写、reset、publication 注册都在同一个 owner 上串行执行。对外只交付 owning/copy 数据。
-- owner 线程成功创建后才发布 started 状态。生产 start 遇到返回失败或异常都回滚所有已启动产品。
-- 所有配置产品共享一个首次就绪绝对截止时间；全体 Live/Synchronized 后绑定 gRPC。一个产品未就绪不能放行整体服务。
-- 启动 readiness 对 owner FIFO barrier 做非阻塞观察，未完成就继续已有有界轮询。普通观察最多等待一秒；显式 deadline/stop token 观察返回 optional owning copy，无 mailbox 请求或返回后残留的调用者指针。超时不会伪报 Live。
-- metadata 网络阶段与产品首次同步阶段分别有界，首次同步截止时间不因新增产品或观察到迟到的 Live 而重置。
-- 运行后的产品故障隔离。每产品恢复先 quiesce 旧 transport，再在 owner 上 reset/rebootstrap；同时最多一个 active transport。
-- 计划轮换沿用 23h50m monotonic 策略和 break-before-make；不拼接两条连接的数据。
-- 订单簿 session 在需要完整 Projection rebootstrap 前结束；Event session 在实际 source generation 替换时结束，均不跨 generation 拼接。
-- SIGINT/SIGTERM 使用 async-safe signal 模型。停止先关闭 admission、结束并取消/drain server handlers，再停止 transport/owner 和销毁产品；不得在 owner 已不存在时等待其确认。
+- `MarketRuntime` receives complete events. Bounded ingress and bootstrap
+  buffers are separate. Projection read/write, reset and publication
+  registration all run on the same owner thread. Only owning/copy data crosses
+  the boundary.
+- The owner thread is published as started only after successful creation.
+  Production start rolls back every started product on a returned failure or
+  exception.
+- All configured products share one absolute first-readiness deadline. gRPC
+  binds only after every product is Live/Synchronized.
+- Startup readiness observes the owner FIFO barrier without blocking. Normal
+  observations wait at most one second; explicit deadline/stop-token
+  observations return an owning copy or no result, never stale Live.
+- Metadata and first synchronization have separate bounds. The first-sync
+  deadline is absolute and is not reset by adding products or by a late Live.
+- After startup, product failure is isolated. Recovery quiesces the old
+  transport before reset/rebootstrap; at most one active transport exists per
+  product.
+- Planned rotation uses a 23h50m monotonic policy and break-before-make. Data is
+  never stitched across source generations.
+- An order-book session ends before a full Projection rebootstrap is needed.
+  An event session ends when the actual source generation is replaced.
+- SIGINT/SIGTERM uses an async-safe signal model. Shutdown closes admission,
+  drains/cancels server handlers, then stops transports/owners and destroys
+  products. Owners are joined, not detached.
 
-## 发布与服务边界
+## Publication and gRPC
 
-`SubscribeOrderBook` 只发布 Projection 已 Applied 的数据。`SubscribeEvents` 需要恰好一个 V1 selector；Spot 支持 DIFF_DEPTH / AGG_TRADE / BOOK_TICKER，USD-M 仅 DIFF_DEPTH。深度事件为 PRE_PROJECTION_NORMALIZED，不代表已应用到订单簿。
+`SubscribeOrderBook` publishes Projection-Applied data. `SubscribeEvents`
+requires exactly one V1 selector; Spot supports DIFF_DEPTH / AGG_TRADE /
+BOOK_TICKER, USD-M only DIFF_DEPTH. Depth events are
+`PRE_PROJECTION_NORMALIZED`.
 
-每产品 order-book resident 与 Event active 各上限 8；各普通队列 64，另有一个 terminal slot。慢消费者按 session 终止。进程级 TryCancel tracker 总上限 48，与产品数无关；注册/取消握手保护 ServerContext 生命周期。昂贵 unary status 并发上限为一，不占 streaming tracker。status 采用已有 runtime/recovery/publication 观察，没有第二健康框架。
+Per product: at most 8 resident order-book subscriptions and 8 active event
+subscriptions; each ordinary queue is 64 with one terminal slot. Slow consumers
+are terminalized per session. The process-wide TryCancel tracker is capped at
+48 regardless of product count. Expensive unary status is limited to one
+in-flight request and does not consume a streaming slot. There is no second
+health framework.
 
-G3-a离线订阅画像为20产品各一条Book和一条Depth Event，共40 contexts；48满额后新增流
-返回RESOURCE_EXHAUSTED，取消后可复用。全部Spot三类Event加Book及USD-M Depth加Book共60，
-超出现行48容量；本轮未要求或提高该cap。
+`GetGatewayStatus` uses a `min(1 s, client deadline)` observation budget shared
+across products; timeout returns `DEADLINE_EXCEEDED`. An infinite RPC deadline
+is clamped in system-clock units before conversion. The service drains before
+products are destroyed; an in-flight owner operation must return before join.
 
-`GetGatewayStatus` 使用 min(一秒, client deadline) 的整次请求观察预算，多个产品共享同一 deadline；超时返回 DEADLINE_EXCEEDED，关闭服务取消观察。无限 RPC deadline 先在 system_clock 单位内截短再转换，避免 macOS 的时间单位转换溢出。服务 drain 后才销毁产品；正在执行的 owner 操作返回后仍须 join，不强行 detach。
+`SubscribeMarketState` remains unimplemented. The service is insecure gRPC on
+numeric loopback only. TLS/auth is a separate delivery item if remote clients
+become a real requirement.
 
-`SubscribeMarketState` 尚未实现。服务直接使用 insecure gRPC，仅绑定数值 loopback。公开网络认证/TLS 如果成为实际部署需求，再增加专门交付项。
+`markets[].last_event_utc_ns` is the receive UTC of the last Projection-Applied
+Depth in the current valid generation. It is absent when the runtime is not
+Live/Synchronized, recovery is not Live, there is no single active transport,
+the generation does not match, or the receive time is absent. Zero remains a
+present timestamp. This is time evidence, not a freshness SLA; quiet markets do
+not automatically Gap/resync.
 
-v0.3 G1 复用 Status 的 `markets[].last_event_utc_ns` 表示当前有效 generation 最后
-Projection-Applied Depth 的 receive UTC；只有 runtime Live/Synchronized、recovery Live、
-单 active transport 且来源匹配才有值，其余 absent/unknown，零仍有 presence。
-这是从历史 G10“任意 normalized WebSocket 事件且跨恢复保留”含义的明确收窄；
-transport 全流时间仍在内部 recovery observation 保留，消费者须更新解释。没有 Wire 变更。
-owner 只在 Applied 提交可选 UTC/monotonic/provenance；重复/缓冲/Gap 不刷新，reset 清除。
-时间证据不等于 freshness SLA；客户端墙钟年龄须检查回退，安静市场不自动 Gap/重同步。
-USD-M 深度 E→event-time、T→transaction-time，trade-time absent，T=0/缺失各自保持。
+USD-M depth `E` is event time, `T` is transaction time, trade time stays absent;
+`T=0` and missing `T` keep their presence semantics.
 
-## 构建与历史
+## Build and history
 
-Foundation 是独立、无网络无线程的历史最小配置/生命周期 seam；生产目标由 `BMD_GATEWAY_BUILD_PRODUCTION_DAEMON=ON` 启用。Contracts message-only 依赖与单独 gRPC artifact 的选择继续显式保留；G1 冻结 upstream smoke 不随 main 漂移而重新固定。
+Foundation is independently buildable with no network/threads. The production
+graph is opt-in:
 
-依赖不使用 floating FetchContent。Gateway 的 offline runtime 测试和 sanitizer 图已经可以本机构建；GitHub G2 已补 production Release/offline job：固定 Conan lock/profile，普通 PR 从二进制缓存构建 `bmd-gatewayd` 并测试；首次缓存准备单独手动执行，最终实跑状态见 [G2 证据](docs/GATEWAY_G2_V03_EVIDENCE.md)。
+```sh
+-DBMD_GATEWAY_BUILD_PRODUCTION_DAEMON=ON
+```
 
-旧 fixed-two 的 recovery 和 performance 记录保留为历史事实。当前配置生产代码的完成，不等同于四产品真实验收或容量证明。性能改动必须由实际瓶颈和同条件前后测量支持，不引入 speculative lock-free、busy polling、affinity、自定义 allocator 或 worker framework。
+Domain tests require the pinned Contracts/Projection/Boost/OpenSSL/Conan graph.
+Historical live/acceptance executables are opt-in with
+`-DBMD_GATEWAY_BUILD_ACCEPTANCE_TOOLS=ON` and are not linked into
+`bmd-gatewayd`. The frozen upstream link smoke remains explicit
+(`-DBMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE=ON`).
 
-## 性能与质量目标
+Dependencies do not use floating FetchContent. Historical G0-G11 evidence and
+the old review/proof documents are in `docs/archive/` and
+`scripts/archive/`; they describe the old layout and must not be used as current
+build instructions.
 
-高性能、安全稳定、低延迟、低 CPU/内存消耗是交付要求。M3 准备可重复负载与正确性/稳定性回归，M4 定义硬件、负载和数值预算，完成完整链路性能验收。复用已有 instrumentation / Projection benchmark，不新增通用测量框架；阶段延迟、吞吐、分配、CPU/RSS 与队列指标共同评估。
+## Performance and quality
 
-Projection 当前为强异常保证在每个 accepted depth batch 中复制全簿并重建 candidate。这是性能候选路径；若实测影响预算，配套做局部事务更新优化并保留状态/序列/异常安全。多产品通过现有独立 Projection 实例组合，无需新增多 symbol API。详细证据见 [配套评估](docs/PROJECTION_INTEGRATION_REVIEW_2026-10-04.md)。
+High performance, low latency, low CPU/RSS and stable behavior are delivery
+requirements, but no approved multi-product budget exists yet.
+
+P1 evidence (offline, Apple M3, includes fixture/clients) for 20 keys:
+
+| Scenario | CPU cores (mean) | RSS | Notes |
+| --- | ---: | ---: | --- |
+| normal (~82 updates/s) | 0.115 | ~27 MiB | shallow books, low rate |
+| deep (~820 updates/s) | 1.192 | ~41 MiB | deep books, high rate |
+| batch (~820 updates/s) | 1.242 | ~53 MiB | triple batch |
+
+Checked apply is 95%+ of owner update wall time. At D1000 it is about 592 µs
+and 2023 allocations/update; at D5000 about 1018 µs and 10029 allocations/update.
+The dominant hotspot is the pinned Projection `apply_transaction` full-book
+copy/rebuild. P2 remains conditional on a measured shared-host budget.
+
+Gateway-side candidates (measure before/after, do not assume):
+
+- avoid per-frame `observe()`/legacy counters/`notify_all`;
+- notify only on state change and avoid per-update subscriber sweeps;
+- skip event publication/allocation when there are no event subscribers;
+- move depth updates into bootstrap/publication instead of deep-copying;
+- replace large-object `std::deque` ingress/bootstrap with fixed rings;
+- share one SSL context across transports (CA store + session resumption);
+- consider a shared Asio reactor if thread/RSS measurements justify it.
+
+Do not add lock-free queues, custom allocators, CPU affinity, busy polling, a
+generic event bus/DI/plugin framework, a shared multiplexed transport or a
+second sequence classifier without measured evidence.

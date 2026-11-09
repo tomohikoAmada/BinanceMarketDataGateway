@@ -1,0 +1,9 @@
+---
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++20
+ColumnLimit: 80
+IndentWidth: 2
+PointerAlignment: Right
+ReferenceAlignment: Pointer
+DerivePointerAlignment: false
