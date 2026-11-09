@@ -3,7 +3,7 @@
 #include "publication/order_book_publication.hpp"
 #include "runtime/clock.hpp"
 #include "runtime/source_provenance.hpp"
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
 #include "performance/performance_baseline.hpp"
 #endif
 
@@ -41,7 +41,7 @@ struct RuntimeLimits final {
   std::size_t ingress_capacity;
   std::size_t bootstrap_capacity;
   publication::PublicationLimits publication;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   std::shared_ptr<performance::ProductTraceBuffer> performance_baseline;
 #endif
 };
@@ -251,7 +251,7 @@ public:
   [[nodiscard]] AdmissionResult submit_depth_update(market::DepthUpdate update);
   [[nodiscard]] AdmissionResult
   submit_depth_update(market::DepthUpdate update, SourceProvenance provenance);
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   [[nodiscard]] AdmissionResult
   submit_depth_update(market::DepthUpdate update, SourceProvenance provenance,
                       performance::TraceToken trace);

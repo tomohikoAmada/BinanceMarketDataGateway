@@ -194,9 +194,9 @@ int run(int argc, char **argv) {
   auto config = [&] {
     if (mixed) {
       profile = profile_fixture::load(argv[2], argv[3]);
-      return profile->configure(BMD_GATEWAY_TWENTY_PRODUCT_CONFIG);
+      return profile->configure(BMDG_TWENTY_PRODUCT_CONFIG);
     }
-    return fixture::configure_file(BMD_GATEWAY_FOUR_PRODUCT_CONFIG);
+    return fixture::configure_file(BMDG_FOUR_PRODUCT_CONFIG);
   }();
   const auto keys = config.config.market_keys;
   std::vector<profile_fixture::Workload> workloads;
@@ -269,7 +269,7 @@ int run(int argc, char **argv) {
     if (i >= warmup) {
       starts[p][i - warmup] = t0;
     }
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     // External-I/O fixture is the single trace producer, as the transport is in
     // production.
     auto &buffer = const_cast<
@@ -282,14 +282,14 @@ int run(int argc, char **argv) {
     fixture::check(
         product->event_publication().publish(
             std::make_shared<const protocol::NormalizedMarketEvent>(update), 1U
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
             ,
             trace
 #endif
             ) == publication::EventPublishResult::Published);
     fixture::check(product->runtime().submit_depth_update(
                        std::move(update), {1U}
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                        ,
                        trace
 #endif
@@ -351,7 +351,7 @@ int run(int argc, char **argv) {
 #else
   result["peak_rss_process_bytes"] = after.ru_maxrss * 1024L;
 #endif
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   result["instrumented"] = true;
 #else
   result["instrumented"] = false;
@@ -398,7 +398,7 @@ int run(int argc, char **argv) {
     fixture::check(product.runtime.owner_joined &&
                    product.recovery.active_transport_count == 0U);
   }
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   std::ofstream traces{output_path + ".traces.jsonl"};
   fixture::check(gateway.write_performance_baseline(traces));
   for (std::size_t p = 0; p < keys.size(); ++p) {

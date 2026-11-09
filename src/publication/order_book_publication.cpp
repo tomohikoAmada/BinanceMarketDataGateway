@@ -20,7 +20,7 @@ PublicationPayloadKind PublicationRecord::kind() const noexcept {
 SubscriberChannel::SubscriberChannel(
     std::string subscription_id, std::string gateway_instance_id,
     std::size_t ordinary_capacity
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     ,
     std::uint64_t subscriber_ordinal,
     performance::ProductTraceBuffer *performance_baseline
@@ -29,7 +29,7 @@ SubscriberChannel::SubscriberChannel(
     : subscription_id_{std::move(subscription_id)},
       gateway_instance_id_{std::move(gateway_instance_id)},
       ordinary_capacity_{ordinary_capacity}, ordinary_ring_(ordinary_capacity)
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       subscriber_ordinal_{subscriber_ordinal},
       performance_baseline_{performance_baseline},
@@ -72,7 +72,7 @@ OrdinaryAdmissionResult SubscriberChannel::admit_update(
     const std::shared_ptr<const market_wire::DepthUpdate> &update,
     std::optional<std::uint64_t> connection_generation,
     PublicationTime published_at
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     ,
     performance::TraceToken trace
 #endif
@@ -82,7 +82,7 @@ OrdinaryAdmissionResult SubscriberChannel::admit_update(
     return OrdinaryAdmissionResult::Inactive;
   }
   if (size_ == ordinary_capacity_) {
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     if (performance_baseline_ != nullptr) {
       performance_baseline_->record_delivery_full(
           performance::DeliveryKind::OrderBook);
@@ -108,7 +108,7 @@ OrdinaryAdmissionResult SubscriberChannel::admit_update(
     if (!ring_push_locked(std::move(record))) {
       return OrdinaryAdmissionResult::AllocationFailure;
     }
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     if (performance_baseline_ != nullptr &&
         trace.owner == performance_baseline_) {
       const auto tail = (head_ + size_ - 1U) % ordinary_capacity_;
@@ -152,7 +152,7 @@ PeekedPublication SubscriberChannel::peek() const {
   }
   if (size_ != 0U) {
     return {ordinary_ring_[head_], std::nullopt
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
             ,
             delivery_ring_[head_]
 #endif
@@ -161,7 +161,7 @@ PeekedPublication SubscriberChannel::peek() const {
   if (terminal_.has_value()) {
     return {nullptr,
             terminal_
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
             ,
             {}
 #endif
@@ -264,7 +264,7 @@ bool SubscriberChannel::ring_push_locked(
 
 void SubscriberChannel::ring_pop_locked() noexcept {
   ordinary_ring_[head_].reset();
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   delivery_ring_[head_] = {};
 #endif
   head_ = (head_ + 1U) % ordinary_capacity_;

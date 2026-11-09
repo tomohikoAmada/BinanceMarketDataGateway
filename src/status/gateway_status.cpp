@@ -62,7 +62,7 @@ GatewayStatusAssembler::GatewayStatusAssembler(
   }
 }
 
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
 GatewayStatusAssembler::GatewayStatusAssembler(
     const runtime::MarketRuntimeRegistry &registry, runtime::RuntimeClock clock,
     const std::string &gateway_instance_id)
@@ -102,7 +102,7 @@ StatusSnapshotResult
 GatewayStatusAssembler::collect(std::chrono::steady_clock::time_point deadline,
                                 std::stop_token stop_token) const {
   std::vector<CollectedMarket> markets;
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
   if (registry_ != nullptr) {
     markets.reserve(registry_->entries().size());
     for (const auto &entry : registry_->entries()) {

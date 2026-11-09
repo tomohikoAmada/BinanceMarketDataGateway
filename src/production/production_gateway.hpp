@@ -98,7 +98,7 @@ public:
 
   [[nodiscard]] GatewayObservation observe();
   [[nodiscard]] const std::string &gateway_instance_id() const noexcept;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   [[nodiscard]] bool write_performance_baseline(std::ostream &output) const;
 #endif
 

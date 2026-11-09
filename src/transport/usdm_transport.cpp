@@ -33,12 +33,12 @@ make_usdm_transport_config(std::string exact_symbol,
   config.websocket_target = routes->websocket_target;
   config.connection_id_prefix = routes->connection_id_prefix;
   config.snapshot_request_id = routes->snapshot_request_id;
-  config.user_agent = "bmd-gateway-g11-usdm/1.0.0";
+  config.user_agent = "bmdg-usdm/1.0.0";
   config.profile = options.normalized_event_sink
                        ? transport::BinanceTransportProfile::DepthWithEvents
                        : transport::BinanceTransportProfile::DepthOnly;
   config.normalized_event_sink = std::move(options.normalized_event_sink);
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   config.performance_baseline = std::move(options.performance_baseline);
 #endif
   config.depth_frame_parser = [symbol](std::string_view payload,

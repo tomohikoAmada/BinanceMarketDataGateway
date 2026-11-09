@@ -38,22 +38,26 @@ names or namespaces.
 
 ## Build targets
 
-- `bmd_gateway_foundation`
-- `bmd_gateway_protocol`
-- `bmd_gateway_publication`
-- `bmd_gateway_runtime`
-- `bmd_gateway_transport`
-- `bmd_gateway_recovery`
-- `bmd_gateway_composition`
-- `bmd_gateway_status`
-- `bmd_gateway_grpc`
-- `bmd_gateway_production`
-- `bmd-gatewayd`
+- `bmdg_foundation`
+- `bmdg_protocol`
+- `bmdg_publication`
+- `bmdg_runtime`
+- `bmdg_transport`
+- `bmdg_recovery`
+- `bmdg_composition`
+- `bmdg_status`
+- `bmdg_grpc`
+- `bmdg_production`
+- `bmdg`
 
 Tests are named after the domain they cover, e.g.
-`bmd_gateway_protocol_tests`, `bmd_gateway_transport_tests`,
-`bmd_gateway_recovery_tests`, `bmd_gateway_grpc_service_tests`,
-`bmd_gateway_production_tests`.
+`bmdg_protocol_tests`, `bmdg_transport_tests`,
+`bmdg_recovery_tests`, `bmdg_grpc_service_tests`,
+`bmdg_production_tests`.
+
+Compatibility: old `bmd_gateway_*` library target names are aliases; old
+`BMD_GATEWAY_*` CMake options are deprecated aliases; `bmd-gatewayd` is a
+transition symlink/custom target for `bmdg`.
 
 ## Historical naming note
 

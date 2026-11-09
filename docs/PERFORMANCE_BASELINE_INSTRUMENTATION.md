@@ -1,4 +1,4 @@
-# Performance baseline instrumentation
+# BMDG performance baseline instrumentation
 
 Opt-in, compile-time measurement support for the production graph. It adds no
 RPC, public API, wire field or production behavior change. Normal builds compile
@@ -9,13 +9,13 @@ it out.
 ```sh
 cmake -S . -B build/performance \
   -DCMAKE_TOOLCHAIN_FILE=build/production-deps/conan_toolchain.cmake \
-  -DBMD_GATEWAY_BUILD_PRODUCTION_DAEMON=ON \
-  -DBMD_GATEWAY_BUILD_TESTS=ON \
-  -DBMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION=ON
-cmake --build build/performance --target bmd-gatewayd
+  -DBMDG_BUILD_PRODUCTION_DAEMON=ON \
+  -DBMDG_BUILD_TESTS=ON \
+  -DBMDG_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION=ON
+cmake --build build/performance --target bmdg
 ```
 
-Set `BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT` to write one JSON Lines artifact
+Set `BMDG_PERFORMANCE_BASELINE_OUTPUT` to write one JSON Lines artifact
 after orderly shutdown. Unset means no artifact. An explicitly requested export
 failure exits unsuccessfully.
 

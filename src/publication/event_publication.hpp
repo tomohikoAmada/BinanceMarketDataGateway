@@ -2,7 +2,7 @@
 
 #include "protocol/spot_protocol.hpp"
 #include "runtime/clock.hpp"
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
 #include "performance/performance_baseline.hpp"
 #endif
 
@@ -96,7 +96,7 @@ enum class EventAdmissionResult : std::uint8_t {
 struct PeekedEventPublication final {
   std::shared_ptr<const EventPublicationRecord> ordinary;
   std::optional<EventTerminalDescriptor> terminal;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   performance::DeliveryToken delivery;
 #endif
 
@@ -120,7 +120,7 @@ public:
       std::string subscription_id, std::string gateway_instance_id,
       common_wire::Stream stream, std::uint64_t source_generation,
       std::size_t ordinary_capacity
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       std::uint64_t subscriber_ordinal = 0U,
       performance::ProductTraceBuffer *performance_baseline = nullptr
@@ -135,7 +135,7 @@ public:
   [[nodiscard]] EventAdmissionResult admit_event(
       const std::shared_ptr<const protocol::NormalizedMarketEvent> &event,
       EventPublicationTime published_at
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       performance::TraceToken trace = {}
 #endif
@@ -172,7 +172,7 @@ private:
   const std::uint64_t source_generation_;
   const std::size_t ordinary_capacity_;
   std::vector<std::shared_ptr<const EventPublicationRecord>> ordinary_ring_;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   const std::uint64_t subscriber_ordinal_;
   performance::ProductTraceBuffer *const performance_baseline_;
   std::vector<performance::DeliveryToken> delivery_ring_;
@@ -228,7 +228,7 @@ public:
   EventPublication(
       std::string gateway_instance_id, runtime::RuntimeClock clock,
       EventPublicationLimits limits = {}
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       std::shared_ptr<performance::ProductTraceBuffer> performance_baseline = {}
 #endif
@@ -249,7 +249,7 @@ public:
   [[nodiscard]] EventPublishResult
   publish(const std::shared_ptr<const protocol::NormalizedMarketEvent> &event,
           std::uint64_t generation
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
           ,
           performance::TraceToken trace = {}
 #endif
@@ -269,7 +269,7 @@ private:
   const std::string gateway_instance_id_;
   runtime::RuntimeClock clock_;
   const EventPublicationLimits limits_;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   const std::shared_ptr<performance::ProductTraceBuffer> performance_baseline_;
 #endif
 

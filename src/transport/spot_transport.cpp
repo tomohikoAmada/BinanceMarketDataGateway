@@ -77,10 +77,10 @@ spot_transport_config(std::string exact_symbol, SpotTransportOptions options) {
       combined ? routes->combined_websocket_target : routes->websocket_target;
   config.connection_id_prefix = routes->connection_id_prefix;
   config.snapshot_request_id = routes->snapshot_request_id;
-  config.user_agent = "bmd-gateway-g4/1.0.0";
+  config.user_agent = "bmdg-spot/1.0.0";
   config.profile = options.profile;
   config.normalized_event_sink = std::move(options.normalized_event_sink);
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   config.performance_baseline = std::move(options.performance_baseline);
 #endif
   config.depth_frame_parser = [symbol](std::string_view payload,
@@ -168,7 +168,7 @@ public:
     request_.target(endpoint_.target);
     request_.version(11);
     request_.set(http::field::host, endpoint_.host);
-    request_.set(http::field::user_agent, "bmd-gateway-g4/1.0.0");
+    request_.set(http::field::user_agent, "bmdg-spot/1.0.0");
     request_.set(http::field::accept, "application/json");
     request_.set(http::field::connection, "close");
     parser_.body_limit(16U * 1024U * 1024U);
@@ -1423,7 +1423,7 @@ private:
         return false;
       }
       auto update = std::get<market::DepthUpdate>(std::move(parsed));
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       const auto trace = begin_depth_trace(received_at);
 #endif
       {
@@ -1443,7 +1443,7 @@ private:
           return false;
         }
         if (!publish_normalized_event(event
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                       ,
                                       trace
 #endif
@@ -1452,7 +1452,7 @@ private:
         }
       }
       return submit_depth_update(std::move(update)
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                      ,
                                  trace
 #endif
@@ -1474,7 +1474,7 @@ private:
       observation_.last_event_utc_ns = received_at.utc_ns;
     }
     condition_.notify_all();
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     performance::TraceToken trace;
     if (std::holds_alternative<market::DepthUpdate>(
             std::get<NormalizedMarketEvent>(parsed))) {
@@ -1493,7 +1493,7 @@ private:
       return false;
     }
     if (!publish_normalized_event(event
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                   ,
                                   trace
 #endif
@@ -1502,7 +1502,7 @@ private:
     }
     if (const auto *depth = std::get_if<market::DepthUpdate>(event.get())) {
       return submit_depth_update(*depth
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                  ,
                                  trace
 #endif
@@ -1522,7 +1522,7 @@ private:
 
   [[nodiscard]] bool publish_normalized_event(
       const std::shared_ptr<const NormalizedMarketEvent> &event
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       performance::TraceToken trace
 #endif
@@ -1530,7 +1530,7 @@ private:
     NormalizedEventSinkResult sink_result{};
     try {
       sink_result = config_.normalized_event_sink(event, connection_generation_
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                                   ,
                                                   trace
 #endif
@@ -1566,14 +1566,14 @@ private:
   }
 
   [[nodiscard]] bool submit_depth_update(market::DepthUpdate update
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                          ,
                                          performance::TraceToken trace
 #endif
   ) {
     const auto admitted = runtime_.submit_depth_update(
         std::move(update), runtime::SourceProvenance{connection_generation_}
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
         ,
         trace
 #endif
@@ -1593,7 +1593,7 @@ private:
     return true;
   }
 
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   [[nodiscard]] performance::TraceToken
   begin_depth_trace(runtime::ClockSample received_at) noexcept {
     if (config_.performance_baseline == nullptr) {

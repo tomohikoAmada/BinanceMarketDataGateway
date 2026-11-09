@@ -1,6 +1,6 @@
 #pragma once
 
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
 #include "performance/performance_baseline.hpp"
 #endif
 
@@ -113,7 +113,7 @@ enum class OrdinaryAdmissionResult : std::uint8_t {
 struct PeekedPublication final {
   std::shared_ptr<const PublicationRecord> ordinary;
   std::optional<TerminalDescriptor> terminal;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   performance::DeliveryToken delivery;
 #endif
 
@@ -138,7 +138,7 @@ public:
   SubscriberChannel(
       std::string subscription_id, std::string gateway_instance_id,
       std::size_t ordinary_capacity
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       std::uint64_t subscriber_ordinal = 0U,
       performance::ProductTraceBuffer *performance_baseline = nullptr
@@ -160,7 +160,7 @@ public:
   admit_update(const std::shared_ptr<const market_wire::DepthUpdate> &update,
                std::optional<std::uint64_t> connection_generation,
                PublicationTime published_at
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                ,
                performance::TraceToken trace = {}
 #endif
@@ -202,7 +202,7 @@ private:
   const std::string gateway_instance_id_;
   const std::size_t ordinary_capacity_;
   std::vector<std::shared_ptr<const PublicationRecord>> ordinary_ring_;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   const std::uint64_t subscriber_ordinal_;
   performance::ProductTraceBuffer *const performance_baseline_;
   std::vector<performance::DeliveryToken> delivery_ring_;

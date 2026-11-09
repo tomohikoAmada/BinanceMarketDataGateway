@@ -1,20 +1,33 @@
-# Evidence summary
+# BMDG evidence summary
 
 This is the current evidence index. Full historical records are in
 [archive/](archive/README.md) and are not current build/design instructions.
 
-## Domain-layout refactor — 2026-11-09
+## Domain layout and BMDG naming — 2026-11-10
 
 - Source/tests/acceptance tools moved from `gN` directories to domain
   directories; namespaces and CMake targets renamed accordingly.
 - Release production graph: **27/27** CTest pass.
-- Release with `BMD_GATEWAY_WARNINGS_AS_ERRORS=ON`: **27/27** CTest pass.
+- Release with `BMDG_WARNINGS_AS_ERRORS=ON`: **27/27** CTest pass.
 - Debug ASan+UBSan production graph: **27/27** CTest pass.
 - Debug TSan production graph: **27/27** CTest pass.
 - Release with performance instrumentation: **28/28** tests pass.
 - Foundation-only build (no Conan): **1/1** CTest pass.
 - No wire/protocol, Projection pin or behavior change. The old `G0`-`G11`
   evidence remains archived; see [CODE_MAP](CODE_MAP.md).
+
+## BMDG naming and data parity
+
+- Project/brand: **BMDG** (Binance Market Data Gateway).
+- Binary: `bmdg`; `bmd-gatewayd` remains a transition symlink/custom target.
+- CMake options: `BMDG_*`; old `BMD_GATEWAY_*` names are deprecated aliases.
+- CMake library targets: `bmdg_*`; old `bmd_gateway_*` names are aliases.
+- `bmd-gatewayd` build symlink and installed symlink point to `bmdg`.
+- Old `BMD_GATEWAY_*` CMake options configure successfully as deprecated
+  aliases.
+- Data parity: Spot depth/bookTicker/aggTrade aligned; USD-M
+  bookTicker/aggTrade/markPrice/forceOrder and REST side data are not yet
+  live-provided. See [DATA_PARITY](DATA_PARITY.md).
 
 ## G3-a — 20-key offline lifecycle
 
@@ -32,12 +45,12 @@ This is the current evidence index. Full historical records are in
 
 ## G3-b — shared-IP API budget
 
-- Gateway fixed shares: 3000 Spot / 600 USD-M weight per minute; 60 WebSocket
+- BMDG fixed shares: 3000 Spot / 600 USD-M weight per minute; 60 WebSocket
   attempts per 5 minutes per market.
 - Rolling windows count failed attempts; reconnect/Live does not reset them.
 - 429/418 `Retry-After` installs a shared market gate; metadata fails closed on
   unavailable quota; cancellation drains timers cleanly.
-- Five two-process Gateway/Recorder composition scenarios pass offline; no IPC,
+- Five two-process BMDG/Recorder composition scenarios pass offline; no IPC,
   new service or dependency pin.
 - Deployment still requires exactly one instance per role, no blue/green
   overlap, and a full 300 s quiet interval after restart/replacement.

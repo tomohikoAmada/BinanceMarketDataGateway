@@ -43,7 +43,7 @@ EventSubscriberChannel::EventSubscriberChannel(
     std::string subscription_id, std::string gateway_instance_id,
     common_wire::Stream stream, std::uint64_t source_generation,
     std::size_t ordinary_capacity
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     ,
     std::uint64_t subscriber_ordinal,
     performance::ProductTraceBuffer *performance_baseline
@@ -53,7 +53,7 @@ EventSubscriberChannel::EventSubscriberChannel(
       gateway_instance_id_{std::move(gateway_instance_id)}, stream_{stream},
       source_generation_{source_generation},
       ordinary_capacity_{ordinary_capacity}, ordinary_ring_(ordinary_capacity)
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       subscriber_ordinal_{subscriber_ordinal},
       performance_baseline_{performance_baseline},
@@ -87,7 +87,7 @@ bool EventSubscriberChannel::stage_accepted(
 EventAdmissionResult EventSubscriberChannel::admit_event(
     const std::shared_ptr<const protocol::NormalizedMarketEvent> &event,
     EventPublicationTime published_at
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     ,
     performance::TraceToken trace
 #endif
@@ -100,7 +100,7 @@ EventAdmissionResult EventSubscriberChannel::admit_event(
     return EventAdmissionResult::AllocationFailure;
   }
   if (size_ == ordinary_capacity_) {
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     if (performance_baseline_ != nullptr) {
       performance_baseline_->record_delivery_full(
           performance::DeliveryKind::Event);
@@ -127,7 +127,7 @@ EventAdmissionResult EventSubscriberChannel::admit_event(
     if (!ring_push_locked(std::move(record))) {
       return EventAdmissionResult::AllocationFailure;
     }
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     if (performance_baseline_ != nullptr &&
         trace.owner == performance_baseline_) {
       const auto tail = (head_ + size_ - 1U) % ordinary_capacity_;
@@ -179,7 +179,7 @@ PeekedEventPublication EventSubscriberChannel::peek() const {
   }
   if (size_ != 0U) {
     return {ordinary_ring_[head_], std::nullopt
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
             ,
             delivery_ring_[head_]
 #endif
@@ -188,7 +188,7 @@ PeekedEventPublication EventSubscriberChannel::peek() const {
   if (terminal_.has_value()) {
     return {nullptr,
             terminal_
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
             ,
             {}
 #endif
@@ -296,7 +296,7 @@ bool EventSubscriberChannel::ring_push_locked(
 
 void EventSubscriberChannel::ring_pop_locked() noexcept {
   ordinary_ring_[head_].reset();
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   delivery_ring_[head_] = {};
 #endif
   head_ = (head_ + 1U) % ordinary_capacity_;
@@ -313,14 +313,14 @@ void EventSubscriberChannel::clear_from_writer_locked() noexcept {
 EventPublication::EventPublication(
     std::string gateway_instance_id, runtime::RuntimeClock clock,
     EventPublicationLimits limits
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     ,
     std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
 #endif
     )
     : gateway_instance_id_{std::move(gateway_instance_id)},
       clock_{std::move(clock)}, limits_{limits}
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       performance_baseline_{std::move(performance_baseline)}
 #endif
@@ -418,7 +418,7 @@ EventPublication::admit(const ValidatedEventSubscription &subscription) {
     auto channel = std::make_shared<EventSubscriberChannel>(
         subscription_id, gateway_instance_id_, subscription.stream,
         *source_generation_, limits_.ordinary_queue_capacity
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
         ,
         next_subscription_id_, performance_baseline_.get()
 #endif
@@ -439,7 +439,7 @@ EventPublication::admit(const ValidatedEventSubscription &subscription) {
 EventPublishResult EventPublication::publish(
     const std::shared_ptr<const protocol::NormalizedMarketEvent> &event,
     std::uint64_t generation
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     ,
     performance::TraceToken trace
 #endif
@@ -468,7 +468,7 @@ EventPublishResult EventPublication::publish(
       continue;
     }
     const auto result = channel->admit_event(event, *published_at
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                              ,
                                              trace
 #endif

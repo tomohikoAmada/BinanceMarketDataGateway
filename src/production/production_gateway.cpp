@@ -188,7 +188,7 @@ const std::string &ProductionGateway::gateway_instance_id() const noexcept {
   return gateway_instance_id_;
 }
 
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
 bool ProductionGateway::write_performance_baseline(std::ostream &output) const {
   {
     std::lock_guard state_lock{state_mutex_};

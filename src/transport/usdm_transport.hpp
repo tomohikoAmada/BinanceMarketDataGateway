@@ -48,7 +48,7 @@ make_usdm_transport_routes(std::string_view exact_symbol);
 
 struct UsdMTransportOptions final {
   transport::NormalizedEventSink normalized_event_sink;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   std::shared_ptr<performance::ProductTraceBuffer> performance_baseline;
 #endif
 };

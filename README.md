@@ -1,13 +1,13 @@
-# Binance Market Data Gateway
+# BMDG — Binance Market Data Gateway
 
-C++20 Binance market-data gateway. One process serves 1..20 exact
+**BMDG** is a C++20 Binance market-data gateway. One process serves 1..20 exact
 Spot / USD-M perpetual products, maintains a private Projection order book per
 product, and publishes order-book, event and status data over loopback gRPC.
-Gateway does not store history and does not depend on Recorder.
+BMDG does not store history and does not depend on Recorder.
 
 ## Current status
 
-- Production entry point: `bmd-gatewayd --config PATH`.
+- Production entry point: `bmdg --config PATH`.
 - Historical G0-G11 / G12-A/B/C work is complete and archived.
 - v0.4 G3-a (20-key offline routing/startup/recovery) and G3-b (shared-IP API
   budget) are complete, independently reviewed and merged.
@@ -15,7 +15,7 @@ Gateway does not store history and does not depend on Recorder.
   budgets are not yet accepted. Twenty products are a resource bound, not a
   measured production capacity.
 - Performance budgets are not established. The dominant measured cost is the
-  pinned Projection full-book transaction copy, not Gateway queues.
+  pinned Projection full-book transaction copy, not BMDG queues.
 
 See [current state](docs/CURRENT_STATE.md), [milestones](docs/MILESTONES.md),
 [evidence](docs/EVIDENCE.md) and [architecture](ARCHITECTURE.md).
@@ -35,7 +35,7 @@ src/status/                                GetGatewayStatus
 src/composition/                           ProductRuntime, configured set, registry
 src/production/                            daemon config/metadata/startup/signals
 src/performance/                           opt-in trace instrumentation
-app/gatewayd/                              production daemon
+app/bmdg/                                  production daemon
 app/acceptance/                            historical live/acceptance tools
 tests/                                     unit/integration/production tests
 ```
@@ -79,8 +79,8 @@ Production daemon plus domain tests (requires the pinned Conan graph):
 cmake -S . -B build/production \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE=/absolute/path/to/conan_toolchain.cmake \
-  -DBMD_GATEWAY_BUILD_PRODUCTION_DAEMON=ON \
-  -DBMD_GATEWAY_BUILD_TESTS=ON
+  -DBMDG_BUILD_PRODUCTION_DAEMON=ON \
+  -DBMDG_BUILD_TESTS=ON
 cmake --build build/production --parallel 4
 ctest --test-dir build/production --output-on-failure
 ```
@@ -89,23 +89,38 @@ Options:
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `BMD_GATEWAY_BUILD_TESTS` | `BUILD_TESTING` | Foundation tests; domain tests when the domain graph is enabled |
-| `BMD_GATEWAY_BUILD_DOMAIN_TESTS` | `OFF` | Build domain tests without the daemon |
-| `BMD_GATEWAY_BUILD_PRODUCTION_DAEMON` | `OFF` | Build `bmd-gatewayd` and the production library |
-| `BMD_GATEWAY_BUILD_ACCEPTANCE_TOOLS` | `OFF` | Build historical live apps, synthetic host and acceptance client |
-| `BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION` | `OFF` | Opt-in trace/delivery measurement; adds about 110 MiB RSS for 20 products |
-| `BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE` | `OFF` | Frozen Contracts/Projection consumer link smoke |
-| `BMD_GATEWAY_ENABLE_ASAN` / `UBSAN` / `TSAN` | `OFF` | Sanitizers |
+| `BMDG_BUILD_TESTS` | `BUILD_TESTING` | Foundation tests; domain tests when the domain graph is enabled |
+| `BMDG_BUILD_DOMAIN_TESTS` | `OFF` | Build domain tests without the daemon |
+| `BMDG_BUILD_PRODUCTION_DAEMON` | `OFF` | Build `bmdg` and the production library |
+| `BMDG_BUILD_ACCEPTANCE_TOOLS` | `OFF` | Build historical live apps, synthetic host and acceptance client |
+| `BMDG_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION` | `OFF` | Opt-in trace/delivery measurement; adds about 110 MiB RSS for 20 products |
+| `BMDG_BUILD_UPSTREAM_LINK_SMOKE` | `OFF` | Frozen Contracts/Projection consumer link smoke |
+| `BMDG_ENABLE_ASAN` / `UBSAN` / `TSAN` | `OFF` | Sanitizers |
 
 Dependencies are pinned by `conan.lock` and the `profiles/` files. Do not use
 floating FetchContent. The historical G1 proof scripts are in
 `scripts/archive/`; the current upstream smoke remains an explicit opt-in.
 
+### Naming compatibility
+
+- New CMake options use `BMDG_*`. The old `BMD_GATEWAY_*` names are accepted
+  as deprecated aliases for one transition period.
+- New CMake library targets use `bmdg_*`; old `bmd_gateway_*` library names
+  are aliases.
+- The executable is `bmdg`. A `bmd-gatewayd` symlink/custom target is kept for
+  old scripts and service units during the transition.
+- Internal namespace and include path remain
+  `binance_market_data::gateway` to avoid breaking Contracts/Projection
+  integration.
+
 ## Run
 
 ```sh
-build/production/bmd-gatewayd --config examples/gateway.json
+build/production/bmdg --config examples/gateway.json
+# production example: /etc/bmdg/gateway.json
 ```
+
+A systemd example is provided at `deployment/bmdg.service`.
 
 SIGINT/SIGTERM stop admission, drain/cancel gRPC handlers, stop transports and
 join owners. For systemd, allow a full 300 s quiet interval before restarting
@@ -134,10 +149,10 @@ wall-clock regression as unknown age.
 
 ## Validation
 
-Current baseline after the domain-layout refactor:
+Current baseline after the domain-layout refactor and BMDG rename:
 
 - Release production graph: **27/27** tests pass.
-- Release with `BMD_GATEWAY_WARNINGS_AS_ERRORS=ON`: **27/27** tests pass.
+- Release with `BMDG_WARNINGS_AS_ERRORS=ON`: **27/27** tests pass.
 - Debug ASan+UBSan production graph: **27/27** tests pass.
 - Debug TSan production graph: **27/27** tests pass.
 - Release with performance instrumentation: **28/28** tests pass.
@@ -156,4 +171,5 @@ see [milestones](docs/MILESTONES.md). Historical full evidence is in
 - [Code map](docs/CODE_MAP.md)
 - [Binance constraints](docs/official-binance-constraints.md)
 - [Performance instrumentation](docs/PERFORMANCE_BASELINE_INSTRUMENTATION.md)
+- [Data parity with BMDR](docs/DATA_PARITY.md)
 - [Archived historical docs](docs/archive/README.md)

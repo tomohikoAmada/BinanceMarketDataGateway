@@ -61,7 +61,7 @@ struct Child final {
 class ConfigFile final {
 public:
   explicit ConfigFile(std::string contents) {
-    std::string pattern{"/tmp/bmd-gateway-config-XXXXXX"};
+    std::string pattern{"/tmp/bmdg-config-XXXXXX"};
     const auto descriptor = mkstemp(pattern.data());
     if (descriptor < 0) {
       throw std::runtime_error{"mkstemp failed"};
@@ -110,16 +110,16 @@ private:
     static_cast<void>(dup2(pipe_descriptors[1], STDERR_FILENO));
     close(pipe_descriptors[1]);
     if (scenario.empty()) {
-      static_cast<void>(unsetenv("BMD_GATEWAY_TEST_SCENARIO"));
+      static_cast<void>(unsetenv("BMDG_TEST_SCENARIO"));
     } else {
       const std::string scenario_value{scenario};
       static_cast<void>(
-          setenv("BMD_GATEWAY_TEST_SCENARIO", scenario_value.c_str(), 1));
+          setenv("BMDG_TEST_SCENARIO", scenario_value.c_str(), 1));
     }
-#if !defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if !defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     // An ordinary daemon must ignore stale instrumentation settings, including
     // a composition the historical exporter does not support.
-    static_cast<void>(setenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT",
+    static_cast<void>(setenv("BMDG_PERFORMANCE_BASELINE_OUTPUT",
                              "/definitely/missing/stale-performance.json", 1));
 #endif
     std::vector<char *> argv;
@@ -251,7 +251,7 @@ void cli_processes(const std::string &daemon) {
 void signal_process(const std::string &fixture, int signal,
                     bool prove_still_running, std::string_view scenario = {}) {
   const auto endpoint = "127.0.0.1:" + std::to_string(available_port());
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   // The optional historical trace exporter still accepts only two BTC keys.
   const bool four = false;
 #else
@@ -426,7 +426,7 @@ void startup_failure_diagnostic(const std::string &fixture) {
 
 int main(int argc, char **argv) {
   if (argc != 3) {
-    std::cerr << "expected bmd-gatewayd and fixture paths\n";
+    std::cerr << "expected bmdg and fixture paths\n";
     return EXIT_FAILURE;
   }
   try {

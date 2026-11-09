@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
   production::TerminationSignals signals;
   auto spot_mode = support::AttemptMode::Live;
   bool recover_spot = false;
-  if (const auto *scenario = std::getenv("BMD_GATEWAY_TEST_SCENARIO");
+  if (const auto *scenario = std::getenv("BMDG_TEST_SCENARIO");
       scenario != nullptr) {
     if (std::string_view{scenario} == "startup-spot-failure") {
       spot_mode = support::AttemptMode::Terminal;

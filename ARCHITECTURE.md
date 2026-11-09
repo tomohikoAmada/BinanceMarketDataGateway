@@ -1,4 +1,4 @@
-# Gateway architecture
+# BMDG architecture
 
 ## Responsibilities and dependencies
 
@@ -6,7 +6,7 @@
 Binance public REST / WebSocket
               |
               v
-     BinanceMarketDataGateway
+     BMDG
         +--> Contracts Protobuf / opt-in gRPC artifacts
         +--> Projection ProtoAdapter --> Core
 ```
@@ -14,9 +14,9 @@ Binance public REST / WebSocket
 - **Contracts** owns messages, services and wire compatibility.
 - **Projection** owns fixed-point numbers, order book and Spot/USD-M sequence
   semantics (including `pu`).
-- **Gateway** owns transport, metadata, lifecycle, bounded publication and gRPC.
-- Gateway does not depend on Recorder, copy proto files, or add a second
-  sequence classifier.
+- **BMDG** owns transport, metadata, lifecycle, bounded publication and gRPC.
+- BMDG does not depend on Recorder, copy proto files, or add a second sequence
+  classifier.
 
 ## Domain layout
 
@@ -35,12 +35,13 @@ src/performance/    opt-in trace/delivery instrumentation
 ```
 
 The old `G0`-`G11` labels are historical milestone names, not modules. See
-[CODE_MAP](docs/CODE_MAP.md).
+[CODE_MAP](docs/CODE_MAP.md) and the research/live contract in
+[DATA_PARITY](docs/DATA_PARITY.md).
 
 ## Production composition
 
 ```text
-bmd-gatewayd --config PATH
+bmdg --config PATH
   -> strict JSON config (grpc_listen, spot_symbols, usdm_symbols)
   -> fetch exchangeInfo once per configured market
   -> resolve NumericSpec for every exact MarketKey
@@ -72,7 +73,7 @@ port 0.
 
 Exchange JSON accepts unrelated extension fields but validates required fields,
 types, exact identity and numeric semantics. Spot depth rejects `pu`; USD-M
-`pu` remains a Projection/Adapter boundary. Gateway does not add a second
+`pu` remains a Projection/Adapter boundary. BMDG does not add a second
 sequence classifier.
 
 Twenty products is a resource policy, not a Binance limit or measured capacity.
@@ -145,14 +146,14 @@ Foundation is independently buildable with no network/threads. The production
 graph is opt-in:
 
 ```sh
--DBMD_GATEWAY_BUILD_PRODUCTION_DAEMON=ON
+-DBMDG_BUILD_PRODUCTION_DAEMON=ON
 ```
 
 Domain tests require the pinned Contracts/Projection/Boost/OpenSSL/Conan graph.
 Historical live/acceptance executables are opt-in with
-`-DBMD_GATEWAY_BUILD_ACCEPTANCE_TOOLS=ON` and are not linked into
-`bmd-gatewayd`. The frozen upstream link smoke remains explicit
-(`-DBMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE=ON`).
+`-DBMDG_BUILD_ACCEPTANCE_TOOLS=ON` and are not linked into
+`bmdg`. The frozen upstream link smoke remains explicit
+(`-DBMDG_BUILD_UPSTREAM_LINK_SMOKE=ON`).
 
 Dependencies do not use floating FetchContent. Historical G0-G11 evidence and
 the old review/proof documents are in `docs/archive/` and
@@ -177,7 +178,7 @@ and 2023 allocations/update; at D5000 about 1018 µs and 10029 allocations/updat
 The dominant hotspot is the pinned Projection `apply_transaction` full-book
 copy/rebuild. P2 remains conditional on a measured shared-host budget.
 
-Gateway-side candidates (measure before/after, do not assume):
+BMDG-side candidates (measure before/after, do not assume):
 
 - avoid per-frame `observe()`/legacy counters/`notify_all`;
 - notify only on state change and avoid per-update subscriber sweeps;

@@ -461,12 +461,16 @@ bool performance_baseline_preflight(const DaemonConfig &config,
   return true;
 }
 
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
 namespace {
 
 [[nodiscard]] bool export_performance_baseline(ProductionGateway &gateway,
                                                std::ostream &errors) {
-  const auto *path = std::getenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT");
+  const auto *path = std::getenv("BMDG_PERFORMANCE_BASELINE_OUTPUT");
+  if (path == nullptr || *path == '\0') {
+    // Transitional alias for existing measurement scripts.
+    path = std::getenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT");
+  }
   if (path == nullptr || *path == '\0') {
     errors << "performance_baseline_export=skipped reason=output-not-set\n";
     return true;
@@ -510,7 +514,7 @@ int run_production_service(
   if (started.code != StartCode::Serving) {
     const auto final = gateway.observe();
     const auto final_totals = totals(final);
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     const auto exported = export_performance_baseline(gateway, errors);
 #endif
     if (started.code == StartCode::StopRequested) {
@@ -522,7 +526,7 @@ int run_production_service(
              << " owners_joined=" << (final_totals.owners_joined ? "yes" : "no")
              << '\n';
       return
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
           exported ? EXIT_SUCCESS : EXIT_FAILURE;
 #else
           EXIT_SUCCESS;
@@ -554,7 +558,7 @@ int run_production_service(
   gateway.request_stop();
   gateway.stop();
 
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   const auto exported = export_performance_baseline(gateway, errors);
 #endif
 
@@ -568,7 +572,7 @@ int run_production_service(
          << '\n'
          << std::flush;
   return received == -1
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                  || !exported
 #endif
              ? EXIT_FAILURE

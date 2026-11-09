@@ -3,7 +3,7 @@
 #include "publication/event_publication.hpp"
 #include "recovery/spot_recovery.hpp"
 #include "runtime/market_runtime.hpp"
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
 #include "composition/market_registry.hpp"
 #endif
 
@@ -48,7 +48,7 @@ public:
                          publication::EventPublication &event_publication,
                          runtime::RuntimeClock clock,
                          const std::string &gateway_instance_id);
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
   GatewayStatusAssembler(const runtime::MarketRuntimeRegistry &registry,
                          runtime::RuntimeClock clock,
                          const std::string &gateway_instance_id);
@@ -71,7 +71,7 @@ private:
   runtime::MarketRuntime *runtime_{nullptr};
   recovery::SpotRecovery *recovery_{nullptr};
   publication::EventPublication *event_publication_{nullptr};
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
   const runtime::MarketRuntimeRegistry *registry_{nullptr};
 #endif
   runtime::RuntimeClock clock_;

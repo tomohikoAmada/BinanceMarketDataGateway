@@ -45,7 +45,7 @@ void require(bool condition, std::string_view expression) {
 class ConfigFile final {
 public:
   explicit ConfigFile(std::string contents) {
-    std::string pattern{"/tmp/bmd-gateway-config-unit-XXXXXX"};
+    std::string pattern{"/tmp/bmdg-config-unit-XXXXXX"};
     const auto descriptor = mkstemp(pattern.data());
     if (descriptor < 0) {
       throw std::runtime_error{"mkstemp failed"};
@@ -87,10 +87,10 @@ require_config(production::DaemonConfigResult result) {
 }
 
 void cli_contract() {
-  char program[] = "bmd-gatewayd";
+  char program[] = "bmdg";
   char help[] = "--help";
   char config[] = "--config";
-  char missing[] = "/definitely/missing/bmd-gateway-config.json";
+  char missing[] = "/definitely/missing/bmdg-config.json";
   char old[] = "--grpc-listen";
   char endpoint[] = "127.0.0.1:50051";
   char unknown[] = "--unknown";

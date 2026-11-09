@@ -16,7 +16,7 @@
 #include <thread>
 #include <utility>
 #include <variant>
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
 namespace performance = binance_market_data::gateway::performance;
 #endif
 namespace protocol = binance_market_data::gateway::protocol;
@@ -29,7 +29,7 @@ namespace rt = binance_market_data::gateway::runtime;
 namespace {
 
 namespace common = binance_market_data::common::v1;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
 #endif
 namespace wire = binance_market_data::gateway::v1;
 
@@ -246,13 +246,13 @@ int main() {
   recovery_options.transport.normalized_event_sink =
       [&publication](std::shared_ptr<const protocol::NormalizedSpotEvent> event,
                      std::uint64_t generation
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                      ,
                      performance::TraceToken trace
 #endif
       ) {
         return publication.publish(event, generation
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                    ,
                                    trace
 #endif

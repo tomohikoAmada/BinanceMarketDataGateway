@@ -10,7 +10,7 @@ namespace binance_market_data::gateway::test_support {
 // Byte-identical copy of Contracts C0's shared source oracle; see
 // fixtures/README.md.
 inline nlohmann::json usdm_time_fixture() {
-  std::ifstream input{BMD_GATEWAY_TEST_FIXTURE_DIR "/usdm-depth-time.v1.json"};
+  std::ifstream input{BMDG_TEST_FIXTURE_DIR "/usdm-depth-time.v1.json"};
   if (!input) {
     throw std::runtime_error{"missing Contracts C0 source-time fixture"};
   }

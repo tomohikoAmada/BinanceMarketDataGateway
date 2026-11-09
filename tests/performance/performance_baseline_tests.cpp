@@ -542,8 +542,7 @@ void storage_exhaustion_and_queue_evidence_are_measurement_only() {
   std::ostringstream artifact;
   baseline->write_json_lines(artifact);
   const auto text = artifact.str();
-  REQUIRE(text.find("bmd-gateway-performance-baseline.v1") !=
-          std::string::npos);
+  REQUIRE(text.find("bmdg-performance-baseline.v1") != std::string::npos);
   REQUIRE(text.find("\"trace_storage_overflow\":1") != std::string::npos);
   REQUIRE(text.find("\"evidence_valid\":false") != std::string::npos);
   REQUIRE(text.find("\"product\":\"BINANCE/SPOT/BTCUSDT\"") !=
@@ -573,11 +572,11 @@ void production_shutdown_precedes_bounded_export() {
   REQUIRE(gateway.write_performance_baseline(artifact));
   const auto text = artifact.str();
   const auto spot_campaign =
-      text.find("{\"record\":\"campaign\",\"schema\":\"bmd-gateway-"
+      text.find("{\"record\":\"campaign\",\"schema\":\"bmdg-"
                 "performance-baseline.v1\",\"product\":\"BINANCE/SPOT/"
                 "BTCUSDT\"");
   const auto usdm_campaign =
-      text.find("{\"record\":\"campaign\",\"schema\":\"bmd-gateway-"
+      text.find("{\"record\":\"campaign\",\"schema\":\"bmdg-"
                 "performance-baseline.v1\",\"product\":\"BINANCE/"
                 "USD_M_PERPETUAL/BTCUSDT\"");
   REQUIRE(spot_campaign != std::string::npos);
@@ -592,7 +591,7 @@ void production_shutdown_precedes_bounded_export() {
 }
 
 void configured_composition_preflight_preserves_artifact() {
-  std::string pattern{"/tmp/bmd-gateway-performance-preflight-XXXXXX"};
+  std::string pattern{"/tmp/bmdg-performance-preflight-XXXXXX"};
   const auto descriptor = mkstemp(pattern.data());
   REQUIRE(descriptor >= 0);
   constexpr std::string_view sentinel{"existing-evidence"};
@@ -600,11 +599,10 @@ void configured_composition_preflight_preserves_artifact() {
           static_cast<ssize_t>(sentinel.size()));
   close(descriptor);
 
-  const auto *previous = std::getenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT");
+  const auto *previous = std::getenv("BMDG_PERFORMANCE_BASELINE_OUTPUT");
   const std::optional<std::string> saved =
       previous == nullptr ? std::nullopt : std::optional<std::string>{previous};
-  REQUIRE(setenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT", pattern.c_str(),
-                 1) == 0);
+  REQUIRE(setenv("BMDG_PERFORMANCE_BASELINE_OUTPUT", pattern.c_str(), 1) == 0);
 
   production::DaemonConfig unsupported{
       "127.0.0.1:50051",
@@ -625,10 +623,9 @@ void configured_composition_preflight_preserves_artifact() {
   REQUIRE(supported_diagnostics.str().empty());
 
   if (saved.has_value()) {
-    REQUIRE(setenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT", saved->c_str(),
-                   1) == 0);
+    REQUIRE(setenv("BMDG_PERFORMANCE_BASELINE_OUTPUT", saved->c_str(), 1) == 0);
   } else {
-    REQUIRE(unsetenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT") == 0);
+    REQUIRE(unsetenv("BMDG_PERFORMANCE_BASELINE_OUTPUT") == 0);
   }
   unlink(pattern.c_str());
 }

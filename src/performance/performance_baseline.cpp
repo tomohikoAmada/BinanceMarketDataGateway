@@ -311,7 +311,7 @@ bool ProductTraceBuffer::evidence_valid() const noexcept {
 
 void ProductTraceBuffer::write_json_lines(std::ostream &output) const {
   const auto queue = queue_evidence();
-  output << "{\"record\":\"campaign\",\"schema\":\"bmd-gateway-"
+  output << "{\"record\":\"campaign\",\"schema\":\"bmdg-"
             "performance-baseline.v1\",\"product\":\""
          << product_identity_ << "\",\"trace_capacity\":" << trace_capacity()
          << ",\"delivery_capacity_per_kind\":" << delivery_capacity_per_kind()

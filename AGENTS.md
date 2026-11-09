@@ -1,11 +1,11 @@
-# Gateway contribution rules
+# BMDG contribution rules
 
 Read before changes:
 
 1. [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md)
 2. [docs/MILESTONES.md](docs/MILESTONES.md)
 3. [ARCHITECTURE.md](ARCHITECTURE.md)
-4. [docs/CODE_MAP.md](docs/CODE_MAP.md) and relevant evidence
+4. [docs/CODE_MAP.md](docs/CODE_MAP.md), [docs/DATA_PARITY.md](docs/DATA_PARITY.md) and relevant evidence
 
 If code, protocol facts or measurements contradict documentation, establish
 evidence and update the current documents. User instructions take precedence.
@@ -22,7 +22,7 @@ established. Keep Foundation independently buildable.
 
 ## Boundaries
 
-- Gateway owns Binance transport, metadata, lifecycle, bounded publication and
+- BMDG owns Binance transport, metadata, lifecycle, bounded publication and
   gRPC. Contracts owns proto/wire; Projection owns numeric semantics, order book
   and Spot/USD-M sequencing (including `pu`). No Recorder dependency.
 - Reuse `ConfiguredProductRuntimeSet` and the immutable registry. Exact
@@ -32,7 +32,7 @@ established. Keep Foundation independently buildable.
 - All configured products must initially reach Live/Synchronized. Any startup
   return failure or exception rolls everything back. Later product failure is
   isolated. Shut down and drain handlers before destroying products.
-- Use startup JSON `bmd-gatewayd --config PATH`. No hot reload, runtime
+- Use startup JSON `bmdg --config PATH`. No hot reload, runtime
   add/remove, generic event bus, DI/plugins, shared multiplexed transport or
   second classifier.
 - Insecure gRPC must bind numeric loopback only; reject hostname, wildcard and
@@ -51,6 +51,9 @@ established. Keep Foundation independently buildable.
   fixed-two performance evidence is not multi-product proof. Optimize only an
   evidenced problem; keep changes small and avoid speculative concurrency
   frameworks.
+- Research/live parity is a delivery requirement. Any BMDR-only field used by
+  a production signal must be provided by BMDG or explicitly marked
+  research-only; see [docs/DATA_PARITY.md](docs/DATA_PARITY.md).
 
 ## Source layout
 
@@ -65,6 +68,10 @@ src/composition/ src/production/ src/performance/
 `src/grpc/` uses namespace `rpc` because `grpc` would collide with the gRPC
 library. Historical docs/scripts are in `docs/archive/` and `scripts/archive/`;
 they are not current build instructions.
+
+Naming: BMDG is the product/brand, `bmdg` is the binary, CMake options are
+`BMDG_*`, and library targets are `bmdg_*`. Old `BMD_GATEWAY_*` options,
+`bmd_gateway_*` library targets and `bmd-gatewayd` remain as transition aliases.
 
 ## Validation and delivery
 
@@ -81,16 +88,16 @@ Production graph:
 ```sh
 cmake -S . -B build/production -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE=/absolute/path/to/conan_toolchain.cmake \
-  -DBMD_GATEWAY_BUILD_PRODUCTION_DAEMON=ON \
-  -DBMD_GATEWAY_BUILD_TESTS=ON
+  -DBMDG_BUILD_PRODUCTION_DAEMON=ON \
+  -DBMDG_BUILD_TESTS=ON
 cmake --build build/production --parallel 4
 ctest --test-dir build/production --output-on-failure
 ```
 
-Use `BMD_GATEWAY_BUILD_ACCEPTANCE_TOOLS=ON` for historical live/acceptance
-executables. Use `BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION=ON`
+Use `BMDG_BUILD_ACCEPTANCE_TOOLS=ON` for historical live/acceptance
+executables. Use `BMDG_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION=ON`
 only for measurement (about +110 MiB RSS for 20 products). Use
-`BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE=ON` only for the frozen link proof.
+`BMDG_BUILD_UPSTREAM_LINK_SMOKE=ON` only for the frozen link proof.
 
 For runtime changes explicitly enable the production graph, run affected
 offline tests, relevant sanitizers and `scripts/format-check.sh`. Existing

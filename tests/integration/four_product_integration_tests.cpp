@@ -43,13 +43,12 @@ production::GatewayOptions options() {
   return result;
 }
 
-#if defined(BMD_GATEWAY_TWENTY_INTEGRATION)
-const auto profile =
-    production::p1_test::load(BMD_GATEWAY_TWENTY_PROFILE, "smoke");
+#if defined(BMDG_TWENTY_INTEGRATION)
+const auto profile = production::p1_test::load(BMDG_TWENTY_PROFILE, "smoke");
 #endif
 
 fixture::Sample sample(const rt::MarketKey &key) {
-#if defined(BMD_GATEWAY_TWENTY_INTEGRATION)
+#if defined(BMDG_TWENTY_INTEGRATION)
   for (const auto &work : profile.products)
     if (work.key == key)
       return work.sample();
@@ -62,10 +61,10 @@ fixture::Sample sample(const rt::MarketKey &key) {
 fixture::Configuration
 configuration(std::size_t failed = std::numeric_limits<std::size_t>::max(),
               support::AttemptMode mode = support::AttemptMode::Terminal) {
-#if defined(BMD_GATEWAY_TWENTY_INTEGRATION)
-  return profile.configure(BMD_GATEWAY_TWENTY_PRODUCT_CONFIG, failed, mode);
+#if defined(BMDG_TWENTY_INTEGRATION)
+  return profile.configure(BMDG_TWENTY_PRODUCT_CONFIG, failed, mode);
 #else
-  auto parsed = production::load_daemon_config(BMD_GATEWAY_FOUR_PRODUCT_CONFIG);
+  auto parsed = production::load_daemon_config(BMDG_FOUR_PRODUCT_CONFIG);
   REQUIRE(std::holds_alternative<production::DaemonConfig>(parsed));
   return fixture::configure(
       std::get<production::DaemonConfig>(std::move(parsed)), failed, mode);
@@ -224,7 +223,7 @@ support::market::DepthUpdate publish(production::ProductionGateway &gateway,
   return update;
 }
 
-#if defined(BMD_GATEWAY_TWENTY_INTEGRATION)
+#if defined(BMDG_TWENTY_INTEGRATION)
 void twenty_metadata_errors_keep_exact_identity() {
   const auto config = configuration();
   for (const auto invalid_symbol : {false, true}) {
@@ -418,7 +417,7 @@ void all_products_must_be_live() {
   stopped(gateway, config);
 }
 
-#if defined(BMD_GATEWAY_TWENTY_INTEGRATION)
+#if defined(BMDG_TWENTY_INTEGRATION)
 void late_initial_live_keeps_shared_deadline() {
   auto config = configuration();
   config.specs.back().options.runtime_test.owner_starts_paused = true;
@@ -574,7 +573,7 @@ void global_context_limit() {
 
 int main() {
   try {
-#if defined(BMD_GATEWAY_TWENTY_INTEGRATION)
+#if defined(BMDG_TWENTY_INTEGRATION)
     twenty_metadata_errors_keep_exact_identity();
 #endif
     pipeline_recovery_slow_consumers_and_shutdown();
@@ -585,7 +584,7 @@ int main() {
         << "CONFIGURED_PRODUCT_START_FAILURE_AND_EXCEPTION_ROLLBACK=PASS\n";
     all_products_must_be_live();
     std::cout << "CONFIGURED_PRODUCT_ALL_INITIAL_LIVE_REQUIRED=PASS\n";
-#if defined(BMD_GATEWAY_TWENTY_INTEGRATION)
+#if defined(BMDG_TWENTY_INTEGRATION)
     late_initial_live_keeps_shared_deadline();
     std::cout << "TWENTY_PRODUCT_LATE_LIVE_SHARED_DEADLINE=PASS\n";
     repeated_all_product_recovery();

@@ -1,4 +1,4 @@
-# Official Binance constraints
+# BMDG — official Binance constraints
 
 Reference record, not a runtime dependency. Retrieved 2026-08-23 from the
 official developer documentation; hashes and exact URLs were recorded in the
@@ -16,7 +16,7 @@ behavior; do not treat old values as permanent.
   `GET /api/v3/depth` (`lastUpdateId = L`), reacquire if `L < first U`, discard
   buffered `u <= L`; first retained event should contain `L` in `[U,u]`.
 - Apply-time continuity: `U > local_update_id + 1` is a gap; a normal next event
-  has `U = previous_event.u + 1`. Projection owns this classification; Gateway
+  has `U = previous_event.u + 1`. Projection owns this classification; BMDG
   must not add a second one.
 - Snapshot maximum: 5000 levels per side. Levels outside the snapshot are
   unknown until changed; zero quantity removes a level.
@@ -52,7 +52,7 @@ behavior; do not treat old values as permanent.
   every 3 min means the same 90 s timeout can reconnect quiet USD-M symbols;
   use a per-market timeout or client keepalive.
 - A full 300 s quiet interval is required after restarting a process because
-  Gateway's shared-IP budget is in-memory while Binance's counters persist.
-- Shared-IP deployment must account for every consumer; Gateway's fixed shares
+  BMDG's shared-IP budget is in-memory while Binance's counters persist.
+- Shared-IP deployment must account for every consumer; BMDG's fixed shares
   are 3000 Spot / 600 USD-M weight per minute and 60 WS attempts per 5 minutes
   per market.

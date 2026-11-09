@@ -199,7 +199,7 @@ DaemonConfigResult load_daemon_config(std::string_view config_path) {
 }
 
 void print_daemon_usage(std::ostream &output) {
-  output << "Usage: bmd-gatewayd --config PATH\n"
+  output << "Usage: bmdg --config PATH\n"
             "\n"
             "Loads one strict startup-only JSON configuration file.\n";
 }

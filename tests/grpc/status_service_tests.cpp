@@ -25,7 +25,7 @@ namespace core = binance_market_data::projection::v1;
 namespace market = binance_market_data::market::v1;
 namespace wire = binance_market_data::gateway::v1;
 
-#if !defined(BMD_GATEWAY_G11_ENABLED)
+#if !defined(BMDG_G11_ENABLED)
 static_assert(rpc::kMaximumGrpcTrackedContexts == 24U);
 #endif
 

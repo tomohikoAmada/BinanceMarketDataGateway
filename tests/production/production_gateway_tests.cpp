@@ -212,7 +212,7 @@ private:
 };
 
 void performance_preflight_matches_build_mode() {
-  constexpr auto name = "BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT";
+  constexpr auto name = "BMDG_PERFORMANCE_BASELINE_OUTPUT";
   const auto *previous = std::getenv(name);
   const std::optional<std::string> saved =
       previous == nullptr ? std::nullopt : std::optional<std::string>{previous};
@@ -894,7 +894,7 @@ void metadata_failures_are_ordered() {
 }
 
 void cli_is_fixed_and_fail_closed() {
-  char program[] = "bmd-gatewayd";
+  char program[] = "bmdg";
   char listen[] = "--grpc-listen";
   char endpoint[] = "127.0.0.1:50051";
   char help[] = "--help";

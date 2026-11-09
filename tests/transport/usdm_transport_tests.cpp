@@ -124,7 +124,7 @@ void event_profile_is_closed_depth_only_publication() {
   transport::UsdMTransportOptions options;
   options.normalized_event_sink =
       [](std::shared_ptr<const protocol::NormalizedMarketEvent>, std::uint64_t
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
          ,
          binance_market_data::gateway::performance::TraceToken
 #endif

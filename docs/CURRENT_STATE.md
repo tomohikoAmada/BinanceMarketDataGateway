@@ -1,6 +1,6 @@
-# Current Gateway state
+# Current BMDG state
 
-Updated: 2026-11-09. Source tree reorganized by domain; historical G0-G11 /
+Updated: 2026-11-10. Source tree reorganized by domain and renamed BMDG; historical G0-G11 /
 G12-A/B/C records archived. Current v0.4 G3-a and G3-b offline work is complete
 and merged; G3-c remains open.
 
@@ -9,7 +9,10 @@ HISTORICAL_G0_G11=COMPLETE_ARCHIVED
 V04_G3A=COMPLETE_OFFLINE_VERIFIED_REVIEWED_CI_PASSED
 V04_G3B=COMPLETE_OFFLINE_VERIFIED_REVIEWED_CI_PASSED_MERGED
 V04_G3C=OPEN
-PRODUCTION_DAEMON=bmd-gatewayd
+PRODUCTION_DAEMON=bmdg
+BINARY_COMPAT=bmd-gatewayd_symlink
+CMAKE_OPTIONS=BMDG_*
+CMAKE_OPTION_COMPAT=BMD_GATEWAY_*_ALIAS
 PRODUCTION_CONFIG=--config PATH
 CONFIGURED_PRODUCT_COUNT=1..20
 GLOBAL_TRACKED_STREAMING_CONTEXT_LIMIT=48
@@ -23,11 +26,14 @@ TEST_BASELINE=RELEASE_27/27_WERROR_27/27_ASAN_UBSAN_27/27_TSAN_27/27_PERF_28/28_
 PERFORMANCE_AND_RESOURCE_BUDGETS=NOT_ESTABLISHED
 MULTI_PRODUCT_PRODUCTION_CAPACITY=NOT_ESTABLISHED
 PROJECTION_P2=CONDITIONAL
+DATA_PARITY_SPOT=ALIGNED
+DATA_PARITY_USDM=GAP_BOOKTICKER_AGGTRADE_MARKPRICE_LIQUIDATION
+DATA_PARITY_REST_SIDE_DATA=GAP_OR_RESEARCH_ONLY
 ```
 
 ## Implemented
 
-- `bmd-gatewayd --config PATH`; strict startup JSON, one exchangeInfo fetch per
+- `bmdg --config PATH`; strict startup JSON, one exchangeInfo fetch per
   configured market, exact `MarketKey` precision resolution.
 - 1..20 products; each product has its own transport, owner thread, private
   Projection, event publication and recovery coordinator. One process-wide
@@ -51,7 +57,10 @@ PROJECTION_P2=CONDITIONAL
 ## Verified
 
 - Release production graph, 27/27 tests.
-- Release with `BMD_GATEWAY_WARNINGS_AS_ERRORS=ON`, 27/27 tests.
+- Release with `BMDG_WARNINGS_AS_ERRORS=ON`, 27/27 tests.
+- Debug ASan+UBSan production graph, 27/27 tests.
+- Debug TSan production graph, 27/27 tests.
+- Release with performance instrumentation, 28/28 tests.
 - Foundation-only build, 1/1 test.
 - G3-a offline: 20 keys accepted / 21 rejected; 40 baseline streams; 48
   contexts accepted, 49th `RESOURCE_EXHAUSTED`, cancel/reuse; all-product
@@ -66,6 +75,9 @@ PROJECTION_P2=CONDITIONAL
 
 - **G3-c**: shared VPS, real Binance network, Recorder co-load, target
   hardware, API budget in production and resource budgets.
+- **BMDG/BMDR data parity**: Spot is aligned; USD-M bookTicker/aggTrade/
+  markPrice/forceOrder and REST side data are not yet live-provided. See
+  [DATA_PARITY](DATA_PARITY.md).
 - No approved multi-product performance/SLA budget. Twenty products is a
   resource bound, not measured production capacity.
 - Projection P2 (partial transactional update instead of full-book copy) stays

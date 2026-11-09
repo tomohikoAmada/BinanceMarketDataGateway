@@ -18,14 +18,14 @@ public:
       runtime::MarketRuntime &runtime, const runtime::RuntimeClock &clock,
       std::uint64_t generation, std::string exact_symbol,
       publication::EventPublication &publication
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
 #endif
       )
       : transport_{runtime, clock, std::move(exact_symbol), generation,
                    make_options(publication
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                 ,
                                 std::move(performance_baseline)
 #endif
@@ -45,7 +45,7 @@ public:
 private:
   [[nodiscard]] static transport::SpotTransportOptions make_options(
       publication::EventPublication &publication
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
 #endif
@@ -56,13 +56,13 @@ private:
         [&publication](
             std::shared_ptr<const protocol::NormalizedMarketEvent> event,
             std::uint64_t generation
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
             ,
             performance::TraceToken trace
 #endif
         ) {
           return publication.publish(event, generation
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                      ,
                                      trace
 #endif
@@ -71,7 +71,7 @@ private:
                      ? transport::NormalizedEventSinkResult::InvariantFailure
                      : transport::NormalizedEventSinkResult::Continue;
         };
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     options.performance_baseline = std::move(performance_baseline);
 #endif
     return options;
@@ -86,14 +86,14 @@ public:
       runtime::MarketRuntime &runtime, const runtime::RuntimeClock &clock,
       std::uint64_t generation, std::string exact_symbol,
       publication::EventPublication &publication
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
 #endif
       )
       : transport_{runtime, clock, std::move(exact_symbol), generation,
                    make_options(publication
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                 ,
                                 std::move(performance_baseline)
 #endif
@@ -113,7 +113,7 @@ public:
 private:
   [[nodiscard]] static UsdMTransportOptions make_options(
       publication::EventPublication &publication
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
 #endif
@@ -123,13 +123,13 @@ private:
         [&publication](
             std::shared_ptr<const protocol::NormalizedMarketEvent> event,
             std::uint64_t generation
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
             ,
             performance::TraceToken trace
 #endif
         ) {
           return publication.publish(event, generation
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                      ,
                                      trace
 #endif
@@ -138,7 +138,7 @@ private:
                      ? transport::NormalizedEventSinkResult::InvariantFailure
                      : transport::NormalizedEventSinkResult::Continue;
         };
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     options.performance_baseline = std::move(performance_baseline);
 #endif
     return options;
@@ -177,14 +177,14 @@ private:
 
 [[nodiscard]] recovery::RecoveryCoordinatorOptions coordinator_options(
     MarketKey key, publication::EventPublication &publication
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     ,
     std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
 #endif
 ) {
   recovery::RecoveryCoordinatorOptions options;
   options.attempt_factory = [key = std::move(key), &publication
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                              ,
                              performance_baseline
 #endif
@@ -194,7 +194,7 @@ private:
     if (key.market == common_wire::MARKET_SPOT) {
       return std::make_unique<SpotProductAttempt>(runtime, clock, generation,
                                                   key.symbol, publication
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                                   ,
                                                   performance_baseline
 #endif
@@ -202,7 +202,7 @@ private:
     }
     return std::make_unique<UsdMProductAttempt>(runtime, clock, generation,
                                                 key.symbol, publication
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                                 ,
                                                 performance_baseline
 #endif
@@ -235,7 +235,7 @@ private:
   return options;
 }
 
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
 [[nodiscard]] performance::Product measurement_product(const MarketKey &key) {
   return key.market == common_wire::MARKET_SPOT
              ? performance::Product::Spot
@@ -311,7 +311,7 @@ ProductRuntime::ProductRuntime(MarketKey key, core::NumericSpec numeric_spec,
                                runtime::RuntimeClock clock,
                                std::string gateway_instance_id,
                                ProductRuntimeOptions options)
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     : key_{validate_product_key(std::move(key))},
       performance_baseline_{make_performance_baseline(
           key_, clock, options.performance_baseline_limits)},
@@ -378,7 +378,7 @@ publication::EventPublication &ProductRuntime::event_publication() noexcept {
   return event_publication_;
 }
 
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
 const performance::ProductTraceBuffer &
 ProductRuntime::performance_baseline() const noexcept {
   return *performance_baseline_;
@@ -547,7 +547,7 @@ const MarketRuntimeRegistry &TwoProductRuntime::registry() const noexcept {
   return products_.registry();
 }
 
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
 void TwoProductRuntime::write_performance_baseline(std::ostream &output) const {
   if (products_.size() != 2U) {
     return;

@@ -2,13 +2,13 @@
 
 #include "publication/order_book_publication.hpp"
 #include "runtime/market_runtime.hpp"
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
 #include "publication/event_publication.hpp"
 #endif
-#if defined(BMD_GATEWAY_G10_ENABLED)
+#if defined(BMDG_G10_ENABLED)
 #include "status/gateway_status.hpp"
 #endif
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
 #include "composition/market_registry.hpp"
 #endif
 
@@ -70,13 +70,13 @@ enum class RequestValidationError : std::uint8_t {
 using RequestValidationResult =
     std::variant<ValidatedOrderBookSubscription, RequestValidationError>;
 
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
 using EventRequestValidationResult =
     std::variant<publication::ValidatedEventSubscription,
                  RequestValidationError>;
 #endif
 
-#if defined(BMD_GATEWAY_G10_ENABLED)
+#if defined(BMDG_G10_ENABLED)
 [[nodiscard]] bool validate_gateway_status_request(
     const gateway_wire::GatewayStatusRequest &request) noexcept;
 #endif
@@ -84,7 +84,7 @@ using EventRequestValidationResult =
 [[nodiscard]] RequestValidationResult validate_order_book_request(
     const gateway_wire::OrderBookSubscriptionRequest &request,
     const std::string &gateway_instance_id);
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
 [[nodiscard]] RequestValidationResult validate_g11_order_book_request(
     const gateway_wire::OrderBookSubscriptionRequest &request,
     const std::string &gateway_instance_id);
@@ -93,18 +93,18 @@ using EventRequestValidationResult =
 [[nodiscard]] gateway_wire::OrderBookStreamItem
 materialize_stream_item(const SubscriberChannel &channel,
                         const PeekedPublication &publication);
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
 [[nodiscard]] gateway_wire::OrderBookStreamItem
 materialize_stream_item(const SubscriberChannel &channel,
                         const PeekedPublication &publication,
                         const runtime::MarketKey &market_key);
 #endif
 
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
 [[nodiscard]] EventRequestValidationResult
 validate_event_request(const gateway_wire::EventSubscriptionRequest &request,
                        const std::string &gateway_instance_id);
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
 [[nodiscard]] EventRequestValidationResult validate_g11_event_request(
     const gateway_wire::EventSubscriptionRequest &request,
     const std::string &gateway_instance_id);
@@ -113,7 +113,7 @@ validate_event_request(const gateway_wire::EventSubscriptionRequest &request,
 [[nodiscard]] gateway_wire::GatewayEventEnvelope materialize_event_envelope(
     const publication::EventSubscriberChannel &channel,
     const publication::PeekedEventPublication &publication);
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
 [[nodiscard]] gateway_wire::GatewayEventEnvelope materialize_event_envelope(
     const publication::EventSubscriberChannel &channel,
     const publication::PeekedEventPublication &publication,
@@ -121,10 +121,10 @@ validate_event_request(const gateway_wire::EventSubscriptionRequest &request,
 #endif
 #endif
 
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
 // One process-wide G11/G12 streaming-context bound, independent of products.
 inline constexpr std::size_t kMaximumGrpcTrackedContexts = 48U;
-#elif defined(BMD_GATEWAY_G9_ENABLED)
+#elif defined(BMDG_G9_ENABLED)
 inline constexpr std::size_t kMaximumGrpcTrackedContexts =
     kMaximumActiveSubscriptions + kPendingAdmissionCapacity +
     publication::kMaximumActiveEventSubscriptions;
@@ -142,7 +142,7 @@ struct GrpcServiceOptions final {
           bool(::grpc::ServerWriter<gateway_wire::OrderBookStreamItem> &,
                const gateway_wire::OrderBookStreamItem &)>
           writer = {}
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
       ,
       std::function<
           bool(::grpc::ServerWriter<gateway_wire::GatewayEventEnvelope> &,
@@ -153,7 +153,7 @@ struct GrpcServiceOptions final {
       : idle_cancellation_check_interval{idle_interval},
         maximum_tracked_contexts{tracked_context_limit},
         write_override{std::move(writer)}
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
         ,
         event_write_override{std::move(event_writer)}
 #endif
@@ -168,7 +168,7 @@ struct GrpcServiceOptions final {
   std::function<bool(::grpc::ServerWriter<gateway_wire::OrderBookStreamItem> &,
                      const gateway_wire::OrderBookStreamItem &)>
       write_override;
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
   std::function<bool(::grpc::ServerWriter<gateway_wire::GatewayEventEnvelope> &,
                      const gateway_wire::GatewayEventEnvelope &)>
       event_write_override;
@@ -189,7 +189,7 @@ public:
   OrderBookGrpcService(runtime::MarketRuntime &runtime,
                        std::string gateway_instance_id,
                        GrpcServiceOptions options = {});
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
   OrderBookGrpcService(runtime::MarketRuntime &runtime,
                        publication::EventPublication &event_publication,
                        std::string gateway_instance_id,
@@ -202,7 +202,7 @@ public:
                       *writer) override;
 #endif
 
-#if defined(BMD_GATEWAY_G10_ENABLED)
+#if defined(BMDG_G10_ENABLED)
   OrderBookGrpcService(runtime::MarketRuntime &runtime,
                        recovery::SpotRecovery &recovery,
                        publication::EventPublication &event_publication,
@@ -219,7 +219,7 @@ public:
   void clear_status_start() noexcept;
   [[nodiscard]] bool status_inflight() const noexcept;
 #endif
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
   OrderBookGrpcService(const runtime::MarketRuntimeRegistry &registry,
                        runtime::RuntimeClock clock,
                        std::string gateway_instance_id,
@@ -252,7 +252,7 @@ private:
     bool selected_for_try_cancel{false};
   };
 
-#if defined(BMD_GATEWAY_G10_ENABLED)
+#if defined(BMDG_G10_ENABLED)
   class StatusSlotGuard;
   void release_status_slot() noexcept;
 #endif
@@ -265,15 +265,15 @@ private:
   map_admission_error(runtime::SubscriptionAdmissionError error) const;
 
   runtime::MarketRuntime *runtime_{nullptr};
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
   publication::EventPublication *event_publication_{nullptr};
 #endif
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
   const runtime::MarketRuntimeRegistry *market_registry_{nullptr};
 #endif
   const std::string gateway_instance_id_;
   const GrpcServiceOptions options_;
-#if defined(BMD_GATEWAY_G10_ENABLED)
+#if defined(BMDG_G10_ENABLED)
   std::unique_ptr<status::GatewayStatusAssembler> status_assembler_;
   bool status_inflight_{false};
   std::stop_source status_stop_;
@@ -294,13 +294,13 @@ public:
   OrderBookGrpcServer(runtime::MarketRuntime &runtime,
                       std::string gateway_instance_id,
                       GrpcServiceOptions options = {});
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
   OrderBookGrpcServer(runtime::MarketRuntime &runtime,
                       publication::EventPublication &event_publication,
                       std::string gateway_instance_id,
                       GrpcServiceOptions options = {});
 #endif
-#if defined(BMD_GATEWAY_G10_ENABLED)
+#if defined(BMDG_G10_ENABLED)
   OrderBookGrpcServer(runtime::MarketRuntime &runtime,
                       recovery::SpotRecovery &recovery,
                       publication::EventPublication &event_publication,
@@ -308,7 +308,7 @@ public:
                       std::string gateway_instance_id,
                       GrpcServiceOptions options = {});
 #endif
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
   OrderBookGrpcServer(const runtime::MarketRuntimeRegistry &registry,
                       runtime::RuntimeClock clock,
                       std::string gateway_instance_id,

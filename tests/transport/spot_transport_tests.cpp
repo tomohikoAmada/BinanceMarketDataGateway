@@ -489,7 +489,7 @@ int main() {
   combined_options.profile = transport::SpotTransportProfile::G9CombinedEvents;
   combined_options.normalized_event_sink =
       [](std::shared_ptr<const protocol::NormalizedSpotEvent>, std::uint64_t
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
          ,
          binance_market_data::gateway::performance::TraceToken
 #endif

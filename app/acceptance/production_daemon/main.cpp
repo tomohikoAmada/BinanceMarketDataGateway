@@ -808,7 +808,7 @@ int main(int argc, char **argv) {
   } catch (const std::exception &error) {
     std::cerr << "REAL_PRODUCTION_DAEMON_ACCEPTANCE=FAIL reason="
               << one_line(error.what()) << '\n'
-              << "Usage: bmd-gateway-production-acceptance-client "
+              << "Usage: bmdg-production-acceptance-client "
                  "--daemon PATH --config PATH --grpc-target HOST:PORT\n";
     return EXIT_FAILURE;
   }

@@ -120,7 +120,7 @@ void populate_delivery_metadata(
   }
 }
 
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
 void populate_event_delivery_metadata(
     gateway_wire::GatewayEventEnvelope &item,
     const publication::EventSubscriberChannel &channel,
@@ -193,7 +193,7 @@ required_event_schema(common_wire::Stream stream) noexcept {
           : std::nullopt};
 }
 
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
 [[nodiscard]] EventRequestValidationResult validate_event_request_impl(
     const gateway_wire::EventSubscriptionRequest &request,
     const std::string &gateway_instance_id, bool allow_usdm,
@@ -231,7 +231,7 @@ required_event_schema(common_wire::Stream stream) noexcept {
 
 } // namespace
 
-#if defined(BMD_GATEWAY_G10_ENABLED)
+#if defined(BMDG_G10_ENABLED)
 bool validate_gateway_status_request(
     const gateway_wire::GatewayStatusRequest &request) noexcept {
   return identifier_safe(request.request_id()) &&
@@ -246,7 +246,7 @@ RequestValidationResult validate_order_book_request(
                                           true);
 }
 
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
 RequestValidationResult validate_g11_order_book_request(
     const gateway_wire::OrderBookSubscriptionRequest &request,
     const std::string &gateway_instance_id) {
@@ -313,7 +313,7 @@ materialize_stream_item(const SubscriberChannel &channel,
                                      common_wire::MARKET_SPOT, "BTCUSDT");
 }
 
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
 gateway_wire::OrderBookStreamItem
 materialize_stream_item(const SubscriberChannel &channel,
                         const PeekedPublication &publication,
@@ -323,14 +323,14 @@ materialize_stream_item(const SubscriberChannel &channel,
 }
 #endif
 
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
 EventRequestValidationResult
 validate_event_request(const gateway_wire::EventSubscriptionRequest &request,
                        const std::string &gateway_instance_id) {
   return validate_event_request_impl(request, gateway_instance_id, false, true);
 }
 
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
 EventRequestValidationResult validate_g11_event_request(
     const gateway_wire::EventSubscriptionRequest &request,
     const std::string &gateway_instance_id) {
@@ -404,7 +404,7 @@ gateway_wire::GatewayEventEnvelope materialize_event_envelope(
                                         common_wire::MARKET_SPOT, "BTCUSDT");
 }
 
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
 gateway_wire::GatewayEventEnvelope materialize_event_envelope(
     const publication::EventSubscriberChannel &channel,
     const publication::PeekedEventPublication &publication,
@@ -434,7 +434,7 @@ OrderBookGrpcService::OrderBookGrpcService(runtime::MarketRuntime &runtime,
   contexts_.reserve(options_.maximum_tracked_contexts);
 }
 
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
 OrderBookGrpcService::OrderBookGrpcService(
     const runtime::MarketRuntimeRegistry &registry, runtime::RuntimeClock clock,
     std::string gateway_instance_id, GrpcServiceOptions options)
@@ -462,7 +462,7 @@ OrderBookGrpcService::OrderBookGrpcService(
 }
 #endif
 
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
 OrderBookGrpcService::OrderBookGrpcService(
     runtime::MarketRuntime &runtime,
     publication::EventPublication &event_publication,
@@ -477,7 +477,7 @@ OrderBookGrpcService::OrderBookGrpcService(
 }
 #endif
 
-#if defined(BMD_GATEWAY_G10_ENABLED)
+#if defined(BMDG_G10_ENABLED)
 class OrderBookGrpcService::StatusSlotGuard final {
 public:
   explicit StatusSlotGuard(OrderBookGrpcService &service) noexcept
@@ -635,7 +635,7 @@ void OrderBookGrpcService::release_status_slot() noexcept {
   };
 
   const auto validated =
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
       market_registry_ != nullptr
           ? validate_g11_order_book_request(*request, gateway_instance_id_)
           : validate_order_book_request(*request, gateway_instance_id_);
@@ -653,7 +653,7 @@ void OrderBookGrpcService::release_status_slot() noexcept {
   }
 
   auto *selected_runtime = runtime_;
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
   const runtime::MarketServices *selected_services = nullptr;
   if (market_registry_ != nullptr) {
     selected_services = market_registry_->find(
@@ -706,7 +706,7 @@ void OrderBookGrpcService::release_status_slot() noexcept {
 
     gateway_wire::OrderBookStreamItem item;
     try {
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
       item = selected_services != nullptr
                  ? materialize_stream_item(*channel, publication,
                                            selected_services->key)
@@ -719,7 +719,7 @@ void OrderBookGrpcService::release_status_slot() noexcept {
                        "failed to materialize order-book stream item"});
     }
     bool write_succeeded = false;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     if (publication.delivery.valid()) {
       publication.delivery.owner->record_write_begin(publication.delivery);
     }
@@ -732,7 +732,7 @@ void OrderBookGrpcService::release_status_slot() noexcept {
       return finalize(
           {::grpc::StatusCode::INTERNAL, "subscriber writer test seam failed"});
     }
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     if (write_succeeded && publication.delivery.valid()) {
       publication.delivery.owner->record_t5(publication.delivery);
     }
@@ -757,7 +757,7 @@ void OrderBookGrpcService::release_status_slot() noexcept {
   }
 }
 
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
 ::grpc::Status OrderBookGrpcService::SubscribeEvents(
     ::grpc::ServerContext *context,
     const gateway_wire::EventSubscriptionRequest *request,
@@ -793,7 +793,7 @@ void OrderBookGrpcService::release_status_slot() noexcept {
   };
 
   const auto validated =
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
       market_registry_ != nullptr
           ? validate_g11_event_request(*request, gateway_instance_id_)
           : validate_event_request(*request, gateway_instance_id_);
@@ -810,7 +810,7 @@ void OrderBookGrpcService::release_status_slot() noexcept {
   }
 
   auto *selected_event_publication = event_publication_;
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
   const runtime::MarketServices *selected_services = nullptr;
   const auto &selector = request->selectors(0);
   if (market_registry_ != nullptr) {
@@ -884,7 +884,7 @@ void OrderBookGrpcService::release_status_slot() noexcept {
 
     gateway_wire::GatewayEventEnvelope item;
     try {
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
       item = selected_services != nullptr
                  ? materialize_event_envelope(*channel, publication,
                                               selected_services->key)
@@ -897,7 +897,7 @@ void OrderBookGrpcService::release_status_slot() noexcept {
                        "failed to materialize event stream item"});
     }
     bool write_succeeded = false;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     if (publication.delivery.valid()) {
       publication.delivery.owner->record_write_begin(publication.delivery);
     }
@@ -910,7 +910,7 @@ void OrderBookGrpcService::release_status_slot() noexcept {
       return finalize({::grpc::StatusCode::INTERNAL,
                        "event subscriber writer test seam failed"});
     }
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     if (write_succeeded && publication.delivery.valid()) {
       publication.delivery.owner->record_t5(publication.delivery);
     }
@@ -943,11 +943,11 @@ void OrderBookGrpcService::begin_shutdown() noexcept {
     admission_open_ = false;
   }
 
-#if defined(BMD_GATEWAY_G10_ENABLED)
+#if defined(BMDG_G10_ENABLED)
   status_stop_.request_stop();
 #endif
 
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
   if (market_registry_ != nullptr) {
     for (const auto &entry : market_registry_->entries()) {
       entry.runtime->close_publication_admission();
@@ -965,7 +965,7 @@ void OrderBookGrpcService::begin_shutdown() noexcept {
       runtime_->close_publication_admission();
       static_cast<void>(runtime_->shutdown_publication());
     }
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
     if (event_publication_ != nullptr) {
       event_publication_->shutdown();
     }
@@ -1102,7 +1102,7 @@ OrderBookGrpcServer::OrderBookGrpcServer(runtime::MarketRuntime &runtime,
                                          GrpcServiceOptions options)
     : service_{runtime, std::move(gateway_instance_id), options} {}
 
-#if defined(BMD_GATEWAY_G9_ENABLED)
+#if defined(BMDG_G9_ENABLED)
 OrderBookGrpcServer::OrderBookGrpcServer(
     runtime::MarketRuntime &runtime,
     publication::EventPublication &event_publication,
@@ -1111,7 +1111,7 @@ OrderBookGrpcServer::OrderBookGrpcServer(
                std::move(options)} {}
 #endif
 
-#if defined(BMD_GATEWAY_G10_ENABLED)
+#if defined(BMDG_G10_ENABLED)
 OrderBookGrpcServer::OrderBookGrpcServer(
     runtime::MarketRuntime &runtime, recovery::SpotRecovery &recovery,
     publication::EventPublication &event_publication,
@@ -1125,7 +1125,7 @@ OrderBookGrpcServer::OrderBookGrpcServer(
                std::move(options)} {}
 #endif
 
-#if defined(BMD_GATEWAY_G11_ENABLED)
+#if defined(BMDG_G11_ENABLED)
 OrderBookGrpcServer::OrderBookGrpcServer(
     const runtime::MarketRuntimeRegistry &registry, runtime::RuntimeClock clock,
     std::string gateway_instance_id, GrpcServiceOptions options)
@@ -1144,7 +1144,7 @@ bool OrderBookGrpcServer::start(const std::string &listen_address) {
   builder.AddListeningPort(listen_address, ::grpc::InsecureServerCredentials(),
                            &selected_port_);
   builder.RegisterService(&service_);
-#if defined(BMD_GATEWAY_G10_ENABLED)
+#if defined(BMDG_G10_ENABLED)
   if (!service_.prepare_status_start()) {
     return false;
   }
@@ -1183,7 +1183,7 @@ void OrderBookGrpcServer::shutdown() noexcept {
     server_.reset();
   }
   assert(service_.tracked_context_count() == 0U);
-#if defined(BMD_GATEWAY_G10_ENABLED)
+#if defined(BMDG_G10_ENABLED)
   assert(!service_.status_inflight());
 #endif
 }

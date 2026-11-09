@@ -84,7 +84,7 @@ cmake "${cmake_args[@]}" >"$configure_log" 2>&1 || {
 cmake --build "$cmake_build" --parallel
 ctest --test-dir "$cmake_build" --output-on-failure
 
-"$cmake_build/bmd_gateway_upstream_link_smoke"
+"$cmake_build/bmdg_upstream_link_smoke"
 
 message_symbol='ExchangeDepthSnapshotD0Ev$'
 message_owner_count="$(nm -g "$contracts_prefix/lib/libbinance_market_data_contracts_protobuf.a" 2>/dev/null \
@@ -93,7 +93,7 @@ message_owner_count="$(nm -g "$contracts_prefix/lib/libbinance_market_data_contr
 grpc_owner_count="$(nm -g "$grpc_prefix/lib/libbinance_market_data_contracts_grpc.a" 2>/dev/null \
     | awk '$2 ~ /^[TDBS]$/ {print $0}' \
     | grep -Ec "$message_symbol" || true)"
-binary_owner_count="$(nm -g "$cmake_build/bmd_gateway_upstream_link_smoke" 2>/dev/null \
+binary_owner_count="$(nm -g "$cmake_build/bmdg_upstream_link_smoke" 2>/dev/null \
     | awk '$2 ~ /^[TDBS]$/ {print $0}' \
     | grep -Ec "$message_symbol" || true)"
 if [[ "$message_owner_count" != "1" || "$grpc_owner_count" != "0" || "$binary_owner_count" != "1" ]]; then

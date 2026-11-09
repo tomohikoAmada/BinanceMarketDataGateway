@@ -40,7 +40,7 @@ struct ProductRuntimeOptions final {
   recovery::PlannedRotationPolicy planned_rotation{
       recovery::production_policy()};
   recovery::detail::RecoveryTestOptions recovery_test;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   performance::PerformanceBaselineLimits performance_baseline_limits{};
 #endif
 };
@@ -80,14 +80,14 @@ public:
   [[nodiscard]] runtime::MarketRuntime &runtime() noexcept;
   [[nodiscard]] recovery::RecoveryCoordinator &recovery() noexcept;
   [[nodiscard]] publication::EventPublication &event_publication() noexcept;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   [[nodiscard]] const performance::ProductTraceBuffer &
   performance_baseline() const noexcept;
 #endif
 
 private:
   const MarketKey key_;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   std::shared_ptr<performance::ProductTraceBuffer> performance_baseline_;
 #endif
   runtime::MarketRuntime runtime_;
@@ -181,7 +181,7 @@ public:
   [[nodiscard]] ProductRuntime &spot() noexcept;
   [[nodiscard]] ProductRuntime &usdm() noexcept;
   [[nodiscard]] const MarketRuntimeRegistry &registry() const noexcept;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   void write_performance_baseline(std::ostream &output) const;
 #endif
 
