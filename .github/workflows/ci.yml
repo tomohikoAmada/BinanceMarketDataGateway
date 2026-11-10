@@ -103,11 +103,18 @@ jobs:
       CONAN_HOME: ${{ github.workspace }}/.cache/production-conan
       CC: gcc-13
       CXX: g++-13
+      BMDG_UPSTREAM_TOKEN: ${{ secrets.BMDG_UPSTREAM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Authenticate private upstream reads
+        if: env.BMDG_UPSTREAM_TOKEN != ''
+        run: |
+          git config --global \
+            url."https://x-access-token:${BMDG_UPSTREAM_TOKEN}@github.com/tomohikoAmada/BinanceMarketDataContracts.git".insteadOf \
+            "https://github.com/tomohikoAmada/BinanceMarketDataContracts.git"
       - run: python -m pip install 'conan==2.31.2' 'protobuf==6.33.5' 'pytest==8.4.2'
       - uses: actions/cache/restore@v4
         id: binaries
