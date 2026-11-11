@@ -3,7 +3,9 @@
 These files are historical records. They are kept for traceability only and
 are **not** current design, build or acceptance guidance. Many of them still
 reference the old `src/g1`, `src/g2`, ... layout, old CMake options, or
-superseded milestone numbering. Do not follow them for new work.
+superseded milestone numbering. Some also contain plans that were later
+rejected as over-designed or claims that have since changed. Do not follow them
+for new work. Current facts live in the documents linked below and in Git/PRs.
 
 Current documents:
 
