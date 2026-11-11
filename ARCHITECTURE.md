@@ -173,10 +173,12 @@ P1 evidence (offline, Apple M3, includes fixture/clients) for 20 keys:
 | deep (~820 updates/s) | 1.192 | ~41 MiB | deep books, high rate |
 | batch (~820 updates/s) | 1.242 | ~53 MiB | triple batch |
 
-Checked apply is 95%+ of owner update wall time. At D1000 it is about 592 µs
-and 2023 allocations/update; at D5000 about 1018 µs and 10029 allocations/update.
-The dominant hotspot is the pinned Projection `apply_transaction` full-book
-copy/rebuild. P2 remains conditional on a measured shared-host budget.
+Checked apply was 95%+ of owner update wall time in the pre-optimization P1
+measurement: at D1000 about 592 µs and 2023 allocations/update; at D5000 about
+1018 µs and 10029 allocations/update. Projection M-P2.A has since removed the
+full-book copy: accepted apply is in place, and D5000 existing-price updates
+measured zero allocations. M-P2.B/C are also complete. The P1 numbers remain
+valid as pre-optimization evidence; target-VPS budgets must be re-measured.
 
 BMDG-side candidates (measure before/after, do not assume):
 

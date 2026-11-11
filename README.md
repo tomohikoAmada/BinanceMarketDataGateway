@@ -15,8 +15,10 @@ BMDG does not store history and does not depend on Recorder.
 - **G3-c is open**: shared VPS, real-network, Recorder co-load and resource
   budgets are not yet accepted. Twenty products are a resource bound, not a
   measured production capacity.
-- Performance budgets are not established. The dominant measured cost is the
-  pinned Projection full-book transaction copy, not BMDG queues.
+- Performance budgets are not established. Projection M-P2.A/B/C are complete:
+  accepted apply no longer copies the full book and the adapter fast path is in
+  place. The earlier P1 attribution is pre-optimization evidence, not a current
+  hotspot claim.
 
 See [current state](docs/CURRENT_STATE.md), [milestones](docs/MILESTONES.md),
 [evidence](docs/EVIDENCE.md) and [architecture](ARCHITECTURE.md).

@@ -70,7 +70,7 @@ This is the current evidence index. Full historical records are in
   overlap, and a full 300 s quiet interval after restart/replacement.
 - Full record: [archive/GATEWAY_G3B_SHARED_API_EVIDENCE.md](archive/GATEWAY_G3B_SHARED_API_EVIDENCE.md).
 
-## Projection P1 — measured cost
+## Projection P1 — pre-optimization measured cost
 
 Offline, Apple M3, eight cores, 24 GiB; whole-process CPU/RSS include embedded
 fixtures/clients. Not a VPS or SLA result.
@@ -87,8 +87,10 @@ fixtures/clients. Not a VPS or SLA result.
 - Checked apply means: ~592 / ~1018 / ~991 µs per update.
 - Projection allocations: ~2023 / 161 KB per update at D1000; ~10029 / 1 MB at
   D5000 (existing-price B1/B10/B100).
-- Full-book `apply_transaction` copy/rebuild is the dominant hotspot. P2
-  remains conditional on a measured shared-host budget.
+- P1 attributed the dominant cost to full-book `apply_transaction` copy/rebuild.
+  That is pre-optimization evidence: Projection M-P2.A/B/C are now complete,
+  accepted apply is in place, and D5000 existing-price updates measured zero
+  allocations. Target-VPS costs remain unmeasured.
 - Tail variability is retained; the largest observed Book maximum was 102.4 ms
   in one deep run. No latency SLA is claimed.
 - Four-product P1 (2026-10-18): 0.057 / 0.925 / 0.983 cores and ~18.5 / ~28 /

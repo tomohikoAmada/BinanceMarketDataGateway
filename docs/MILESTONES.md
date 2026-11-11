@@ -72,9 +72,10 @@ archived; the v0.3/v0.4 G0-G3 labels do not reopen that history.
 - Measure Recorder + BMDG on the same VPS with the shared API budget.
 - Verify real-network TLS/CA, DNS/proxy, restart quiet window and 429/418
   behavior.
-- Projection full-book `apply_transaction` remains the dominant measured
-  hotspot. P2 (partial transactional update) is conditional on the target
-  budget; until then depth limit and product count are the main mitigations.
+- Projection M-P2.A/B/C are complete: accepted apply is in place and the
+  adapter fast path is implemented. P1's full-book-copy attribution is
+  pre-optimization evidence. Re-measure the complete BMDG path on the target
+  VPS in G3-c before claiming new CPU/RSS budgets.
 - BMDG/BMDR data parity: Spot streams are aligned; USD-M
   bookTicker/aggTrade/markPrice/forceOrder are Phase 1 gaps. REST side data
   (OI, long/short, taker) is explicitly research-only for Live Contract v1.

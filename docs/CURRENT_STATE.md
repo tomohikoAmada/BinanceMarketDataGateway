@@ -26,7 +26,7 @@ SOURCE_LAYOUT=DOMAIN_BASED
 TEST_BASELINE=RELEASE_27/27_WERROR_27/27_ASAN_UBSAN_27/27_TSAN_27/27_PERF_28/28_FOUNDATION_1/1
 PERFORMANCE_AND_RESOURCE_BUDGETS=NOT_ESTABLISHED
 MULTI_PRODUCT_PRODUCTION_CAPACITY=NOT_ESTABLISHED
-PROJECTION_P2=CONDITIONAL
+PROJECTION_M_P2_A_B_C=COMPLETE
 DATA_PARITY_SPOT=ALIGNED
 DATA_PARITY_USDM=GAP_BOOKTICKER_AGGTRADE_MARKPRICE_LIQUIDATION
 DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
@@ -74,9 +74,11 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
 - M-G1.A: Release production graph 27/27 and format check pass; `"0.0"` and
   `l < f` rejection cases pass; 10 Spot + 10 USD-M startup metadata batch
   resolves all 20 products from one decode per market.
-- P1: 20-key normal/deep/batch CPU means 0.115 / 1.192 / 1.242 cores on the
-  local M3, including fixtures/clients; checked apply is the dominant owner
-  cost; full-book Projection copy is the main hotspot.
+- P1 (pre-optimization): 20-key normal/deep/batch CPU means 0.115 / 1.192 /
+  1.242 cores on the local M3, including fixtures/clients; checked apply was
+  the dominant owner cost. Projection M-P2.A/B/C now replace the full-book copy
+  with in-place accepted apply and the trusted adapter path; target-VPS costs
+  still require G3-c measurement.
 
 ## Open
 
@@ -87,8 +89,6 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
   [DATA_PARITY](DATA_PARITY.md).
 - No approved multi-product performance/SLA budget. Twenty products is a
   resource bound, not measured production capacity.
-- Projection P2 (partial transactional update instead of full-book copy) stays
-  conditional on measured target/shared-host budgets.
 - Real-network TLS/CA, DNS/proxy and deployment behavior remain to be verified
   on the target VPS.
 

@@ -63,14 +63,18 @@ result.
 - Checked apply means: ~592 / ~1018 / ~991 µs per update.
 - Projection allocations: ~2023 / 161 KB per update at D1000; ~10029 / 1 MB at
   D5000.
-- Full-book Projection `apply_transaction` copy/rebuild is the dominant hotspot.
+- P1 attributed the dominant cost to full-book Projection `apply_transaction`
+  copy/rebuild. Projection M-P2.A/B/C have since replaced it with in-place
+  accepted apply and the trusted adapter path; these P1 numbers are
+  pre-optimization evidence.
 - Largest observed Book maximum: 102.4 ms in one deep run; tail variability is
   retained and no SLA is claimed.
 - Four-product P1: 0.057 / 0.925 / 0.983 cores and ~18.5 / ~28 / ~33 MiB for
   D1000/B10/10Hz, D5000/B10/100Hz, D5000/B100/100Hz.
 
-P2 optimization stays conditional on a measured shared-host budget. Until then,
-depth limit and product count are the practical mitigations.
+Re-measure the complete BMDG path on the target VPS in G3-c before setting new
+CPU/RSS budgets; do not reuse the pre-optimization attribution as a current
+hotspot.
 
 ## Scope limits
 
