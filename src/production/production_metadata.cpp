@@ -1,7 +1,9 @@
 #include "production/production_metadata.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <optional>
+#include <string_view>
 #include <utility>
 namespace composition = binance_market_data::gateway::composition;
 
@@ -59,9 +61,12 @@ acquire_production_metadata(const std::vector<runtime::MarketKey> &market_keys,
   auto canonical_keys = market_keys;
   std::sort(canonical_keys.begin(), canonical_keys.end(),
             runtime::MarketKeyLess{});
-  ProductionMetadata result;
-  result.products.reserve(canonical_keys.size());
-  for (const auto &key : canonical_keys) {
+  std::vector<std::optional<ResolvedProductSpec>> resolved(
+      canonical_keys.size());
+  std::vector<std::size_t> spot_indices;
+  std::vector<std::size_t> usdm_indices;
+  for (std::size_t index = 0; index < canonical_keys.size(); ++index) {
+    const auto &key = canonical_keys[index];
     if (key.venue != runtime::common_wire::VENUE_BINANCE) {
       return MetadataError{MetadataStage::SpotParse, key,
                            "unsupported configured venue"};
@@ -72,13 +77,7 @@ acquire_production_metadata(const std::vector<runtime::MarketKey> &market_keys,
             MetadataStage::SpotParse, key,
             "Spot symbol cannot be represented by a Binance route"};
       }
-      const auto parsed = protocol::parse_exchange_info(*spot_body, key.symbol);
-      if (const auto *failure = std::get_if<protocol::ProtocolError>(&parsed)) {
-        return MetadataError{MetadataStage::SpotParse, key,
-                             protocol_message(*failure)};
-      }
-      result.products.push_back(
-          {key, std::get<protocol::SpotMetadata>(parsed).numeric_spec});
+      spot_indices.push_back(index);
       continue;
     }
     if (key.market == runtime::common_wire::MARKET_USD_M_PERPETUAL) {
@@ -87,18 +86,71 @@ acquire_production_metadata(const std::vector<runtime::MarketKey> &market_keys,
             MetadataStage::UsdMParse, key,
             "USD-M symbol cannot be represented by a Binance route"};
       }
-      const auto parsed =
-          protocol::parse_usdm_exchange_info(*usdm_body, key.symbol);
-      if (const auto *failure = std::get_if<protocol::ProtocolError>(&parsed)) {
-        return MetadataError{MetadataStage::UsdMParse, key,
-                             protocol_message(*failure)};
-      }
-      result.products.push_back(
-          {key, std::get<protocol::UsdMMetadata>(parsed).numeric_spec});
+      usdm_indices.push_back(index);
       continue;
     }
     return MetadataError{MetadataStage::SpotParse, key,
                          "unsupported configured market"};
+  }
+
+  if (!spot_indices.empty()) {
+    std::vector<std::string_view> requested;
+    requested.reserve(spot_indices.size());
+    for (const auto index : spot_indices) {
+      requested.push_back(canonical_keys[index].symbol);
+    }
+    const auto parsed =
+        protocol::parse_exchange_info_batch(*spot_body, requested);
+    if (const auto *failure = std::get_if<protocol::ProtocolError>(&parsed)) {
+      return MetadataError{MetadataStage::SpotParse,
+                           canonical_keys[spot_indices.front()],
+                           protocol_message(*failure)};
+    }
+    const auto &entries = std::get<protocol::SpotMetadataBatch>(parsed).symbols;
+    for (std::size_t offset = 0; offset < entries.size(); ++offset) {
+      const auto &entry = entries[offset];
+      if (const auto *failure = std::get_if<protocol::ProtocolError>(&entry)) {
+        return MetadataError{MetadataStage::SpotParse,
+                             canonical_keys[spot_indices[offset]],
+                             protocol_message(*failure)};
+      }
+      resolved[spot_indices[offset]] = ResolvedProductSpec{
+          canonical_keys[spot_indices[offset]],
+          std::get<protocol::SpotMetadata>(entry).numeric_spec};
+    }
+  }
+
+  if (!usdm_indices.empty()) {
+    std::vector<std::string_view> requested;
+    requested.reserve(usdm_indices.size());
+    for (const auto index : usdm_indices) {
+      requested.push_back(canonical_keys[index].symbol);
+    }
+    const auto parsed =
+        protocol::parse_usdm_exchange_info_batch(*usdm_body, requested);
+    if (const auto *failure = std::get_if<protocol::ProtocolError>(&parsed)) {
+      return MetadataError{MetadataStage::UsdMParse,
+                           canonical_keys[usdm_indices.front()],
+                           protocol_message(*failure)};
+    }
+    const auto &entries = std::get<protocol::UsdMMetadataBatch>(parsed).symbols;
+    for (std::size_t offset = 0; offset < entries.size(); ++offset) {
+      const auto &entry = entries[offset];
+      if (const auto *failure = std::get_if<protocol::ProtocolError>(&entry)) {
+        return MetadataError{MetadataStage::UsdMParse,
+                             canonical_keys[usdm_indices[offset]],
+                             protocol_message(*failure)};
+      }
+      resolved[usdm_indices[offset]] = ResolvedProductSpec{
+          canonical_keys[usdm_indices[offset]],
+          std::get<protocol::UsdMMetadata>(entry).numeric_spec};
+    }
+  }
+
+  ProductionMetadata result;
+  result.products.reserve(canonical_keys.size());
+  for (auto &product : resolved) {
+    result.products.push_back(std::move(*product));
   }
   return result;
 }

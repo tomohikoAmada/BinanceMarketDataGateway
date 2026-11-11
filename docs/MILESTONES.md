@@ -1,6 +1,6 @@
 # BMDG milestone plan
 
-Updated: 2026-11-10. Current work follows the BinanceMarketData v0.4 overall
+Updated: 2026-11-11. Current work follows the BinanceMarketData v0.4 overall
 and BMDG module plans. Historical G0-G11 / G12-A/B/C remain complete and
 archived; the v0.3/v0.4 G0-G3 labels do not reopen that history.
 
@@ -13,6 +13,9 @@ archived; the v0.3/v0.4 G0-G3 labels do not reopen that history.
 | G2 | Four-product production path and minimal CI | Complete; archived evidence |
 | G3-a | 20-key offline config/routing/startup/recovery, 48 contexts, P1 | Complete, reviewed, merged |
 | G3-b | Shared-IP API budget / BMD-RL-01 offline | Complete, reviewed, merged |
+| M-G1.A | Decimal/aggTrade boundaries; one exchangeInfo decode per market | Complete |
+| M-G1 | Hot-path copy/logging cleanup and single startup parsing | Partly open |
+| M-G2 | Historical macros, duplicate types and boilerplate removal | Partly open |
 | G3-c | Shared VPS, real network, Recorder co-load, resource budget | **Open** |
 
 ## Current design boundaries
@@ -37,6 +40,16 @@ archived; the v0.3/v0.4 G0-G3 labels do not reopen that history.
   unimplemented.
 - Do not label future capacity/performance acceptance complete because
   configurable code exists. Keep Foundation independently buildable.
+
+## M-G1.A completed scope
+
+- `plain_decimal` treats only digits 1-9 as non-zero, so `"0.0"` is rejected
+  wherever a positive decimal is required.
+- Spot aggTrade rejects `last_trade_id < first_trade_id`.
+- Spot and USD-M expose batch exchangeInfo parsers. Production startup decodes
+  one document per market and maps every configured symbol's precision from
+  that single decode. The single-symbol parser delegates to the same batch path.
+- Covered by protocol batch tests and a 10 Spot + 10 USD-M metadata test.
 
 ## Validation policy
 

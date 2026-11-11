@@ -7,9 +7,11 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace binance_market_data::gateway::protocol {
 
@@ -47,6 +49,10 @@ struct ServerShutdown final {
 
 using DecimalScaleResult = std::variant<core::DecimalScale, ProtocolError>;
 using SpotMetadataResult = std::variant<SpotMetadata, ProtocolError>;
+struct SpotMetadataBatch final {
+  std::vector<SpotMetadataResult> symbols;
+};
+using SpotMetadataBatchResult = std::variant<SpotMetadataBatch, ProtocolError>;
 using DepthFrameResult =
     std::variant<market::DepthUpdate, ServerShutdown, ProtocolError>;
 using NormalizedMarketEvent =
@@ -61,6 +67,13 @@ using DepthSnapshotResult =
 decimal_scale_from_quantum(std::string_view quantum);
 
 [[nodiscard]] SpotMetadataResult parse_exchange_info(std::string_view payload);
+
+// Parses one exchangeInfo document once and extracts every requested symbol
+// in requested order. Startup metadata uses this to avoid reparsing the same
+// market document per configured product.
+[[nodiscard]] SpotMetadataBatchResult
+parse_exchange_info_batch(std::string_view payload,
+                          std::span<const std::string_view> requested_symbols);
 
 // Exact-symbol parser used by the reusable single-product path. The
 // three-argument overloads below remain the historical BTCUSDT seam.

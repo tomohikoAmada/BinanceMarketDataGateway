@@ -5,10 +5,13 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <exception>
 #include <initializer_list>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace binance_market_data::gateway::protocol {
@@ -115,67 +118,23 @@ void populate_depth_metadata(market::DepthUpdate &event,
 
 } // namespace
 
-UsdMMetadataResult parse_usdm_exchange_info(std::string_view payload,
-                                            std::string_view requested_symbol) {
-  const auto decoded = parse_json(payload);
-  if (const auto *failure = std::get_if<protocol::ProtocolError>(&decoded)) {
-    return *failure;
-  }
-  const auto &root = std::get<Json>(decoded);
-  if (!usdm_stream_symbol(requested_symbol).has_value()) {
-    return error(protocol::ProtocolErrorCode::InvalidMarketMetadata, "symbol",
-                 "requested USD-M symbol cannot be represented by a Binance "
-                 "route");
-  }
-  if (!root.is_object()) {
-    return error(protocol::ProtocolErrorCode::InvalidMarketMetadata, "symbols",
-                 "exchangeInfo symbols must be an array");
-  }
-  const auto symbols = root.find("symbols");
-  if (symbols == root.end() || !symbols->is_array()) {
-    return error(protocol::ProtocolErrorCode::InvalidMarketMetadata, "symbols",
-                 "exchangeInfo symbols must be an array");
-  }
+namespace {
 
-  const Json *selected = nullptr;
-  for (const auto &candidate : *symbols) {
-    if (!candidate.is_object()) {
-      return error(protocol::ProtocolErrorCode::InvalidMarketMetadata,
-                   "symbols", "each exchangeInfo symbol must be an object");
-    }
-    const auto symbol = string_field(candidate, "symbol");
-    if (!symbol.has_value()) {
-      return error(protocol::ProtocolErrorCode::InvalidMarketMetadata, "symbol",
-                   "each exchangeInfo symbol needs a string symbol");
-    }
-    if (*symbol == requested_symbol) {
-      if (selected != nullptr) {
-        return error(protocol::ProtocolErrorCode::InvalidMarketMetadata,
-                     "symbol",
-                     "exchangeInfo contains a duplicate requested symbol");
-      }
-      selected = &candidate;
-    }
-  }
-  if (selected == nullptr) {
-    return error(protocol::ProtocolErrorCode::InvalidMarketMetadata, "symbol",
-                 "exchangeInfo must contain the requested USD-M symbol");
-  }
-
-  const auto contract_type = string_field(*selected, "contractType");
+[[nodiscard]] UsdMMetadataResult parse_selected_metadata(const Json &selected) {
+  const auto contract_type = string_field(selected, "contractType");
   if (!contract_type.has_value() || *contract_type != "PERPETUAL") {
     return error(protocol::ProtocolErrorCode::InvalidMarketMetadata,
                  "contractType",
                  "requested USD-M symbol contractType must be PERPETUAL");
   }
-  const auto status = string_field(*selected, "status");
+  const auto status = string_field(selected, "status");
   if (!status.has_value() || *status != "TRADING") {
     return error(protocol::ProtocolErrorCode::InvalidMarketMetadata, "status",
                  "requested USD-M perpetual symbol must be TRADING");
   }
 
-  const auto filters = selected->find("filters");
-  if (filters == selected->end() || !filters->is_array()) {
+  const auto filters = selected.find("filters");
+  if (filters == selected.end() || !filters->is_array()) {
     return error(protocol::ProtocolErrorCode::InvalidMarketMetadata, "filters",
                  "requested USD-M symbol filters must be an array");
   }
@@ -228,6 +187,89 @@ UsdMMetadataResult parse_usdm_exchange_info(std::string_view payload,
                       std::move(*step_size),
                       {std::get<core::DecimalScale>(price_scale),
                        std::get<core::DecimalScale>(quantity_scale)}};
+}
+
+} // namespace
+
+UsdMMetadataBatchResult parse_usdm_exchange_info_batch(
+    std::string_view payload,
+    std::span<const std::string_view> requested_symbols) {
+  const auto decoded = parse_json(payload);
+  if (const auto *failure = std::get_if<protocol::ProtocolError>(&decoded)) {
+    return *failure;
+  }
+  const auto &root = std::get<Json>(decoded);
+  if (!root.is_object()) {
+    return error(protocol::ProtocolErrorCode::InvalidMarketMetadata, "symbols",
+                 "exchangeInfo symbols must be an array");
+  }
+  const auto symbols = root.find("symbols");
+  if (symbols == root.end() || !symbols->is_array()) {
+    return error(protocol::ProtocolErrorCode::InvalidMarketMetadata, "symbols",
+                 "exchangeInfo symbols must be an array");
+  }
+
+  std::unordered_map<std::string_view, std::size_t> requested;
+  requested.reserve(requested_symbols.size());
+  for (std::size_t index = 0; index < requested_symbols.size(); ++index) {
+    if (!requested.emplace(requested_symbols[index], index).second) {
+      return error(protocol::ProtocolErrorCode::InvalidMarketMetadata,
+                   "requested_symbols", "requested symbols must be unique");
+    }
+  }
+
+  std::vector<const Json *> selected(requested_symbols.size(), nullptr);
+  for (const auto &candidate : *symbols) {
+    if (!candidate.is_object()) {
+      return error(protocol::ProtocolErrorCode::InvalidMarketMetadata,
+                   "symbols", "each exchangeInfo symbol must be an object");
+    }
+    const auto symbol = string_field(candidate, "symbol");
+    if (!symbol.has_value()) {
+      return error(protocol::ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                   "each exchangeInfo symbol needs a string symbol");
+    }
+    const auto match = requested.find(*symbol);
+    if (match == requested.end()) {
+      continue;
+    }
+    auto &entry = selected[match->second];
+    if (entry != nullptr) {
+      return error(protocol::ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                   "exchangeInfo contains a duplicate requested symbol");
+    }
+    entry = &candidate;
+  }
+
+  UsdMMetadataBatch result;
+  result.symbols.reserve(requested_symbols.size());
+  for (std::size_t index = 0; index < requested_symbols.size(); ++index) {
+    if (!usdm_stream_symbol(requested_symbols[index]).has_value()) {
+      result.symbols.push_back(
+          error(protocol::ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                "requested USD-M symbol cannot be represented by a Binance "
+                "route"));
+      continue;
+    }
+    if (selected[index] == nullptr) {
+      result.symbols.push_back(
+          error(protocol::ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                "exchangeInfo must contain the requested USD-M symbol"));
+      continue;
+    }
+    result.symbols.push_back(parse_selected_metadata(*selected[index]));
+  }
+  return result;
+}
+
+UsdMMetadataResult parse_usdm_exchange_info(std::string_view payload,
+                                            std::string_view requested_symbol) {
+  const std::array<std::string_view, 1> requested{requested_symbol};
+  auto decoded = parse_usdm_exchange_info_batch(payload, requested);
+  if (const auto *failure = std::get_if<protocol::ProtocolError>(&decoded)) {
+    return *failure;
+  }
+  return std::move(std::get<UsdMMetadataBatch>(decoded).symbols.front());
 }
 
 UsdMMetadataResult parse_usdm_exchange_info(std::string_view payload) {

@@ -9,8 +9,9 @@ BMDG does not store history and does not depend on Recorder.
 
 - Production entry point: `bmdg --config PATH`.
 - Historical G0-G11 / G12-A/B/C work is complete and archived.
-- v0.4 G3-a (20-key offline routing/startup/recovery) and G3-b (shared-IP API
-  budget) are complete, independently reviewed and merged.
+- v0.4 G3-a (20-key offline routing/startup/recovery), G3-b (shared-IP API
+  budget) and M-G1.A (protocol boundaries plus one exchangeInfo parse per
+  market) are complete.
 - **G3-c is open**: shared VPS, real-network, Recorder co-load and resource
   budgets are not yet accepted. Twenty products are a resource bound, not a
   measured production capacity.

@@ -4,9 +4,11 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace binance_market_data::gateway::protocol {
 
@@ -20,11 +22,20 @@ struct UsdMMetadata final {
 };
 
 using UsdMMetadataResult = std::variant<UsdMMetadata, protocol::ProtocolError>;
+struct UsdMMetadataBatch final {
+  std::vector<UsdMMetadataResult> symbols;
+};
+using UsdMMetadataBatchResult =
+    std::variant<UsdMMetadataBatch, protocol::ProtocolError>;
 using UsdMDepthFrameResult = protocol::DepthFrameResult;
 using UsdMDepthSnapshotResult = protocol::DepthSnapshotResult;
 
 [[nodiscard]] UsdMMetadataResult
 parse_usdm_exchange_info(std::string_view payload);
+
+[[nodiscard]] UsdMMetadataBatchResult parse_usdm_exchange_info_batch(
+    std::string_view payload,
+    std::span<const std::string_view> requested_symbols);
 
 [[nodiscard]] UsdMMetadataResult
 parse_usdm_exchange_info(std::string_view payload,

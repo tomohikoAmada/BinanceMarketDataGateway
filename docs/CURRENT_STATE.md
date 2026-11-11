@@ -1,13 +1,14 @@
 # Current BMDG state
 
-Updated: 2026-11-10. Source tree reorganized by domain and renamed BMDG; historical G0-G11 /
-G12-A/B/C records archived. Current v0.4 G3-a and G3-b offline work is complete
-and merged; G3-c remains open.
+Updated: 2026-11-11. Source tree reorganized by domain and renamed BMDG;
+historical G0-G11 / G12-A/B/C records archived. v0.4 G3-a, G3-b and M-G1.A are
+complete; G3-c remains open.
 
 ```text
 HISTORICAL_G0_G11=COMPLETE_ARCHIVED
 V04_G3A=COMPLETE_OFFLINE_VERIFIED_REVIEWED_CI_PASSED
 V04_G3B=COMPLETE_OFFLINE_VERIFIED_REVIEWED_CI_PASSED_MERGED
+V04_M_G1A=COMPLETE_RELEASE_27/27_ASAN_UBSAN_27/27_FORMAT_PASSED
 V04_G3C=OPEN
 PRODUCTION_DAEMON=bmdg
 BINARY_COMPAT=bmd-gatewayd_symlink
@@ -33,8 +34,11 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
 
 ## Implemented
 
-- `bmdg --config PATH`; strict startup JSON, one exchangeInfo fetch per
-  configured market, exact `MarketKey` precision resolution.
+- `bmdg --config PATH`; strict startup JSON, one exchangeInfo fetch and one
+  JSON decode per configured market, batch precision extraction for every
+  requested symbol, exact `MarketKey` resolution.
+- Spot decimal validation rejects zero written with a decimal point (`"0.0"`);
+  aggTrade rejects `last_trade_id < first_trade_id`.
 - 1..20 products; each product has its own transport, owner thread, private
   Projection, event publication and recovery coordinator. One process-wide
   48 streaming-context cap.
@@ -67,6 +71,9 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
   startup/rollback, local recovery and two full-set recovery rounds.
 - G3-b offline: fixed shares, rolling windows, shared 429/418 gate, bounded
   metadata and clean cancellation; companion Recorder composition scenarios.
+- M-G1.A: Release production graph 27/27 and format check pass; `"0.0"` and
+  `l < f` rejection cases pass; 10 Spot + 10 USD-M startup metadata batch
+  resolves all 20 products from one decode per market.
 - P1: 20-key normal/deep/batch CPU means 0.115 / 1.192 / 1.242 cores on the
   local M3, including fixtures/clients; checked apply is the dominant owner
   cost; full-book Projection copy is the main hotspot.

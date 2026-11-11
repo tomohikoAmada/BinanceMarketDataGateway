@@ -140,6 +140,56 @@ void exact_symbol_metadata_selection() {
       protocol::ProtocolErrorCode::InvalidMarketMetadata);
 }
 
+void batch_exchange_info_selection() {
+  const auto body = [] {
+    return std::string{R"json({"timezone":"UTC","symbols":[)json"} +
+           target_symbol(
+               "PERPETUAL", "TRADING",
+               R"json({"filterType":"PRICE_FILTER","tickSize":"0.10"},{"filterType":"LOT_SIZE","stepSize":"0.001"})json",
+               "ETHUSDT") +
+           "," +
+           target_symbol(
+               "PERPETUAL", "TRADING",
+               R"json({"filterType":"PRICE_FILTER","tickSize":"0.01"},{"filterType":"LOT_SIZE","stepSize":"0.00001"})json",
+               "BTCUSDT") +
+           "]}";
+  }();
+  const std::vector<std::string_view> requested{"BTCUSDT", "ETHUSDT"};
+  const auto parsed = protocol::parse_usdm_exchange_info_batch(body, requested);
+  REQUIRE(std::holds_alternative<protocol::UsdMMetadataBatch>(parsed));
+  const auto &entries = std::get<protocol::UsdMMetadataBatch>(parsed).symbols;
+  REQUIRE_EQ(entries.size(), 2U);
+  REQUIRE(std::holds_alternative<protocol::UsdMMetadata>(entries[0]));
+  REQUIRE(std::holds_alternative<protocol::UsdMMetadata>(entries[1]));
+  REQUIRE_EQ(std::get<protocol::UsdMMetadata>(entries[0])
+                 .numeric_spec.price_scale.value(),
+             2U);
+  REQUIRE_EQ(std::get<protocol::UsdMMetadata>(entries[0])
+                 .numeric_spec.quantity_scale.value(),
+             5U);
+  REQUIRE_EQ(std::get<protocol::UsdMMetadata>(entries[1])
+                 .numeric_spec.price_scale.value(),
+             1U);
+  REQUIRE_EQ(std::get<protocol::UsdMMetadata>(entries[1])
+                 .numeric_spec.quantity_scale.value(),
+             3U);
+
+  const std::vector<std::string_view> partially_missing{"BTCUSDT", "XRPUSDT"};
+  const auto missing =
+      protocol::parse_usdm_exchange_info_batch(body, partially_missing);
+  REQUIRE(std::holds_alternative<protocol::UsdMMetadataBatch>(missing));
+  const auto &missing_entries =
+      std::get<protocol::UsdMMetadataBatch>(missing).symbols;
+  REQUIRE(std::holds_alternative<protocol::UsdMMetadata>(missing_entries[0]));
+  REQUIRE(std::holds_alternative<protocol::ProtocolError>(missing_entries[1]));
+
+  const std::vector<std::string_view> duplicated{"BTCUSDT", "BTCUSDT"};
+  REQUIRE(std::holds_alternative<protocol::ProtocolError>(
+      protocol::parse_usdm_exchange_info_batch(body, duplicated)));
+  REQUIRE(std::holds_alternative<protocol::ProtocolError>(
+      protocol::parse_usdm_exchange_info_batch("not-json", requested)));
+}
+
 void exchange_info_filter_validation() {
   static_cast<void>(require_metadata_error(
       protocol::parse_usdm_exchange_info(exchange_info(target_symbol(
@@ -460,6 +510,7 @@ int main() {
       {"EXCHANGEINFO_SELECTS_EXACT_PERPETUAL",
        exchange_info_selects_exact_perpetual},
       {"EXACT_SYMBOL_METADATA_SELECTION", exact_symbol_metadata_selection},
+      {"BATCH_EXCHANGEINFO_SELECTION", batch_exchange_info_selection},
       {"EXCHANGEINFO_FILTER_VALIDATION", exchange_info_filter_validation},
       {"DIFF_DEPTH_PRESENT_AND_ABSENT_PU", diff_depth_present_and_absent_pu},
       {"CONTRACTS_C0_SOURCE_TIME_ORACLE", contracts_c0_source_time_oracle},

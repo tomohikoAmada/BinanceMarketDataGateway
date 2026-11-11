@@ -10,6 +10,7 @@
 #include <exception>
 #include <initializer_list>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace binance_market_data::gateway::protocol {
@@ -85,7 +86,8 @@ string_field(const Json &object, std::string_view name) {
       !digits(fraction)) {
     return false;
   }
-  const auto nonzero = [](char digit) { return digit != '0'; };
+  // The decimal point is syntax, not a significant digit; "0.0" is zero.
+  const auto nonzero = [](char digit) { return digit >= '1' && digit <= '9'; };
   return allow_zero || std::any_of(value.begin(), value.end(), nonzero);
 }
 
@@ -231,67 +233,24 @@ DecimalScaleResult decimal_scale_from_quantum(std::string_view quantum) {
   return *created;
 }
 
-SpotMetadataResult parse_exchange_info(std::string_view payload,
-                                       std::string_view requested_symbol) {
-  const auto decoded = parse_json(payload);
-  if (const auto *failure = std::get_if<ProtocolError>(&decoded)) {
-    return *failure;
-  }
-  const auto &root = std::get<Json>(decoded);
-  if (!spot_stream_symbol(requested_symbol).has_value()) {
-    return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
-                 "requested Spot symbol cannot be represented by a Binance "
-                 "route");
-  }
-  if (!root.is_object()) {
-    return error(ProtocolErrorCode::InvalidMarketMetadata, "symbols",
-                 "exchangeInfo symbols must be an array");
-  }
-  const auto symbols = root.find("symbols");
-  if (symbols == root.end() || !symbols->is_array()) {
-    return error(ProtocolErrorCode::InvalidMarketMetadata, "symbols",
-                 "exchangeInfo symbols must be an array");
-  }
+namespace {
 
-  const Json *selected = nullptr;
-  for (const auto &candidate : *symbols) {
-    if (!candidate.is_object()) {
-      return error(ProtocolErrorCode::InvalidMarketMetadata, "symbols",
-                   "each exchangeInfo symbol must be an object");
-    }
-    const auto symbol_name = string_field(candidate, "symbol");
-    if (!symbol_name.has_value()) {
-      return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
-                   "each exchangeInfo symbol needs a string symbol");
-    }
-    if (*symbol_name == requested_symbol) {
-      if (selected != nullptr) {
-        return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
-                     "exchangeInfo contains a duplicate requested symbol");
-      }
-      selected = &candidate;
-    }
-  }
-  if (selected == nullptr) {
-    return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
-                 "exchangeInfo must contain the requested Spot symbol");
-  }
-
-  const auto status = string_field(*selected, "status");
+[[nodiscard]] SpotMetadataResult parse_selected_metadata(const Json &selected) {
+  const auto status = string_field(selected, "status");
   if (!status.has_value() || *status != "TRADING") {
     return error(ProtocolErrorCode::InvalidMarketMetadata, "status",
                  "requested Spot symbol must be TRADING");
   }
-  const auto spot_allowed = selected->find("isSpotTradingAllowed");
-  if (spot_allowed == selected->end() || !spot_allowed->is_boolean() ||
+  const auto spot_allowed = selected.find("isSpotTradingAllowed");
+  if (spot_allowed == selected.end() || !spot_allowed->is_boolean() ||
       !spot_allowed->get<bool>()) {
     return error(ProtocolErrorCode::InvalidMarketMetadata,
                  "isSpotTradingAllowed",
                  "requested Spot symbol trading must be allowed");
   }
 
-  const auto filters = selected->find("filters");
-  if (filters == selected->end() || !filters->is_array()) {
+  const auto filters = selected.find("filters");
+  if (filters == selected.end() || !filters->is_array()) {
     return error(ProtocolErrorCode::InvalidMarketMetadata, "filters",
                  "requested Spot symbol filters must be an array");
   }
@@ -340,6 +299,89 @@ SpotMetadataResult parse_exchange_info(std::string_view payload,
                       std::move(*step_size),
                       {std::get<core::DecimalScale>(price_scale),
                        std::get<core::DecimalScale>(quantity_scale)}};
+}
+
+} // namespace
+
+SpotMetadataBatchResult
+parse_exchange_info_batch(std::string_view payload,
+                          std::span<const std::string_view> requested_symbols) {
+  const auto decoded = parse_json(payload);
+  if (const auto *failure = std::get_if<ProtocolError>(&decoded)) {
+    return *failure;
+  }
+  const auto &root = std::get<Json>(decoded);
+  if (!root.is_object()) {
+    return error(ProtocolErrorCode::InvalidMarketMetadata, "symbols",
+                 "exchangeInfo symbols must be an array");
+  }
+  const auto symbols = root.find("symbols");
+  if (symbols == root.end() || !symbols->is_array()) {
+    return error(ProtocolErrorCode::InvalidMarketMetadata, "symbols",
+                 "exchangeInfo symbols must be an array");
+  }
+
+  std::unordered_map<std::string_view, std::size_t> requested;
+  requested.reserve(requested_symbols.size());
+  for (std::size_t index = 0; index < requested_symbols.size(); ++index) {
+    if (!requested.emplace(requested_symbols[index], index).second) {
+      return error(ProtocolErrorCode::InvalidMarketMetadata,
+                   "requested_symbols", "requested symbols must be unique");
+    }
+  }
+
+  std::vector<const Json *> selected(requested_symbols.size(), nullptr);
+  for (const auto &candidate : *symbols) {
+    if (!candidate.is_object()) {
+      return error(ProtocolErrorCode::InvalidMarketMetadata, "symbols",
+                   "each exchangeInfo symbol must be an object");
+    }
+    const auto symbol_name = string_field(candidate, "symbol");
+    if (!symbol_name.has_value()) {
+      return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                   "each exchangeInfo symbol needs a string symbol");
+    }
+    const auto match = requested.find(*symbol_name);
+    if (match == requested.end()) {
+      continue;
+    }
+    auto &entry = selected[match->second];
+    if (entry != nullptr) {
+      return error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                   "exchangeInfo contains a duplicate requested symbol");
+    }
+    entry = &candidate;
+  }
+
+  SpotMetadataBatch result;
+  result.symbols.reserve(requested_symbols.size());
+  for (std::size_t index = 0; index < requested_symbols.size(); ++index) {
+    if (!spot_stream_symbol(requested_symbols[index]).has_value()) {
+      result.symbols.push_back(
+          error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                "requested Spot symbol cannot be represented by a Binance "
+                "route"));
+      continue;
+    }
+    if (selected[index] == nullptr) {
+      result.symbols.push_back(
+          error(ProtocolErrorCode::InvalidMarketMetadata, "symbol",
+                "exchangeInfo must contain the requested Spot symbol"));
+      continue;
+    }
+    result.symbols.push_back(parse_selected_metadata(*selected[index]));
+  }
+  return result;
+}
+
+SpotMetadataResult parse_exchange_info(std::string_view payload,
+                                       std::string_view requested_symbol) {
+  const std::array<std::string_view, 1> requested{requested_symbol};
+  auto decoded = parse_exchange_info_batch(payload, requested);
+  if (const auto *failure = std::get_if<ProtocolError>(&decoded)) {
+    return *failure;
+  }
+  return std::move(std::get<SpotMetadataBatch>(decoded).symbols.front());
 }
 
 SpotMetadataResult parse_exchange_info(std::string_view payload) {
@@ -535,6 +577,10 @@ CombinedFrameResult parse_combined_event_frame(
         !best_match.has_value()) {
       return error(ProtocolErrorCode::InvalidField, "aggTrade",
                    "aggTrade fields have invalid types or decimal values");
+    }
+    if (*last_trade_id < *first_trade_id) {
+      return error(ProtocolErrorCode::InvalidField, "l",
+                   "aggTrade last trade id must not precede first trade id");
     }
     market::AggTrade trade;
     populate_event_metadata(trade, requested_symbol, connection_id, received_at,

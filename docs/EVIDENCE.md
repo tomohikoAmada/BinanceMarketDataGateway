@@ -30,6 +30,19 @@ This is the current evidence index. Full historical records are in
   explicitly research-only for Live Contract v1. See
   [DATA_PARITY](DATA_PARITY.md).
 
+## M-G1.A — protocol boundaries and startup metadata
+
+- Spot decimal validation now rejects `"0.0"` as zero, not as a non-zero value
+  containing a decimal point. Rejection tests cover both price and quantity.
+- Spot aggTrade rejects `last_trade_id < first_trade_id`; `l == f` remains valid.
+- Spot and USD-M exchangeInfo batch parsers decode the document once. Production
+  startup groups configured keys by market and resolves all requested symbols
+  from that decode; single-symbol parsing uses the same implementation.
+- Release production graph: **27/27** CTest pass; Debug ASan+UBSan production
+  graph: **27/27** CTest pass; `scripts/format-check.sh` passes.
+- A 10 Spot + 10 USD-M startup metadata test resolves all 20 products and
+  verifies each symbol's precision from one fetch count per market.
+
 ## G3-a — 20-key offline lifecycle
 
 - 20 exact products accepted at config/preparation/registry; 21 rejected.

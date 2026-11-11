@@ -201,6 +201,44 @@ void exact_symbol_metadata_selection() {
       "ETHUSDT")));
 }
 
+void batch_exchange_info_selection() {
+  const std::vector<std::string_view> requested{"ETHUSDT", "BTCUSDT"};
+  const auto parsed =
+      protocol::parse_exchange_info_batch(exchange_info_multi(), requested);
+  REQUIRE(std::holds_alternative<protocol::SpotMetadataBatch>(parsed));
+  const auto &entries = std::get<protocol::SpotMetadataBatch>(parsed).symbols;
+  REQUIRE_EQ(entries.size(), 2U);
+  REQUIRE(std::holds_alternative<protocol::SpotMetadata>(entries[0]));
+  REQUIRE(std::holds_alternative<protocol::SpotMetadata>(entries[1]));
+  REQUIRE_EQ(std::get<protocol::SpotMetadata>(entries[0])
+                 .numeric_spec.price_scale.value(),
+             1U);
+  REQUIRE_EQ(std::get<protocol::SpotMetadata>(entries[0])
+                 .numeric_spec.quantity_scale.value(),
+             3U);
+  REQUIRE_EQ(std::get<protocol::SpotMetadata>(entries[1])
+                 .numeric_spec.price_scale.value(),
+             2U);
+  REQUIRE_EQ(std::get<protocol::SpotMetadata>(entries[1])
+                 .numeric_spec.quantity_scale.value(),
+             5U);
+
+  const std::vector<std::string_view> partially_missing{"BTCUSDT", "XRPUSDT"};
+  const auto missing = protocol::parse_exchange_info_batch(
+      exchange_info_multi(), partially_missing);
+  REQUIRE(std::holds_alternative<protocol::SpotMetadataBatch>(missing));
+  const auto &missing_entries =
+      std::get<protocol::SpotMetadataBatch>(missing).symbols;
+  REQUIRE(std::holds_alternative<protocol::SpotMetadata>(missing_entries[0]));
+  REQUIRE(std::holds_alternative<protocol::ProtocolError>(missing_entries[1]));
+
+  const std::vector<std::string_view> duplicated{"BTCUSDT", "BTCUSDT"};
+  REQUIRE(std::holds_alternative<protocol::ProtocolError>(
+      protocol::parse_exchange_info_batch(exchange_info_multi(), duplicated)));
+  REQUIRE(std::holds_alternative<protocol::ProtocolError>(
+      protocol::parse_exchange_info_batch("not-json", requested)));
+}
+
 void depth_frame_parse() {
   constexpr std::string_view payload = R"json({
     "e":"depthUpdate","E":1672515782136,"s":"BTCUSDT",
@@ -434,6 +472,9 @@ void malformed_combined_event_frames() {
       R"json({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1,"s":"ETHUSDT","a":1,"p":"1","q":"1","f":1,"l":1,"T":1,"m":true,"M":true}})json",
       R"json({"stream":"btcusdt@aggTrade","data":{"e":"trade","E":1,"s":"BTCUSDT","a":1,"p":"1","q":"1","f":1,"l":1,"T":1,"m":true,"M":true}})json",
       R"json({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1,"s":"BTCUSDT","a":1,"p":"1e2","q":"1","f":1,"l":1,"T":1,"m":true,"M":true}})json",
+      R"json({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1,"s":"BTCUSDT","a":1,"p":"0.0","q":"1","f":1,"l":1,"T":1,"m":true,"M":true}})json",
+      R"json({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1,"s":"BTCUSDT","a":1,"p":"1","q":"0.0","f":1,"l":1,"T":1,"m":true,"M":true}})json",
+      R"json({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1,"s":"BTCUSDT","a":1,"p":"1","q":"1","f":2,"l":1,"T":1,"m":true,"M":true}})json",
       R"json({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1,"s":"BTCUSDT","a":"1","p":"1","q":"1","f":1,"l":1,"T":1,"m":true,"M":true}})json",
       R"json({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1,"s":"BTCUSDT","a":1,"p":"1","q":"1","f":1,"l":1,"T":1,"m":1,"M":true}})json",
       R"json({"stream":"btcusdt@bookTicker","data":{"u":1,"s":"BTCUSDT","b":"0","B":"1","a":"2","A":"1"}})json",
@@ -517,6 +558,7 @@ int main() {
       {"EXCHANGEINFO_VALIDATION_AND_WRONG_PRECISION_SOURCES",
        exchange_info_validation_and_precision_sources},
       {"EXACT_SYMBOL_METADATA_SELECTION", exact_symbol_metadata_selection},
+      {"BATCH_EXCHANGEINFO_SELECTION", batch_exchange_info_selection},
       {"DEPTH_FRAME_PARSE", depth_frame_parse},
       {"EXACT_SYMBOL_EVENTS_AND_COMBINED_IDENTITY",
        exact_symbol_events_and_combined_identity},

@@ -14,11 +14,12 @@ Do not infer permission steps from archived milestone freezes.
 ## Current status
 
 Historical G0-G11 / G12-A/B/C are complete and archived. Current v0.4 G3-a
-(20-key offline lifecycle/routing/P1) and G3-b (shared-IP API budget) are
-complete, reviewed and merged. **G3-c is open**: shared VPS, real network,
-Recorder co-load and resource budgets are not accepted. Twenty products is a
-resource bound, not measured production capacity. Performance budgets are not
-established. Keep Foundation independently buildable.
+(20-key offline lifecycle/routing/P1), G3-b (shared-IP API budget) and M-G1.A
+(protocol boundaries plus one exchangeInfo decode per market) are complete.
+**G3-c is open**: shared VPS, real network, Recorder co-load and resource
+budgets are not accepted. Twenty products is a resource bound, not measured
+production capacity. Performance budgets are not established. Keep Foundation
+independently buildable.
 
 ## Boundaries
 

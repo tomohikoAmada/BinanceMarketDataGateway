@@ -243,6 +243,90 @@ sources(FetchCounts &counts, std::string spot, std::string usdm) {
   return result;
 }
 
+[[nodiscard]] std::string batch_symbol(std::string_view prefix,
+                                       std::size_t index) {
+  return std::string{prefix} + std::to_string(index) + "USDT";
+}
+
+[[nodiscard]] std::string quantum(std::size_t scale) {
+  return "0." + std::string(scale - 1U, '0') + "1";
+}
+
+[[nodiscard]] std::string spot_batch_body(std::size_t count) {
+  std::string body = R"json({"timezone":"UTC","symbols":[)json";
+  for (std::size_t offset = 0; offset < count; ++offset) {
+    const auto index = count - 1U - offset;
+    if (offset != 0U) {
+      body.push_back(',');
+    }
+    const auto tick = quantum(index + 1U);
+    body +=
+        R"json({"symbol":")json" + batch_symbol("SPOT", index) +
+        R"json(","status":"TRADING","isSpotTradingAllowed":true,"filters":[{"filterType":"PRICE_FILTER","tickSize":")json" +
+        tick + R"json("},{"filterType":"LOT_SIZE","stepSize":")json" + tick +
+        R"json("}]})json";
+  }
+  body += "]}";
+  return body;
+}
+
+[[nodiscard]] std::string usdm_batch_body(std::size_t count) {
+  std::string body = R"json({"timezone":"UTC","symbols":[)json";
+  for (std::size_t offset = 0; offset < count; ++offset) {
+    const auto index = count - 1U - offset;
+    if (offset != 0U) {
+      body.push_back(',');
+    }
+    const auto tick = quantum(index + 1U);
+    body +=
+        R"json({"symbol":")json" + batch_symbol("USDM", index) +
+        R"json(","pair":")json" + batch_symbol("USDM", index) +
+        R"json(","contractType":"PERPETUAL","status":"TRADING","filters":[{"filterType":"PRICE_FILTER","tickSize":")json" +
+        tick + R"json("},{"filterType":"LOT_SIZE","stepSize":")json" + tick +
+        R"json("}]})json";
+  }
+  body += "]}";
+  return body;
+}
+
+void metadata_twenty_product_batch_parse() {
+  constexpr std::size_t per_market = 10U;
+  std::vector<rt::MarketKey> keys;
+  keys.reserve(per_market * 2U);
+  for (std::size_t index = 0; index < per_market; ++index) {
+    keys.push_back({common::VENUE_BINANCE, common::MARKET_SPOT,
+                    batch_symbol("SPOT", index)});
+    keys.push_back({common::VENUE_BINANCE, common::MARKET_USD_M_PERPETUAL,
+                    batch_symbol("USDM", index)});
+  }
+
+  FetchCounts counts;
+  const auto result = production::acquire_production_metadata(
+      keys, sources(counts, spot_batch_body(per_market),
+                    usdm_batch_body(per_market)));
+  REQUIRE(std::holds_alternative<production::ProductionMetadata>(result));
+  REQUIRE(counts.spot == 1);
+  REQUIRE(counts.usdm == 1);
+  const auto &products =
+      std::get<production::ProductionMetadata>(result).products;
+  REQUIRE(products.size() == per_market * 2U);
+  for (std::size_t index = 0; index < per_market; ++index) {
+    const rt::MarketKey spot_key{common::VENUE_BINANCE, common::MARKET_SPOT,
+                                 batch_symbol("SPOT", index)};
+    const rt::MarketKey usdm_key{common::VENUE_BINANCE,
+                                 common::MARKET_USD_M_PERPETUAL,
+                                 batch_symbol("USDM", index)};
+    for (const auto &key : {spot_key, usdm_key}) {
+      const auto found = std::find_if(
+          products.begin(), products.end(),
+          [&key](const auto &product) { return product.key == key; });
+      REQUIRE(found != products.end());
+      REQUIRE(found->numeric_spec.price_scale.value() == index + 1U);
+      REQUIRE(found->numeric_spec.quantity_scale.value() == index + 1U);
+    }
+  }
+}
+
 void metadata_fetch_counts_and_pairing() {
   const rt::MarketKey spot_eth{common::VENUE_BINANCE, common::MARKET_SPOT,
                                "ETHUSDT"};
@@ -367,6 +451,8 @@ int main() {
       {"CONFIG_IDENTITY_AND_CARDINALITY",
        configuration_identity_and_cardinality},
       {"METADATA_FETCH_COUNTS_AND_PAIRING", metadata_fetch_counts_and_pairing},
+      {"METADATA_TWENTY_PRODUCT_BATCH_PARSE",
+       metadata_twenty_product_batch_parse},
       {"METADATA_FAILS_ALL_OR_NOTHING", metadata_fails_all_or_nothing},
   };
   for (const auto &[name, test] : tests) {
