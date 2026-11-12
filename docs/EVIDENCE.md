@@ -84,7 +84,7 @@ Actions `ubuntu-24.04`, GCC 13, C++20, Release.
   Archived tar SHA-256
   `75e000c1632ad10785a2fc8b3f6ace06b93330cb8862cb42686aba07abe6b4ad`.
 - Scope: Linux build/package evidence only. No VPS install or service change.
-  Plan G2 and G3 were subsequently completed (see below); Plan G4 remains open.
+  Plan G2, G3 and G4 were subsequently completed (see below).
 
 ## Plan G2 — persistent recoverable recovery
 
@@ -114,7 +114,7 @@ Gateway candidate `6fdeb47682c51463c13a04cb9a23efc5972b841b`.
   archived tar SHA-256
   `f77cb52c08a9d7318838d8735d3ca40266a5f39bb38c2ce0d466faf5041ab795`.
 - Scope: off-VPS implementation and Linux build/package evidence only. Plan
-  G3 was subsequently completed (see below); Plan G4 remains open.
+  G3 and G4 were subsequently completed (see below).
 
 ## Plan G3 — runtime diagnostics and attach-only consumer
 
@@ -150,8 +150,8 @@ Gateway candidate `282f0fc6773534470bd3bcdf9eaa3096740e0eed`.
   artifact `bmdg-linux-x86_64-282f0fc6773534470bd3bcdf9eaa3096740e0eed`;
   archived tar SHA-256
   `b88c945b9b3b62ff3f62e2ff1bf96a38d72f8c052ab3270c017272f0664dd74d`.
-- Scope: off-VPS implementation and Linux build/package evidence only. Plan
-  G4 remains open.
+- Scope: off-VPS implementation and Linux build/package evidence only.
+  G4 was subsequently completed (see below).
 
 ## G3-a — 20-key offline lifecycle
 
@@ -179,6 +179,42 @@ Gateway candidate `282f0fc6773534470bd3bcdf9eaa3096740e0eed`.
 - Deployment still requires exactly one instance per role, no blue/green
   overlap, and a full 300 s quiet interval after restart/replacement.
 - Full record: [archive/GATEWAY_G3B_SHARED_API_EVIDENCE.md](archive/GATEWAY_G3B_SHARED_API_EVIDENCE.md).
+
+## Plan G4 — co-located VPS 2h acceptance
+
+Gateway release `5e47c59c0769de8b16b67f1aabdb095c3bacdf78`; binary SHA-256
+`f57c1a13670f18a59f34c882c98532934f242d596e9e138852a35a78599c105f`.
+
+- Deployed from successful Linux CI run
+  [43195397457](https://github.com/tomohikoAmada/BinanceMarketDataGateway/actions/runs/43195397457)
+  (CTest 27/27) to isolated `/opt/bmdg` and `/etc/bmdg`, alongside the existing
+  Recorder under `/opt/sbmdr` and `/srv/recorder-data`. The Recorder was not
+  restarted; its PIDs remained 442874/442895.
+- A 20-key / 40-stream consumer ran for 2 h (240 samples, 30 s interval):
+  40/40 accepted and valid, 20/20 order books with snapshots, 1,239,203 updates,
+  3,306,529 Spot events, 20/20 status keys, 0 identity/protocol/RPC/status
+  errors, 20/20 products Live, and no service restarts.
+- 11 `SLOW_CONSUMER` gaps occurred on BTC/ETH/DOGE BookTicker during host
+  load/archive peaks (BTC 5, ETH 5, DOGE 1). Each invalidated the stream and
+  resubscribed; the maximum below-40-valid interval was one 30 s sample, and
+  every stream finished valid. No order-book gap or silent generation splice
+  occurred.
+- The 64-deep event queue was raised to the still-bounded 1024 after a live
+  BookTicker burst overflowed 64; order-book queues remain 64. The consumer
+  uses per-symbol Spot event shards and an 8 MiB gRPC receive lookahead.
+- Resources met the suggested lines but with thin CPU headroom: 10-minute CPU
+  mean max **297.9%** of one core (mean 184.9%), MemAvailable min **3.39 GiB**,
+  root free min **26.87 GiB**, no OOM or swap growth. Load peaks correlate with
+  successful `sbmdr-archive.service` runs.
+- Recorder C5 `verify-only` remains PASS; archive timer active with successful
+  runs and no blocked/error journal entries.
+- Verdict: **G4 functional acceptance PASS with observations**. The monitor's
+  strict sample-level `valid == 40` rule reports FAIL because two samples were
+  38/40 during gap recovery; the plan's session-correctness clause treats that
+  as the expected recovered-gap path. CPU headroom and the latency tail remain
+  open for G3-c/approved budgets.
+- Full record: [archive/G4_VPS_2H_EVIDENCE.md](archive/G4_VPS_2H_EVIDENCE.md);
+  raw monitor verdict [G4_VPS_2H_FINAL.json](archive/G4_VPS_2H_FINAL.json).
 
 ## Projection P1 — pre-optimization measured cost
 
@@ -226,8 +262,7 @@ Archived for traceability only:
 
 ## Still unproven
 
-- Plan G4: no VPS installation, systemd/CA validation or 2h co-load run.
-- G3-c: shared VPS, real Binance network, Recorder co-load, target hardware,
-  resource budgets and production restart behavior.
+- G3-c: approved resource and latency budgets; G4 recorded the co-load data
+  (11 recovered slow-consumer gaps, 10-minute CPU max 297.9%) but did not
+  establish a new capacity/SLA budget.
 - No approved multi-product capacity or latency SLA.
-- Real-network TLS/CA and DNS/proxy behavior on the target VPS.

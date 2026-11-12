@@ -1,0 +1,66 @@
+captured_utc=2026-11-12T12:37:05Z
+gateway_release=/opt/bmdg/releases/5e47c59c0769de8b16b67f1aabdb095c3bacdf78
+gateway_binary_sha256=f57c1a13670f18a59f34c882c98532934f242d596e9e138852a35a78599c105f
+gateway_config_sha256=b1fa45339f701f471b319bec55884b8f6313e591038b45c4c42a8781abb374a2
+consumer_script_sha256=7e82154f7738cac18f74bedb95f8c4ea65e121eed5b3e9d48f074945c5e80a66
+monitor_script_sha256=c29a505f0111a97db8bd335bdcec927971859fe941d20a01550ca8d439f24358
+--- bmdg
+Restart=on-failure
+RestartUSec=5min
+MainPID=454133
+NRestarts=0
+ExecMainStartTimestamp=Thu 2026-11-12 09:57:17 UTC
+MemoryCurrent=203866112
+MemoryPeak=205844480
+CPUUsageNSec=3916935564000
+Id=bmdg.service
+ActiveState=active
+SubState=running
+--- bmdg-consumer
+Restart=on-failure
+RestartUSec=30s
+MainPID=454351
+NRestarts=0
+ExecMainStartTimestamp=Thu 2026-11-12 09:57:33 UTC
+MemoryCurrent=325599232
+MemoryPeak=329867264
+CPUUsageNSec=5670749007000
+Id=bmdg-consumer.service
+ActiveState=active
+SubState=running
+--- sbmdr-recorder@spot
+Restart=on-failure
+RestartUSec=5min
+MainPID=442874
+NRestarts=0
+ExecMainStartTimestamp=Thu 2026-11-12 08:44:00 UTC
+MemoryCurrent=180264960
+MemoryPeak=284540928
+CPUUsageNSec=1763504003000
+Id=sbmdr-recorder@spot.service
+ActiveState=active
+SubState=running
+--- sbmdr-recorder@usdm
+Restart=on-failure
+RestartUSec=5min
+MainPID=442895
+NRestarts=0
+ExecMainStartTimestamp=Thu 2026-11-12 08:44:11 UTC
+MemoryCurrent=304984064
+MemoryPeak=398938112
+CPUUsageNSec=4730511538000
+Id=sbmdr-recorder@usdm.service
+ActiveState=active
+SubState=running
+--- sbmdr-archive.timer
+LastTriggerUSec=Thu 2026-11-12 12:37:01 UTC
+ActiveState=active
+SubState=running
+--- resources
+               total        used        free      shared  buff/cache   available
+Mem:           5.7Gi       2.2Gi       279Mi       396Ki       3.5Gi       3.5Gi
+Swap:          2.0Gi        38Mi       2.0Gi
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/vda1        58G   32G   26G  56% /
+/dev/vdb1       2.0T  118G  1.9T   6% /srv/recorder-data
+6.31 7.91 9.46 20/623 466389

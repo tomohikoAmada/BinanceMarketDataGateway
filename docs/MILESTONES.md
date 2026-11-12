@@ -1,6 +1,6 @@
 # BMDG milestone plan
 
-Updated: 2026-11-11. Current work follows the BinanceMarketData v0.4 overall
+Updated: 2026-11-12. Current work follows the BinanceMarketData v0.4 overall
 and BMDG module plans. Historical G0-G11 / G12-A/B/C remain complete and
 archived; the v0.3/v0.4 G0-G3 labels do not reopen that history.
 
@@ -16,6 +16,7 @@ archived; the v0.3/v0.4 G0-G3 labels do not reopen that history.
 | M-G1.A | Decimal/aggTrade boundaries; one exchangeInfo decode per market | Complete |
 | M-G1 | Hot-path copy/logging cleanup and single startup parsing | Partly open |
 | M-G2 | Historical macros, duplicate types and boilerplate removal | Partly open |
+| G4 | Tokyo VPS co-located 20-key / 40-stream 2h acceptance | Complete 2026-11-12; PASS with observations |
 | G3-c | Shared VPS, real network, Recorder co-load, resource budget | **Open** |
 
 ## Current design boundaries

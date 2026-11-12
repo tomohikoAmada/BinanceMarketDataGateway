@@ -3,8 +3,9 @@
 Updated: 2026-11-12. Source tree reorganized by domain and renamed BMDG;
 historical G0-G11 / G12-A/B/C records archived. v0.4 G3-a, G3-b and M-G1.A are
 complete; plans G1 (Projection M-P2 production pin), G2 (persistent recoverable
-recovery) and G3 (runtime diagnostics + attach-only consumer) now have Linux
-Release artifacts; plan G4 and G3-c remain open.
+recovery) and G3 (runtime diagnostics + attach-only consumer) have Linux
+Release artifacts; plan G4 completed the Tokyo VPS 2h co-load acceptance with
+observations, while G3-c resource/latency budgets remain open.
 
 ```text
 HISTORICAL_G0_G11=COMPLETE_ARCHIVED
@@ -32,7 +33,10 @@ PROJECTION_M_P2_A_B_C=COMPLETE
 PLAN_G1_PROJECTION_PIN=COMPLETE_LINUX_RELEASE_27/27
 PLAN_G2=PERSISTENT_RECOVERY_LINUX_RELEASE_27/27
 PLAN_G3=DIAGNOSTICS_CONSUMER_LINUX_RELEASE_27/27
-PLAN_G4=OPEN
+PLAN_G4=COMPLETE_VPS_2H_PASS_WITH_OBSERVATIONS
+DEPLOYED_GATEWAY_RELEASE=5e47c59c0769de8b16b67f1aabdb095c3bacdf78
+DEPLOYED_GATEWAY_BINARY_SHA256=f57c1a13670f18a59f34c882c98532934f242d596e9e138852a35a78599c105f
+PLAN_G3C=OPEN_RESOURCE_LATENCY_BUDGET
 DATA_PARITY_SPOT=ALIGNED
 DATA_PARITY_USDM=GAP_BOOKTICKER_AGGTRADE_MARKPRICE_LIQUIDATION
 DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
@@ -100,6 +104,17 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
   EOF/reconnect and missing-data cases. Linux Release CTest 27/27; `bmdg`
   SHA-256
   `041dade119200c634d48306840749be355a68f19cfc2331af8de02563cf6259e`.
+- Plan G4: Gateway release `5e47c59c` / binary `f57c1a13…` deployed to the
+  Tokyo VPS alongside the untouched Recorder C5 processes. A 20-key /
+  40-stream consumer ran 2 h (240 samples): 40/40 accepted and valid, 20
+  snapshots, 1,239,203 updates, 3,306,529 events, 20/20 status keys, 0
+  protocol/RPC/status/identity errors, 20/20 Live and no restarts. Eleven
+  BookTicker `SLOW_CONSUMER` gaps (BTC 5, ETH 5, DOGE 1) were detected,
+  resubscribed and recovered within one 30 s sample; no order-book gaps. The
+  event queue was right-sized to a still-bounded 1024. Resources met the
+  suggested lines (10-minute CPU max 297.9%, MemAvailable min 3.39 GiB, root
+  free min 26.87 GiB) but CPU headroom is thin. `systemctl enable` is set for
+  `bmdg` and `bmdg-consumer`; the services remain running.
 - P1 (pre-optimization): 20-key normal/deep/batch CPU means 0.115 / 1.192 /
   1.242 cores on the local M3, including fixtures/clients; checked apply was
   the dominant owner cost. Projection M-P2.A/B/C now replace the full-book copy
@@ -108,16 +123,15 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
 
 ## Open
 
-- **Plan G4**: no VPS installation, systemd/CA validation or 2h co-load run.
-- **G3-c**: shared VPS, real Binance network, Recorder co-load, target
-  hardware, API budget in production and resource budgets.
+- **G3-c**: approved resource and latency budgets. G4 collected target-VPS
+  co-load data (11 recovered slow-consumer gaps, 10-minute CPU max 297.9%,
+  p99 publish-to-client bucket 500 ms+ under archive/load peaks) but did not
+  establish a new capacity/SLA budget.
 - **BMDG/BMDR data parity**: Spot is aligned; USD-M bookTicker/aggTrade/
   markPrice/forceOrder and REST side data are not yet live-provided. See
   [DATA_PARITY](DATA_PARITY.md).
 - No approved multi-product performance/SLA budget. Twenty products is a
   resource bound, not measured production capacity.
-- Real-network TLS/CA, DNS/proxy and deployment behavior remain to be verified
-  on the target VPS.
 
 See [MILESTONES](MILESTONES.md), [EVIDENCE](EVIDENCE.md),
 [CODE_MAP](CODE_MAP.md) and [ARCHITECTURE](../ARCHITECTURE.md).

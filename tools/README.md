@@ -26,6 +26,16 @@ seconds and contains per-stream first snapshot, updates/events, resubscriptions,
 gap reasons, errors and fixed-bucket latency facts. Negative UTC-clock
 latencies are retained, not clamped.
 
+Production acceptance uses `--supervisor`: one order-book process plus one
+independent process per Spot symbol (aggTrade + BookTicker), so a burst on one
+BookTicker stream cannot starve the order-book or other symbols. The supervisor
+merges the shard summaries and runs one `GetGatewayStatus` loop. Its 40
+subscriptions still count against the gateway's 48-stream cap.
+
+`acceptance_monitor.py` samples the running units, consumer summary, archive
+timer and host resources into JSONL and writes a final verdict. It is an
+observability tool only; it does not start, stop or reconfigure the services.
+
 The `bmdg-consumer.service` unit is the thin same-host deployment wrapper.
 During acceptance it is the only live40 consumer; stop it before a real
 business consumer starts so the gateway's 48-stream cap is not exceeded.

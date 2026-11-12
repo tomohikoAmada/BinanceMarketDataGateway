@@ -1,0 +1,141 @@
+{
+  "archive_success_observed": true,
+  "duration_seconds": 7225.798546463018,
+  "end_utc": "2026-11-12T12:01:38.601416+00:00",
+  "final_summary": {
+    "archive": {
+      "active": "activating",
+      "exec_main_status": "0",
+      "last_trigger_utc": "Thu 2026-11-12 12:01:31 UTC",
+      "result": "success",
+      "sub_state": "start",
+      "timer_active": "active",
+      "timer_sub_state": "running"
+    },
+    "consumer": {
+      "accepted": 40,
+      "active": "active",
+      "active_subscriptions": 40,
+      "child_pids": [
+        454353,
+        454354,
+        454355,
+        454356,
+        454357,
+        454358,
+        454359,
+        454360,
+        454361,
+        454362,
+        454363
+      ],
+      "elapsed": 7418.891776999109,
+      "eofs": 0,
+      "events": 3306529,
+      "exit_reason": "running",
+      "fatal_error": null,
+      "gap_streams": {
+        "MARKET_SPOT:BTCUSDT:book_ticker": {
+          "events": 831364,
+          "gaps": 5,
+          "reason": "CONSUMER_GAP_REASON_SLOW_CONSUMER",
+          "resubscriptions": 5,
+          "snapshots": 0,
+          "updates": 0,
+          "valid": true
+        },
+        "MARKET_SPOT:DOGEUSDT:book_ticker": {
+          "events": 178441,
+          "gaps": 1,
+          "reason": "CONSUMER_GAP_REASON_SLOW_CONSUMER",
+          "resubscriptions": 1,
+          "snapshots": 0,
+          "updates": 0,
+          "valid": true
+        },
+        "MARKET_SPOT:ETHUSDT:book_ticker": {
+          "events": 577015,
+          "gaps": 5,
+          "reason": "CONSUMER_GAP_REASON_SLOW_CONSUMER",
+          "resubscriptions": 5,
+          "snapshots": 0,
+          "updates": 0,
+          "valid": true
+        }
+      },
+      "gaps": 11,
+      "gateway_instance_id": "gw-d10a65c4555aa6798761b23e9c0f3e75",
+      "identity_mismatches": 0,
+      "main_pid": 454351,
+      "markets_live": 20,
+      "markets_non_live": 0,
+      "markets_unknown": 0,
+      "memory_bytes": 323276800,
+      "memory_peak_bytes": 326897664,
+      "missing_keys": 0,
+      "n_restarts": 0,
+      "ok": true,
+      "order_books": 20,
+      "protocol_errors": 0,
+      "resubscriptions": 11,
+      "rpc_errors": 0,
+      "seen_keys": 20,
+      "snapshots": 20,
+      "status_errors": 0,
+      "status_timeouts": 0,
+      "streams": 40,
+      "sub_state": "running",
+      "updates": 1239203,
+      "valid": 40
+    },
+    "elapsed_seconds": 7225.798546463018,
+    "gateway": {
+      "active": "active",
+      "main_pid": 454133,
+      "memory_bytes": 203255808,
+      "memory_peak_bytes": 205844480,
+      "n_restarts": 0,
+      "sub_state": "running"
+    },
+    "recorder": {
+      "sbmdr-recorder@spot": {
+        "active": "active",
+        "main_pid": 442874,
+        "n_restarts": 0,
+        "sub_state": "running"
+      },
+      "sbmdr-recorder@usdm": {
+        "active": "active",
+        "main_pid": 442895,
+        "n_restarts": 0,
+        "sub_state": "running"
+      }
+    },
+    "resources": {
+      "cpu_busy_percent_1core": 285.2934263104286,
+      "data_free_bytes": 2015596093440,
+      "load1": 16.56396484375,
+      "mem_available_bytes": 3908980736,
+      "nproc": 4,
+      "root_free_bytes": 27102318592,
+      "swap_free_bytes": 2107400192
+    },
+    "sample": 239,
+    "utc": "2026-11-12T12:01:38.601416+00:00"
+  },
+  "max_cpu_10m_percent_1core": 297.9173648660699,
+  "min_mem_available_bytes": 3640864768,
+  "min_root_free_bytes": 26867494912,
+  "post_warmup_gaps": 11,
+  "reasons": [
+    "valid fell below 40 after warmup"
+  ],
+  "samples": 240,
+  "samples_file": "/var/lib/bmdg-consumer/g4-2h.jsonl",
+  "start_utc": "2026-11-12T10:01:12.803153+00:00",
+  "started_utc": "2026-11-12T10:01:12.802830+00:00",
+  "status": "FAIL",
+  "warnings": [
+    "11 gap(s) after warmup"
+  ]
+}
