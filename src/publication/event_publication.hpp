@@ -26,7 +26,11 @@ namespace common_wire = ::binance_market_data::common::v1;
 namespace gateway_wire = ::binance_market_data::gateway::v1;
 
 inline constexpr std::size_t kMaximumActiveEventSubscriptions = 8U;
-inline constexpr std::size_t kEventOrdinaryQueueCapacity = 64U;
+// Spot BookTicker is bursty: a real BTCUSDT subscription can deliver more than
+// 64 events before the writer thread drains the first batch. Keep the queue
+// bounded, but size it to absorb the observed burst; overflow still terminalizes
+// the session with CONSUMER_GAP_REASON_SLOW_CONSUMER.
+inline constexpr std::size_t kEventOrdinaryQueueCapacity = 1024U;
 inline constexpr std::size_t kEventTerminalControlCapacity = 1U;
 inline constexpr char kEventRequestSchema[] = "event-subscription-request.v1";
 inline constexpr char kEventSubscriptionAcceptedSchema[] =

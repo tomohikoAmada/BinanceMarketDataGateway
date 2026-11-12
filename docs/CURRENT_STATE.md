@@ -54,8 +54,9 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
   `SubscribeMarketState` is not implemented.
 - Spot events: DIFF_DEPTH / AGG_TRADE / BOOK_TICKER. USD-M events: DIFF_DEPTH.
   Order-book data is Projection-Applied; depth events are pre-Projection.
-- Per-product 8 order-book + 8 event subscriptions; ordinary queues 64 with a
-  terminal slot; slow consumers are terminated per session.
+- Per-product 8 order-book + 8 event subscriptions; ordinary order-book queues
+  64, event queues 1024, each with a terminal slot; slow consumers are
+  terminated per session.
 - Insecure gRPC binds numeric loopback only. Planned rotation is 23h50m
   monotonic, break-before-make. SIGINT/SIGTERM uses an async-safe signal model.
 - Shared-IP public API budget: 3000 Spot / 600 USD-M weight per minute and 60

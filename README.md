@@ -142,8 +142,8 @@ while Binance's server-side counters persist.
 - `SubscribeMarketState`: not implemented.
 
 Per-product active subscriptions are at most 8 order-book and 8 event; ordinary
-queues are 64. Slow consumers are terminalized. The process-wide streaming
-context cap is 48.
+order-book queues are 64 and event queues are 1024. Slow consumers are
+terminalized. The process-wide streaming context cap is 48.
 
 `GetGatewayStatus.markets[].last_event_utc_ns` is the receive UTC of the last
 Projection-Applied Depth in the current valid generation; it is absent when the

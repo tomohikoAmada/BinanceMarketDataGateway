@@ -381,6 +381,137 @@ def test_live40_builds_twenty_books_and_twenty_spot_events() -> None:
     assert sum(1 for stream in streams if stream.stream == "book_ticker") == 10
 
 
+def test_filter_streams_partitions_live40() -> None:
+    spot = [f"SPOT{i}USDT" for i in range(10)]
+    usdm = [f"USD{i}USDT" for i in range(10)]
+    streams = consumer_module.build_streams(
+        {"spot_symbols": spot, "usdm_symbols": usdm}, "live40"
+    )
+    partitions = {
+        stream_filter: consumer_module.filter_streams(streams, stream_filter)
+        for stream_filter in ("order_book", "agg_trade", "book_ticker")
+    }
+    assert len(partitions["order_book"]) == 20
+    assert len(partitions["agg_trade"]) == 10
+    assert len(partitions["book_ticker"]) == 10
+    keys = [stream.key for shard in partitions.values() for stream in shard]
+    assert sorted(keys) == sorted(stream.key for stream in streams)
+    assert len(set(keys)) == 40
+    assert consumer_module.filter_streams(streams, "all") == streams
+    events = consumer_module.filter_streams(streams, "spot_events")
+    assert len(events) == 20
+    one = consumer_module.filter_streams(streams, "spot_events", spot[0])
+    assert len(one) == 2
+    assert {stream.stream for stream in one} == {"agg_trade", "book_ticker"}
+
+
+def test_supervisor_merge_sums_shards_and_sorts() -> None:
+    supervisor = object.__new__(consumer_module.Supervisor)
+    streams, totals = supervisor._merge(
+        [
+            {
+                "streams": [
+                    {"key": "b", "stream": "agg_trade", "snapshot_count": 0},
+                    {"key": "a", "stream": "agg_trade", "snapshot_count": 0},
+                ],
+                "totals": {
+                    "streams": 2,
+                    "accepted": 2,
+                    "snapshots": 0,
+                    "updates": 0,
+                    "events": 5,
+                },
+            },
+            {
+                "streams": [
+                    {"key": "c", "stream": "order_book", "snapshot_count": 3}
+                ],
+                "totals": {
+                    "streams": 1,
+                    "accepted": 1,
+                    "snapshots": 3,
+                    "updates": 4,
+                    "events": 0,
+                },
+            },
+        ]
+    )
+    assert [stream["key"] for stream in streams] == ["a", "b", "c"]
+    assert totals["streams"] == 3
+    assert totals["accepted"] == 3
+    assert totals["snapshots"] == 3
+    assert totals["updates"] == 4
+    assert totals["events"] == 5
+    assert totals["protocol_errors"] == 0
+
+
+async def _run_supervisor_case(tmp_path: Path, duration: float = 3.0):
+    spot = [f"SPOT{i}USDT" for i in range(10)]
+    usdm = [f"USD{i}USDT" for i in range(10)]
+    products = [(SPOT, symbol) for symbol in spot] + [
+        (USDM, symbol) for symbol in usdm
+    ]
+    server = grpc.aio.server()
+    service = FakeGateway("normal", products)
+    gateway_service_pb2_grpc.add_BinanceMarketDataGatewayServiceServicer_to_server(
+        service, server
+    )
+    port = server.add_insecure_port("127.0.0.1:0")
+    await server.start()
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"spot_symbols": spot, "usdm_symbols": usdm}),
+        encoding="utf-8",
+    )
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    streams = consumer_module.build_streams(config, "live40")
+    output = tmp_path / "summary.json"
+    supervisor = consumer_module.Supervisor(
+        target=f"127.0.0.1:{port}",
+        config_path=config_path,
+        profile="live40",
+        streams=streams,
+        output_path=output,
+        duration_seconds=duration,
+        summary_interval_seconds=0.2,
+        status_interval_seconds=0.1,
+        retry_delays=(0.01, 0.02, 0.04),
+        install_signals=False,
+    )
+    try:
+        code = await supervisor.run()
+    finally:
+        await server.stop(0)
+    return code, json.loads(output.read_text(encoding="utf-8"))
+
+
+def test_supervisor_shards_end_to_end(tmp_path: Path) -> None:
+    code, summary = asyncio.run(_run_supervisor_case(tmp_path))
+    assert code == 0
+    assert summary["ok"] is True
+    assert summary["totals"]["streams"] == 40
+    assert summary["totals"]["accepted"] == 40
+    assert summary["totals"]["valid"] == 40
+    assert summary["totals"]["snapshots"] == 20
+    assert summary["totals"]["updates"] == 20
+    assert summary["totals"]["events"] == 20
+    assert summary["totals"]["protocol_errors"] == 0
+    assert summary["totals"]["gaps"] == 0
+    assert len(summary["status"]["seen_keys"]) == 20
+    assert summary["status"]["missing_keys"] == []
+    assert summary["exit_reason"] == "duration"
+
+
+def test_quantity_fast_path_rejects_invalid_and_detects_zero() -> None:
+    assert consumer_module._quantity_is_zero("0")
+    assert consumer_module._quantity_is_zero("0.0000")
+    assert not consumer_module._quantity_is_zero("1.0000")
+    assert not consumer_module._quantity_is_zero("0.0001")
+    for invalid in ("", "-1", "+1", "1e-3", "1.2.3", "."):
+        with pytest.raises(consumer_module.ProtocolViolation):
+            consumer_module._quantity_is_zero(invalid)
+
+
 def test_stream_state_eof_clears_book_and_validity() -> None:
     state = consumer_module.StreamState(
         consumer_module.StreamSpec(

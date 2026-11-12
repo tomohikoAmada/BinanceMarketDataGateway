@@ -17,7 +17,6 @@ import argparse
 import asyncio
 import dataclasses
 import datetime as dt
-import decimal
 import json
 import os
 import signal
@@ -59,6 +58,13 @@ FATAL_RPC_CODES = {
     grpc.StatusCode.PERMISSION_DENIED,
     grpc.StatusCode.UNAUTHENTICATED,
 }
+CLIENT_CHANNEL_OPTIONS = (
+    ("grpc.max_receive_message_length", 16 * 1024 * 1024),
+    # Keep the HTTP/2 receive window open while Python handles a burst. This
+    # does not change the Gateway's bounded publication queue.
+    ("grpc.http2.lookahead_bytes", 8 * 1024 * 1024),
+    ("grpc.optimization_target", "throughput"),
+)
 LATENCY_BUCKETS = (
     ("negative", None, 0.0),
     ("0-1ms", 0.0, 1.0),
@@ -89,6 +95,14 @@ def now_utc_ns() -> int:
 
 def iso_utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def iso_utc_from_ns(value_ns: int) -> str:
+    if value_ns <= 0:
+        return ""
+    return dt.datetime.fromtimestamp(
+        value_ns / 1_000_000_000.0, tz=dt.timezone.utc
+    ).isoformat()
 
 
 def market_name(value: int) -> str:
@@ -171,22 +185,37 @@ class LatencyStats:
         }
 
 
+def _quantity_is_zero(quantity: str) -> bool:
+    if not quantity:
+        raise ProtocolViolation("empty quantity")
+    seen_dot = False
+    digits = False
+    nonzero = False
+    for char in quantity:
+        if char == ".":
+            if seen_dot:
+                raise ProtocolViolation(f"invalid quantity {quantity!r}")
+            seen_dot = True
+        elif "0" <= char <= "9":
+            digits = True
+            if char != "0":
+                nonzero = True
+        else:
+            raise ProtocolViolation(f"invalid quantity {quantity!r}")
+    if not digits:
+        raise ProtocolViolation(f"invalid quantity {quantity!r}")
+    return not nonzero
+
+
 def _apply_levels(book: dict[str, str], levels: Iterable[Any]) -> None:
     for level in levels:
         price = level.price
-        quantity = level.quantity
-        if not price or not quantity:
-            raise ProtocolViolation("empty price or quantity")
-        try:
-            numeric = decimal.Decimal(quantity)
-        except decimal.InvalidOperation as error:
-            raise ProtocolViolation(f"invalid quantity {quantity!r}") from error
-        if numeric < 0:
-            raise ProtocolViolation(f"negative quantity {quantity!r}")
-        if numeric == 0:
+        if not price:
+            raise ProtocolViolation("empty price")
+        if _quantity_is_zero(level.quantity):
             book.pop(price, None)
         else:
-            book[price] = quantity
+            book[price] = level.quantity
 
 
 @dataclasses.dataclass
@@ -213,7 +242,7 @@ class StreamState:
     last_stream_status: str = ""
     last_error: str = ""
     first_snapshot_utc: str = ""
-    last_event_utc: str = ""
+    last_event_utc_ns: int = 0
     book: dict[str, str] = dataclasses.field(default_factory=dict)
     receive_to_publish: LatencyStats = dataclasses.field(
         default_factory=LatencyStats
@@ -308,7 +337,7 @@ class StreamState:
         self.current_valid = True
         if not self.first_snapshot_utc:
             self.first_snapshot_utc = iso_utc_now()
-        self.last_event_utc = iso_utc_now()
+        self.last_event_utc_ns = now_utc_ns()
         self._record_publish_latency(delivery, snapshot.generated_time_utc_ns)
 
     def _depth(self, depth: Any, delivery: Any) -> None:
@@ -324,7 +353,7 @@ class StreamState:
         _apply_levels(self.book, depth.bids)
         _apply_levels(self.book, depth.asks)
         self.update_count += 1
-        self.last_event_utc = iso_utc_now()
+        self.last_event_utc_ns = now_utc_ns()
         self._record_publish_latency(
             delivery, depth.metadata.receive_time_utc_ns
         )
@@ -340,7 +369,7 @@ class StreamState:
             raise ProtocolViolation("event stream mismatch")
         self.event_count += 1
         self.current_valid = True
-        self.last_event_utc = iso_utc_now()
+        self.last_event_utc_ns = now_utc_ns()
         self._record_publish_latency(
             delivery, event.metadata.receive_time_utc_ns
         )
@@ -470,7 +499,7 @@ class StreamState:
             "last_payload": self.last_payload,
             "last_error": self.last_error,
             "first_snapshot_utc": self.first_snapshot_utc,
-            "last_event_utc": self.last_event_utc,
+            "last_event_utc": iso_utc_from_ns(self.last_event_utc_ns),
             "latency_receive_to_publish_ms": self.receive_to_publish.to_dict(),
             "latency_publish_to_client_ms": self.publish_to_client.to_dict(),
         }
@@ -522,6 +551,23 @@ def build_streams(config: dict[str, Any], profile: str) -> list[StreamSpec]:
     return streams
 
 
+def filter_streams(
+    streams: list[StreamSpec], stream_filter: str, symbol: Optional[str] = None
+) -> list[StreamSpec]:
+    if symbol is not None:
+        streams = [stream for stream in streams if stream.symbol == symbol]
+    if stream_filter == "all":
+        return list(streams)
+    if stream_filter == "spot_events":
+        return [
+            stream
+            for stream in streams
+            if stream.market == MARKET_SPOT
+            and stream.stream in ("agg_trade", "book_ticker")
+        ]
+    return [stream for stream in streams if stream.stream == stream_filter]
+
+
 def load_config(path: str) -> dict[str, Any]:
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -557,6 +603,7 @@ class Consumer:
         status_interval_seconds: float = 10.0,
         retry_delays: Iterable[float] = RETRY_DELAYS,
         install_signals: bool = True,
+        enable_status: bool = True,
     ) -> None:
         self.target = target
         self.streams = streams
@@ -567,6 +614,7 @@ class Consumer:
         self.status_interval_seconds = status_interval_seconds
         self.retry_delays = tuple(retry_delays)
         self.install_signals = install_signals
+        self.enable_status = enable_status
         self.started_at_utc = iso_utc_now()
         self.started_monotonic = time.monotonic()
         self.stop_event = asyncio.Event()
@@ -802,6 +850,12 @@ class Consumer:
             return False
         books = [state for state in self.states if state.spec.is_order_book]
         events = [state for state in self.states if not state.spec.is_order_book]
+        status_ok = True
+        if self.enable_status:
+            status_ok = (
+                self.expected_product_keys <= self._status_seen_keys
+                and self._status_identity_mismatches == 0
+            )
         return (
             all(state.accepted_count > 0 for state in self.states)
             and all(state.current_valid for state in self.states)
@@ -811,9 +865,31 @@ class Consumer:
             )
             and all(state.event_count > 0 for state in events)
             and sum(state.protocol_errors for state in self.states) == 0
-            and self.expected_product_keys <= self._status_seen_keys
-            and self._status_identity_mismatches == 0
+            and status_ok
         )
+
+    def _status_summary(self) -> dict[str, Any]:
+        return {
+            "errors": self._status_errors,
+            "timeouts": self._status_timeouts,
+            "identity_mismatches": self._status_identity_mismatches,
+            "last_error": self._status_last_error,
+            "last_success_utc": self._status_last_success_utc,
+            "seen_keys": sorted(
+                f"{enums_pb2.Market.Name(market)}:{symbol}"
+                for _, market, symbol in self._status_seen_keys
+            ),
+            "missing_keys": sorted(
+                f"{enums_pb2.Market.Name(market)}:{symbol}"
+                for _, market, symbol in (
+                    self.expected_product_keys - self._status_seen_keys
+                )
+            ),
+            "total_active_subscriptions": (
+                self._status_total_active_subscriptions
+            ),
+            "markets": self._status_markets,
+        }
 
     def _summary_payload(self) -> dict[str, Any]:
         totals = self._totals()
@@ -831,27 +907,7 @@ class Consumer:
             "fatal_error": self.fatal_error,
             "gateway_instance_id": self._status_gateway_instance_id,
             "totals": totals,
-            "status": {
-                "errors": self._status_errors,
-                "timeouts": self._status_timeouts,
-                "identity_mismatches": self._status_identity_mismatches,
-                "last_error": self._status_last_error,
-                "last_success_utc": self._status_last_success_utc,
-                "seen_keys": sorted(
-                    f"{enums_pb2.Market.Name(market)}:{symbol}"
-                    for _, market, symbol in self._status_seen_keys
-                ),
-                "missing_keys": sorted(
-                    f"{enums_pb2.Market.Name(market)}:{symbol}"
-                    for _, market, symbol in (
-                        self.expected_product_keys - self._status_seen_keys
-                    )
-                ),
-                "total_active_subscriptions": (
-                    self._status_total_active_subscriptions
-                ),
-                "markets": self._status_markets,
-            },
+            "status": self._status_summary(),
             "streams": [state.summary() for state in self.states],
             "latency_basis": (
                 "UTC wall clock; receive→publish uses event/snapshot "
@@ -913,7 +969,7 @@ class Consumer:
             self._install_signal_handlers()
         self._channel = grpc.aio.insecure_channel(
             self.target,
-            options=[("grpc.max_receive_message_length", 16 * 1024 * 1024)],
+            options=list(CLIENT_CHANNEL_OPTIONS),
         )
         self._stub = gateway_service_pb2_grpc.BinanceMarketDataGatewayServiceStub(
             self._channel
@@ -922,7 +978,8 @@ class Consumer:
             asyncio.create_task(self._stream_loop(state))
             for state in self.states
         ]
-        tasks.append(asyncio.create_task(self._status_loop()))
+        if self.enable_status:
+            tasks.append(asyncio.create_task(self._status_loop()))
         tasks.append(asyncio.create_task(self._summary_loop()))
         try:
             if self.duration_seconds > 0:
@@ -945,7 +1002,345 @@ class Consumer:
             await asyncio.gather(*tasks, return_exceptions=True)
             self._write_summary()
             if self._channel is not None:
-                await self._channel.close()
+                try:
+                    await asyncio.wait_for(self._channel.close(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    pass
+        if self.fatal_error:
+            return 2
+        return 0 if (self._last_summary or {}).get("ok", False) else 1
+
+
+class Supervisor:
+    """Run independent stream shards so one high-rate stream cannot starve another."""
+
+    def _shards(self) -> list[tuple[str, str, Optional[str]]]:
+        shards: list[tuple[str, str, Optional[str]]] = [
+            ("order-book", "order_book", None)
+        ]
+        seen: set[str] = set()
+        for stream in self.streams:
+            if (
+                stream.market != MARKET_SPOT
+                or stream.stream not in ("agg_trade", "book_ticker")
+                or stream.symbol in seen
+            ):
+                continue
+            seen.add(stream.symbol)
+            shards.append(
+                (f"events-{stream.symbol}", "spot_events", stream.symbol)
+            )
+        return shards
+
+    def __init__(
+        self,
+        *,
+        target: str,
+        config_path: Path,
+        profile: str,
+        streams: list[StreamSpec],
+        output_path: Path,
+        duration_seconds: float = 0.0,
+        summary_interval_seconds: float = 30.0,
+        status_interval_seconds: float = 10.0,
+        retry_delays: Iterable[float] = RETRY_DELAYS,
+        install_signals: bool = True,
+    ) -> None:
+        self.target = target
+        self.config_path = config_path
+        self.profile = profile
+        self.streams = streams
+        self.output_path = output_path
+        self.duration_seconds = duration_seconds
+        self.summary_interval_seconds = summary_interval_seconds
+        self.status_interval_seconds = status_interval_seconds
+        self.retry_delays = tuple(retry_delays)
+        self.install_signals = install_signals
+        self.started_at_utc = iso_utc_now()
+        self.started_monotonic = time.monotonic()
+        self.stop_event = asyncio.Event()
+        self.exit_reason = "running"
+        self.fatal_error: Optional[str] = None
+        self.shard_paths: list[Path] = []
+        self.processes: list[tuple[str, asyncio.subprocess.Process]] = []
+        self._last_summary: Optional[dict[str, Any]] = None
+        self.status_consumer = Consumer(
+            target=target,
+            streams=streams,
+            output_path=output_path,
+            profile=profile,
+            duration_seconds=0.0,
+            summary_interval_seconds=summary_interval_seconds,
+            status_interval_seconds=status_interval_seconds,
+            retry_delays=retry_delays,
+            install_signals=False,
+            enable_status=True,
+        )
+        self.status_consumer.stop_event = self.stop_event
+
+    def _request_stop(self) -> None:
+        if not self.stop_event.is_set():
+            if self.exit_reason == "running":
+                self.exit_reason = "signal"
+            self.stop_event.set()
+
+    async def _wait_children(self) -> None:
+        pending = {
+            asyncio.create_task(process.wait()): (name, process)
+            for name, process in self.processes
+        }
+        while pending:
+            done, _ = await asyncio.wait(
+                pending.keys(), return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                name, _process = pending.pop(task)
+                code = task.result()
+                if not self.stop_event.is_set():
+                    self.fatal_error = f"shard {name} exited {code}"
+                    self.exit_reason = "fatal"
+                    self.stop_event.set()
+
+    async def _summary_loop(self) -> None:
+        self._write_summary()
+        while not self.stop_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    self.stop_event.wait(),
+                    timeout=self.summary_interval_seconds,
+                )
+            except asyncio.TimeoutError:
+                pass
+            if self.stop_event.is_set():
+                break
+            self._write_summary()
+
+    def _read_shards(self) -> list[dict[str, Any]]:
+        shards: list[dict[str, Any]] = []
+        for path in self.shard_paths:
+            try:
+                shards.append(json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError):
+                continue
+        return shards
+
+    def _merge(
+        self, shards: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], dict[str, int]]:
+        streams: list[dict[str, Any]] = []
+        totals = {
+            "streams": 0,
+            "order_books": 0,
+            "accepted": 0,
+            "valid": 0,
+            "snapshots": 0,
+            "updates": 0,
+            "events": 0,
+            "resubscriptions": 0,
+            "gaps": 0,
+            "protocol_errors": 0,
+            "rpc_errors": 0,
+            "eofs": 0,
+        }
+        for shard in shards:
+            streams.extend(shard.get("streams", []))
+            shard_totals = shard.get("totals", {})
+            for key in totals:
+                totals[key] += int(shard_totals.get(key, 0))
+        streams.sort(key=lambda stream: stream.get("key", ""))
+        return streams, totals
+
+    def _summary_payload(self) -> dict[str, Any]:
+        streams, totals = self._merge(self._read_shards())
+        status = self.status_consumer._status_summary()
+        ok = self._compute_ok(streams, totals, status)
+        return {
+            "schema_version": "bmdg-consumer-summary.v1",
+            "profile": self.profile,
+            "target": self.target,
+            "started_at_utc": self.started_at_utc,
+            "updated_at_utc": iso_utc_now(),
+            "elapsed_seconds": time.monotonic() - self.started_monotonic,
+            "duration_seconds": self.duration_seconds,
+            "exit_reason": self.exit_reason,
+            "ok": ok,
+            "fatal_error": self.fatal_error,
+            "gateway_instance_id": self.status_consumer._status_gateway_instance_id,
+            "totals": totals,
+            "status": status,
+            "streams": streams,
+            "latency_basis": (
+                "UTC wall clock; receive→publish uses event/snapshot "
+                "timestamps; publish→client includes client scheduling; "
+                "negative values are not clamped"
+            ),
+        }
+
+    def _compute_ok(
+        self,
+        streams: list[dict[str, Any]],
+        totals: dict[str, int],
+        status: dict[str, Any],
+    ) -> bool:
+        if self.fatal_error:
+            return False
+        books = [stream for stream in streams if stream["stream"] == "order_book"]
+        events = [stream for stream in streams if stream["stream"] != "order_book"]
+        expected_keys = {stream.key for stream in self.streams}
+        actual_keys = {stream["key"] for stream in streams}
+        status_ok = (
+            self.status_consumer.expected_product_keys
+            <= self.status_consumer._status_seen_keys
+            and self.status_consumer._status_identity_mismatches == 0
+        )
+        return (
+            bool(streams)
+            and totals["streams"] == len(self.streams)
+            and actual_keys == expected_keys
+            and all(stream["accepted_count"] > 0 for stream in streams)
+            and all(stream["current_valid"] for stream in streams)
+            and all(
+                stream["snapshot_count"] > 0 and stream["update_count"] > 0
+                for stream in books
+            )
+            and all(stream["event_count"] > 0 for stream in events)
+            and totals["protocol_errors"] == 0
+            and status_ok
+        )
+
+    def _write_summary(self) -> None:
+        payload = self._summary_payload()
+        try:
+            atomic_write_json(self.output_path, payload)
+        except OSError as error:
+            self.fatal_error = f"cannot write summary: {error}"
+            self.exit_reason = "fatal"
+            self.stop_event.set()
+            return
+        self._last_summary = payload
+        totals = payload["totals"]
+        print(
+            "consumer_summary "
+            f"supervisor=yes elapsed={payload['elapsed_seconds']:.0f}s "
+            f"streams={totals['streams']} accepted={totals['accepted']} "
+            f"valid={totals['valid']} snapshots={totals['snapshots']} "
+            f"updates={totals['updates']} events={totals['events']} "
+            f"resubscriptions={totals['resubscriptions']} "
+            f"gaps={totals['gaps']} "
+            f"protocol_errors={totals['protocol_errors']} "
+            f"rpc_errors={totals['rpc_errors']} "
+            f"status_errors={payload['status']['errors']} "
+            f"ok={'yes' if payload['ok'] else 'no'}",
+            flush=True,
+        )
+
+    async def run(self) -> int:
+        loop = asyncio.get_running_loop()
+        if self.install_signals:
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.add_signal_handler(signum, self._request_stop)
+                except NotImplementedError:
+                    break
+        status_task: Optional[asyncio.Task[Any]] = None
+        summary_task: Optional[asyncio.Task[Any]] = None
+        child_task: Optional[asyncio.Task[Any]] = None
+        try:
+            script = Path(__file__).resolve()
+            child_summary_interval = min(
+                10.0, self.summary_interval_seconds
+            )
+            for name, stream_filter, symbol in self._shards():
+                shard_path = (
+                    self.output_path.parent
+                    / f".{self.output_path.stem}.{name}.json"
+                ).resolve()
+                self.shard_paths.append(shard_path)
+                shard_path.unlink(missing_ok=True)
+                command = [
+                    sys.executable,
+                    str(script),
+                    "--target",
+                    self.target,
+                    "--config",
+                    str(self.config_path),
+                    "--profile",
+                    self.profile,
+                    "--streams",
+                    stream_filter,
+                    "--no-status",
+                    "--duration-seconds",
+                    "0",
+                    "--output",
+                    str(shard_path),
+                    "--summary-interval-seconds",
+                    str(child_summary_interval),
+                ]
+                if symbol is not None:
+                    command.extend(["--symbol", symbol])
+                process = await asyncio.create_subprocess_exec(*command)
+                self.processes.append((name, process))
+            # Spawn shard children before this process initializes gRPC, so
+            # they do not inherit an active channel's completion-queue fds.
+            self.status_consumer._channel = grpc.aio.insecure_channel(
+                self.target,
+                options=list(CLIENT_CHANNEL_OPTIONS),
+            )
+            self.status_consumer._stub = (
+                gateway_service_pb2_grpc.BinanceMarketDataGatewayServiceStub(
+                    self.status_consumer._channel
+                )
+            )
+            status_task = asyncio.create_task(
+                self.status_consumer._status_loop()
+            )
+            summary_task = asyncio.create_task(self._summary_loop())
+            child_task = asyncio.create_task(self._wait_children())
+            if self.duration_seconds > 0:
+                try:
+                    await asyncio.wait_for(
+                        self.stop_event.wait(),
+                        timeout=self.duration_seconds,
+                    )
+                except asyncio.TimeoutError:
+                    if self.exit_reason == "running":
+                        self.exit_reason = "duration"
+            else:
+                await self.stop_event.wait()
+                if self.exit_reason == "running":
+                    self.exit_reason = "signal"
+        finally:
+            self.stop_event.set()
+            for _name, process in self.processes:
+                if process.returncode is None:
+                    process.terminate()
+            deadline = loop.time() + 15.0
+            for _name, process in self.processes:
+                remaining = max(0.0, deadline - loop.time())
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+            for task in (status_task, summary_task, child_task):
+                if task is not None:
+                    task.cancel()
+            await asyncio.gather(
+                *(
+                    task
+                    for task in (status_task, summary_task, child_task)
+                    if task is not None
+                ),
+                return_exceptions=True,
+            )
+            self._write_summary()
+            if self.status_consumer._channel is not None:
+                try:
+                    await asyncio.wait_for(
+                        self.status_consumer._channel.close(), timeout=5.0
+                    )
+                except asyncio.TimeoutError:
+                    pass
         if self.fatal_error:
             return 2
         return 0 if (self._last_summary or {}).get("ok", False) else 1
@@ -984,6 +1379,33 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--status-interval-seconds", type=float, default=10.0
     )
+    parser.add_argument(
+        "--supervisor",
+        action="store_true",
+        help="run independent order-book, aggTrade and bookTicker shards",
+    )
+    parser.add_argument(
+        "--streams",
+        choices=(
+            "all",
+            "order_book",
+            "agg_trade",
+            "book_ticker",
+            "spot_events",
+        ),
+        default="all",
+        help="internal shard filter",
+    )
+    parser.add_argument(
+        "--symbol",
+        default=None,
+        help="internal single-symbol shard filter",
+    )
+    parser.add_argument(
+        "--no-status",
+        action="store_true",
+        help="internal shard mode without GetGatewayStatus",
+    )
     return parser.parse_args(argv)
 
 
@@ -992,26 +1414,42 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         _validate_target(args.target)
         config = load_config(args.config)
-        streams = build_streams(config, args.profile)
+        streams = filter_streams(
+            build_streams(config, args.profile), args.streams, args.symbol
+        )
     except ConfigError as error:
         print(f"consumer_config_error={error}", file=sys.stderr)
         return 2
+    mode = "supervisor" if args.supervisor else "single"
     print(
         "consumer_start "
-        f"target={args.target} profile={args.profile} "
+        f"target={args.target} profile={args.profile} mode={mode} "
         f"streams={len(streams)} output={args.output}",
         flush=True,
     )
-    consumer = Consumer(
-        target=args.target,
-        streams=streams,
-        output_path=Path(args.output),
-        profile=args.profile,
-        duration_seconds=args.duration_seconds,
-        summary_interval_seconds=args.summary_interval_seconds,
-        status_interval_seconds=args.status_interval_seconds,
-    )
     try:
+        if args.supervisor:
+            supervisor = Supervisor(
+                target=args.target,
+                config_path=Path(args.config),
+                profile=args.profile,
+                streams=streams,
+                output_path=Path(args.output),
+                duration_seconds=args.duration_seconds,
+                summary_interval_seconds=args.summary_interval_seconds,
+                status_interval_seconds=args.status_interval_seconds,
+            )
+            return asyncio.run(supervisor.run())
+        consumer = Consumer(
+            target=args.target,
+            streams=streams,
+            output_path=Path(args.output),
+            profile=args.profile,
+            duration_seconds=args.duration_seconds,
+            summary_interval_seconds=args.summary_interval_seconds,
+            status_interval_seconds=args.status_interval_seconds,
+            enable_status=not args.no_status,
+        )
         return asyncio.run(consumer.run())
     except KeyboardInterrupt:
         return 130

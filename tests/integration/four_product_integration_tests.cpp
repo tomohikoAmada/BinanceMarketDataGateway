@@ -271,6 +271,10 @@ void pipeline_recovery_slow_consumers_and_shutdown() {
     REQUIRE(config.specs[i].numeric_spec.quantity_scale.value() ==
             scale(sample(keys[i]).step));
   }
+  // This scenario deliberately leaves one event session unconsumed and drives
+  // 65 events through it; use a small test bound so the terminalization path is
+  // exercised without publishing the production 1024-event burst.
+  config.specs[1].options.event_limits.ordinary_queue_capacity = 8U;
   production::ProductionGateway gateway{std::move(config.specs),
                                         support::fixed_clock(), "four-pipeline",
                                         "127.0.0.1:0", options()};
