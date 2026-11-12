@@ -84,7 +84,7 @@ Actions `ubuntu-24.04`, GCC 13, C++20, Release.
   Archived tar SHA-256
   `75e000c1632ad10785a2fc8b3f6ace06b93330cb8862cb42686aba07abe6b4ad`.
 - Scope: Linux build/package evidence only. No VPS install or service change.
-  Plan G2 was subsequently completed (see below); Plan G3/G4 remain open.
+  Plan G2 and G3 were subsequently completed (see below); Plan G4 remains open.
 
 ## Plan G2 — persistent recoverable recovery
 
@@ -114,7 +114,44 @@ Gateway candidate `6fdeb47682c51463c13a04cb9a23efc5972b841b`.
   archived tar SHA-256
   `f77cb52c08a9d7318838d8735d3ca40266a5f39bb38c2ce0d466faf5041ab795`.
 - Scope: off-VPS implementation and Linux build/package evidence only. Plan
-  G3/G4 remain open.
+  G3 was subsequently completed (see below); Plan G4 remains open.
+
+## Plan G3 — runtime diagnostics and attach-only consumer
+
+Gateway candidate `282f0fc6773534470bd3bcdf9eaa3096740e0eed`.
+
+- The daemon now waits on SIGINT/SIGTERM with a bounded 30 s interval, emits a
+  one-line runtime summary each cycle, and emits per-product diagnostics only
+  when state/generation/recovery-count/terminal cause changes. Failure history
+  is emitted once per new generation; observation timeouts print
+  `gateway_observation=unavailable` without stopping the daemon.
+- `tools/consume_gateway.py` is an attach-only 20-key / 40-stream probe. It
+  uses one OrderBook subscription per key, one Spot AggTrade and one Spot
+  BookTicker selector per symbol, validates Accepted/session sequence/canonical
+  metadata, maintains only the delivered local book, invalidates on gaps/EOF/RPC
+  errors, resubscribes with `1,2,4,8,16,30 s` backoff, and writes the summary
+  atomically every 30 s. It never starts/stops the gateway or contacts Binance.
+- The client uses the fixed Contracts Python revision
+  `518880bdfa60948c3b65b6b3525d024526995166`, with `grpcio==1.81.1` and
+  `protobuf==6.33.5`. `deployment/bmdg-consumer.service` is the thin loopback
+  unit; it deliberately has no `Requires`/`BindsTo` on `bmdg.service`.
+- Tests: C++ diagnostics dedup/change and timed-signal tests pass; Python fake
+  gRPC tests cover normal attach, sequence break, legacy metadata, EOF/reconnect
+  with a new snapshot, missing data, 40-stream construction and no overlapping
+  old calls.
+- Local Release CTest **27/27**; ASan+UBSan and TSan production tests pass.
+- Linux GitHub Actions run
+  [43157004231](https://github.com/tomohikoAmada/BinanceMarketDataGateway/actions/runs/43157004231):
+  consumer probe tests pass; production CTest **27/27** (6.83 s). The release
+  package now also contains `tools/consume_gateway.py`, pinned client
+  requirements, `contracts-src`, and `deployment/bmdg-consumer.service`.
+- `bmdg` SHA-256
+  `041dade119200c634d48306840749be355a68f19cfc2331af8de02563cf6259e`;
+  artifact `bmdg-linux-x86_64-282f0fc6773534470bd3bcdf9eaa3096740e0eed`;
+  archived tar SHA-256
+  `b88c945b9b3b62ff3f62e2ff1bf96a38d72f8c052ab3270c017272f0664dd74d`.
+- Scope: off-VPS implementation and Linux build/package evidence only. Plan
+  G4 remains open.
 
 ## G3-a — 20-key offline lifecycle
 
@@ -189,8 +226,6 @@ Archived for traceability only:
 
 ## Still unproven
 
-- Plan G3: low-frequency runtime diagnostics and the attach-only 20-key /
-  40-stream consumer are not implemented.
 - Plan G4: no VPS installation, systemd/CA validation or 2h co-load run.
 - G3-c: shared VPS, real Binance network, Recorder co-load, target hardware,
   resource budgets and production restart behavior.
