@@ -12,7 +12,7 @@ if [[ "$mode" == prepare ]]; then
     mkdir -p build/ci-upstream
     for item in \
         'BinanceMarketDataContracts 518880bdfa60948c3b65b6b3525d024526995166' \
-        'BinanceMarketDataProjection 555dd1f4d846e19cfd6fbe55676c86504559048e'; do
+        'BinanceMarketDataProjection 2de9b68071867eb0d35a9b11a06bb1dd8c652d56'; do
         read -r repository revision <<< "$item"
         directory="build/ci-upstream/$repository"
         if [[ ! -d "$directory/.git" ]]; then
@@ -31,7 +31,7 @@ if [[ "$mode" == prepare ]]; then
     for ref in \
         'binance-market-data-contracts-cpp/0.1.0#53713fb82c27cf6ea0395f6b8a853006' \
         'binance-market-data-contracts-grpc-cpp/0.1.0#c3661aa735e1eb6450c1a93f635dbc20' \
-        'binance-market-data-projection/0.1.0#d95fa71d6dca8d931e72fbb5b74114a9'; do
+        'binance-market-data-projection/0.1.0#00e889f34095258672fd46db83f0826a'; do
         conan cache path "$ref"
     done
     # Only this explicitly requested preparation may build missing binaries.

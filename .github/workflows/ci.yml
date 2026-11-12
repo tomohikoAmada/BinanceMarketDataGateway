@@ -186,4 +186,61 @@ jobs:
       - name: Build real daemon and offline tests
         run: cmake --build build/production --parallel 4
       - name: Production offline regression
-        run: ctest --test-dir build/production --output-on-failure
+        run: |
+          set -o pipefail
+          ctest --test-dir build/production --output-on-failure 2>&1 | tee build/production-ctest.log
+      - name: Install release package
+        run: |
+          cmake --install build/production --prefix build/production-package
+          test -x build/production-package/bin/bmdg
+          file build/production-package/bin/bmdg
+          ldd build/production-package/bin/bmdg | tee build/production-package/ldd.txt
+          if grep -q 'not found' build/production-package/ldd.txt; then
+            echo "unresolved shared library in bmdg" >&2
+            exit 1
+          fi
+          if grep -q 'production-conan' build/production-package/ldd.txt; then
+            echo "bmdg links a build-machine Conan cache path" >&2
+            exit 1
+          fi
+          sha256sum build/production-package/bin/bmdg | tee build/production-package/bmdg.sha256
+      - name: Record Projection dependency identity
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          graph = json.loads(Path("build/production-deps-graph.json").read_text())
+          nodes = graph["graph"]["nodes"].values()
+          selected = [n for n in nodes
+                      if (n.get("ref") or "").startswith("binance-market-data-projection/")]
+          if len(selected) != 1:
+              raise SystemExit(f"expected exactly one Projection node, got {len(selected)}")
+          node = selected[0]
+          lines = [
+              f"commit={os.environ.get('GITHUB_SHA')}",
+              f"projection_ref={node.get('ref')}",
+              f"projection_package_id={node.get('package_id')}",
+              f"projection_prev={node.get('prev')}",
+              f"projection_binary={node.get('binary')}",
+          ]
+          text = "\n".join(lines) + "\n"
+          Path("build/production-package/dependency-identity.txt").write_text(text)
+          print(text)
+          PY
+          cat build/production-package/dependency-identity.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Create release archive
+        run: |
+          cp build/production-deps-graph.json build/production-package/
+          tar -C build/production-package -czf "build/bmdg-linux-x86_64-${GITHUB_SHA}.tar.gz" .
+          sha256sum "build/bmdg-linux-x86_64-${GITHUB_SHA}.tar.gz" > "build/bmdg-linux-x86_64-${GITHUB_SHA}.tar.gz.sha256"
+      - name: Upload Linux release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: bmdg-linux-x86_64-${{ github.sha }}
+          path: |
+            build/bmdg-linux-x86_64-${{ github.sha }}.tar.gz
+            build/bmdg-linux-x86_64-${{ github.sha }}.tar.gz.sha256
+          retention-days: 14
+          if-no-files-found: error
