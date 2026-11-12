@@ -1,8 +1,10 @@
 #pragma once
 
+#include <chrono>
 #include <condition_variable>
 #include <csignal>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 namespace binance_market_data::gateway::production {
@@ -20,6 +22,9 @@ public:
 
   [[nodiscard]] bool requested() const noexcept;
   [[nodiscard]] int wait() noexcept;
+  // Returns the signal when delivered, or nullopt when the timeout expires.
+  [[nodiscard]] std::optional<int>
+  wait_for(std::chrono::steady_clock::duration timeout) noexcept;
 
 private:
   void loop(std::stop_token stop_token) noexcept;

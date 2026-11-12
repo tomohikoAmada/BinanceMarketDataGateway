@@ -1,0 +1,21 @@
+[Unit]
+Description=BMDG production consumer probe
+Documentation=https://github.com/tomohikoAmada/BinanceMarketDataGateway
+After=bmdg.service
+# Deliberately no Requires/BindsTo: stopping this probe must not stop bmdg.
+
+[Service]
+Type=exec
+User=bmdg
+Group=bmdg
+Environment=PYTHONPATH=/opt/bmdg/current/contracts-src/src
+StateDirectory=bmdg-consumer
+ExecStart=/opt/bmdg/current/client-venv/bin/python /opt/bmdg/current/tools/consume_gateway.py --target 127.0.0.1:50051 --config /etc/bmdg/gateway.json --profile live40 --duration-seconds 0 --output /var/lib/bmdg-consumer/summary.json
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

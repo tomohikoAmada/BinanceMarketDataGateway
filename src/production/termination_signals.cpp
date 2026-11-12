@@ -44,6 +44,15 @@ int TerminationSignals::wait() noexcept {
   return signal_;
 }
 
+std::optional<int> TerminationSignals::wait_for(
+    std::chrono::steady_clock::duration timeout) noexcept {
+  std::unique_lock lock{mutex_};
+  if (!condition_.wait_for(lock, timeout, [this] { return requested_; })) {
+    return std::nullopt;
+  }
+  return signal_;
+}
+
 void TerminationSignals::loop(std::stop_token stop_token) noexcept {
   while (!stop_token.stop_requested()) {
     int received = 0;
