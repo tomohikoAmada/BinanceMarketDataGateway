@@ -171,7 +171,10 @@ public:
     request_.set(http::field::user_agent, "bmdg-spot/1.0.0");
     request_.set(http::field::accept, "application/json");
     request_.set(http::field::connection, "close");
-    parser_.body_limit(16U * 1024U * 1024U);
+    // The full Spot exchangeInfo document is currently ~17 MiB. Keep the
+    // set-level metadata fetch bounded with headroom; depth snapshots retain
+    // their separate 16 MiB limit.
+    parser_.body_limit(32U * 1024U * 1024U);
   }
 
   void start() {
