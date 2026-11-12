@@ -43,6 +43,37 @@ This is the current evidence index. Full historical records are in
 - A 10 Spot + 10 USD-M startup metadata test resolves all 20 products and
   verifies each symbol's precision from one fetch count per market.
 
+## Plan G1 — Projection M-P2 production pin
+
+Built from Gateway candidate `7016d47bda65ab86ad2114e88321f4dfa487f38f`
+(G1 dependency change `62f5d61a64a276cba7db65a22e32ca4e01f5b965`) on GitHub
+Actions `ubuntu-24.04`, GCC 13, C++20, Release.
+
+- Projection source `2de9b68071867eb0d35a9b11a06bb1dd8c652d56`; recipe
+  revision `00e889f34095258672fd46db83f0826a`; Linux package ID
+  `65e04c2c5034ee79c36b29706a827245e945a52a`; PREV
+  `21e94d3728186f19e779d5ccce6e408c`.
+- `proto_adapter=True`, `shared=False`; Contracts message/gRPC packages remain
+  `53713fb82c27cf6ea0395f6b8a853006` /
+  `c3661aa735e1eb6450c1a93f635dbc20`.
+- Production daemon ON, tests ON, upstream link smoke OFF. CTest **27/27
+  passed** (6.26 s), including four/twenty-product, RPC, recovery/rotation and
+  production/daemon tests.
+- The final `bmdg` link line references `libbmd_projection_core.a` and
+  `libbmd_projection_proto_adapter.a` from the new package; see the artifact's
+  `projection-link-inputs.txt` and `bmdg-link.txt`.
+- `bmdg` SHA-256
+  `d5e03400c21f22d4bf5350337f9adc69ece56429595b958e0d3b8261d63344e3`;
+  `ldd` lists only system libraries, with no `not found` and no build-cache
+  path.
+- GitHub Actions run
+  [43143646562](https://github.com/tomohikoAmada/BinanceMarketDataGateway/actions/runs/43143646562);
+  artifact `bmdg-linux-x86_64-7016d47bda65ab86ad2114e88321f4dfa487f38f`.
+  Archived tar SHA-256
+  `75e000c1632ad10785a2fc8b3f6ace06b93330cb8862cb42686aba07abe6b4ad`.
+- Scope: Linux build/package evidence only. No VPS install or service change.
+  Plan G2/G3/G4 remain open.
+
 ## G3-a — 20-key offline lifecycle
 
 - 20 exact products accepted at config/preparation/registry; 21 rejected.
@@ -116,6 +147,11 @@ Archived for traceability only:
 
 ## Still unproven
 
+- Plan G2: recoverable failures still exhaust after six attempts; long-failure
+  recovery, cancellation and product isolation tests are pending.
+- Plan G3: low-frequency runtime diagnostics and the attach-only 20-key /
+  40-stream consumer are not implemented.
+- Plan G4: no VPS installation, systemd/CA validation or 2h co-load run.
 - G3-c: shared VPS, real Binance network, Recorder co-load, target hardware,
   resource budgets and production restart behavior.
 - No approved multi-product capacity or latency SLA.

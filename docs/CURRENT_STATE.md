@@ -1,8 +1,9 @@
 # Current BMDG state
 
-Updated: 2026-11-11. Source tree reorganized by domain and renamed BMDG;
+Updated: 2026-11-12. Source tree reorganized by domain and renamed BMDG;
 historical G0-G11 / G12-A/B/C records archived. v0.4 G3-a, G3-b and M-G1.A are
-complete; G3-c remains open.
+complete; plan G1 (Projection M-P2 production pin) now has a Linux Release
+artifact; plan G2/G3/G4 and G3-c remain open.
 
 ```text
 HISTORICAL_G0_G11=COMPLETE_ARCHIVED
@@ -27,6 +28,10 @@ TEST_BASELINE=RELEASE_27/27_WERROR_27/27_ASAN_UBSAN_27/27_TSAN_27/27_PERF_28/28_
 PERFORMANCE_AND_RESOURCE_BUDGETS=NOT_ESTABLISHED
 MULTI_PRODUCT_PRODUCTION_CAPACITY=NOT_ESTABLISHED
 PROJECTION_M_P2_A_B_C=COMPLETE
+PLAN_G1_PROJECTION_PIN=COMPLETE_LINUX_RELEASE_27/27
+PLAN_G2=OPEN
+PLAN_G3=OPEN
+PLAN_G4=OPEN
 DATA_PARITY_SPOT=ALIGNED
 DATA_PARITY_USDM=GAP_BOOKTICKER_AGGTRADE_MARKPRICE_LIQUIDATION
 DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
@@ -74,6 +79,11 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
 - M-G1.A: Release production graph 27/27 and format check pass; `"0.0"` and
   `l < f` rejection cases pass; 10 Spot + 10 USD-M startup metadata batch
   resolves all 20 products from one decode per market.
+- Plan G1: Linux Ubuntu 24.04 / GCC 13 / C++20 Release artifact built with
+  Projection `2de9b680` (RREV `00e889f34095258672fd46db83f0826a`, package ID
+  `65e04c2c5034ee79c36b29706a827245e945a52a`, PREV
+  `21e94d3728186f19e779d5ccce6e408c`); CTest 27/27. The final `bmdg` link
+  inputs and binary SHA are recorded in [EVIDENCE](EVIDENCE.md).
 - P1 (pre-optimization): 20-key normal/deep/batch CPU means 0.115 / 1.192 /
   1.242 cores on the local M3, including fixtures/clients; checked apply was
   the dominant owner cost. Projection M-P2.A/B/C now replace the full-book copy
@@ -82,6 +92,11 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
 
 ## Open
 
+- **Plan G2**: recoverable failures still exhaust after six attempts; bounded
+  long-failure recovery, cancellation and product-isolation tests are pending.
+- **Plan G3**: low-frequency runtime diagnostics and the attach-only 20-key /
+  40-stream consumer are not implemented.
+- **Plan G4**: no VPS installation, systemd/CA validation or 2h co-load run.
 - **G3-c**: shared VPS, real Binance network, Recorder co-load, target
   hardware, API budget in production and resource budgets.
 - **BMDG/BMDR data parity**: Spot is aligned; USD-M bookTicker/aggTrade/
