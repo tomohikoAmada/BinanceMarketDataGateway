@@ -215,6 +215,12 @@ Gateway release `5e47c59c0769de8b16b67f1aabdb095c3bacdf78`; binary SHA-256
   open for G3-c/approved budgets.
 - Full record: [archive/G4_VPS_2H_EVIDENCE.md](archive/G4_VPS_2H_EVIDENCE.md);
   raw monitor verdict [G4_VPS_2H_FINAL.json](archive/G4_VPS_2H_FINAL.json).
+- **M4 / Phase 5 24h follow-up:** same process, consumer start
+  `2026-11-12T09:57:33Z`, target `2026-11-13T09:57:33Z`; running, not yet
+  accepted. At 4h08m it remained 40/40 valid with zero protocol/RPC/identity
+  errors, but gaps had risen to 45 and two USD-M order books had resubscribed
+  (snapshots 22); load1 was about 21. The 24h endpoint, planned rotations and
+  resources still need review.
 
 ## Projection P1 — pre-optimization measured cost
 

@@ -34,6 +34,7 @@ PLAN_G1_PROJECTION_PIN=COMPLETE_LINUX_RELEASE_27/27
 PLAN_G2=PERSISTENT_RECOVERY_LINUX_RELEASE_27/27
 PLAN_G3=DIAGNOSTICS_CONSUMER_LINUX_RELEASE_27/27
 PLAN_G4=COMPLETE_VPS_2H_PASS_WITH_OBSERVATIONS
+M4_24H=IN_PROGRESS_START_2026-11-12T09:57:33Z_TARGET_2026-11-13T09:57:33Z
 DEPLOYED_GATEWAY_RELEASE=5e47c59c0769de8b16b67f1aabdb095c3bacdf78
 DEPLOYED_GATEWAY_BINARY_SHA256=f57c1a13670f18a59f34c882c98532934f242d596e9e138852a35a78599c105f
 PLAN_G3C=OPEN_RESOURCE_LATENCY_BUDGET
@@ -127,6 +128,12 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
   co-load data (11 recovered slow-consumer gaps, 10-minute CPU max 297.9%,
   p99 publish-to-client bucket 500 ms+ under archive/load peaks) but did not
   establish a new capacity/SLA budget.
+- **M4 / Phase 5 24h**: same-run follow-up started with the consumer at
+  `2026-11-12T09:57:33Z`; target `2026-11-13T09:57:33Z`. It is running, not yet
+  accepted. At 4h08m it was still 40/40 valid with 0 protocol/RPC/identity
+  errors, but cumulative gaps had risen to 45 and two USD-M order books had
+  resubscribed (snapshots 22); load was about 21. M4 needs the 24h endpoint,
+  planned rotation/recovery and resource review before PASS.
 - **BMDG/BMDR data parity**: Spot is aligned; USD-M bookTicker/aggTrade/
   markPrice/forceOrder and REST side data are not yet live-provided. See
   [DATA_PARITY](DATA_PARITY.md).
