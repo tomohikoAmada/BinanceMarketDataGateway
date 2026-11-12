@@ -243,7 +243,8 @@ class StreamState:
     last_error: str = ""
     first_snapshot_utc: str = ""
     last_event_utc_ns: int = 0
-    book: dict[str, str] = dataclasses.field(default_factory=dict)
+    bids: dict[str, str] = dataclasses.field(default_factory=dict)
+    asks: dict[str, str] = dataclasses.field(default_factory=dict)
     receive_to_publish: LatencyStats = dataclasses.field(
         default_factory=LatencyStats
     )
@@ -253,7 +254,7 @@ class StreamState:
 
     @property
     def book_levels(self) -> int:
-        return len(self.book)
+        return len(self.bids) + len(self.asks)
 
     def reset_session(self) -> None:
         self.subscription_id = ""
@@ -262,7 +263,8 @@ class StreamState:
         self.current_valid = False
         self.snapshot_seen = False
         self.last_payload = ""
-        self.book.clear()
+        self.bids.clear()
+        self.asks.clear()
 
     def _record_publish_latency(
         self, delivery: Any, source_receive_ns: int
@@ -329,9 +331,10 @@ class StreamState:
             raise ProtocolViolation("snapshot is not synchronized")
         if snapshot.last_update_id == 0:
             raise ProtocolViolation("snapshot last_update_id is zero")
-        self.book.clear()
-        _apply_levels(self.book, snapshot.bids)
-        _apply_levels(self.book, snapshot.asks)
+        self.bids.clear()
+        self.asks.clear()
+        _apply_levels(self.bids, snapshot.bids)
+        _apply_levels(self.asks, snapshot.asks)
         self.snapshot_count += 1
         self.snapshot_seen = True
         self.current_valid = True
@@ -350,8 +353,8 @@ class StreamState:
             raise ProtocolViolation("depth update while book is invalid")
         if depth.final_update_id == 0:
             raise ProtocolViolation("depth final_update_id is zero")
-        _apply_levels(self.book, depth.bids)
-        _apply_levels(self.book, depth.asks)
+        _apply_levels(self.bids, depth.bids)
+        _apply_levels(self.asks, depth.asks)
         self.update_count += 1
         self.last_event_utc_ns = now_utc_ns()
         self._record_publish_latency(
@@ -410,7 +413,8 @@ class StreamState:
             self.last_error = f"consumer_gap:{self.last_gap_reason}"
             self.current_valid = False
             self.snapshot_seen = False
-            self.book.clear()
+            self.bids.clear()
+            self.asks.clear()
             self.last_session_sequence = delivery.session_sequence
             self.last_payload = payload
             return "resubscribe"
@@ -426,7 +430,8 @@ class StreamState:
             }:
                 self.current_valid = False
                 self.snapshot_seen = False
-                self.book.clear()
+                self.bids.clear()
+            self.asks.clear()
             self.last_session_sequence = delivery.session_sequence
             self.last_payload = payload
             return (
@@ -455,7 +460,8 @@ class StreamState:
     def on_gap_state(self) -> None:
         self.current_valid = False
         self.snapshot_seen = False
-        self.book.clear()
+        self.bids.clear()
+        self.asks.clear()
 
     def on_eof(self) -> None:
         self.eof_count += 1
@@ -694,8 +700,10 @@ class Consumer:
 
     async def _stream_loop(self, state: StreamState) -> None:
         attempt = 0
+        consecutive_failures = 0
         while not self.stop_event.is_set():
             attempt += 1
+            healthy_session = False
             state.reset_session()
             if attempt > 1:
                 state.resubscriptions += 1
@@ -713,6 +721,8 @@ class Consumer:
                     if self.stop_event.is_set():
                         break
                     action = state.consume(item)
+                    if action == "continue" and state.current_valid:
+                        healthy_session = True
                     if action == "resubscribe":
                         resubscribe_requested = True
                         break
@@ -748,10 +758,27 @@ class Consumer:
                 break
             if completed and not resubscribe_requested:
                 state.on_eof()
-            delay = self.retry_delays[
-                min(attempt - 1, len(self.retry_delays) - 1)
-            ]
-            await self._sleep_or_stop(delay)
+            consecutive_failures = self._next_failure_count(
+                consecutive_failures, healthy_session
+            )
+            await self._sleep_or_stop(
+                self._retry_delay(consecutive_failures)
+            )
+
+    def _next_failure_count(
+        self, consecutive_failures: int, healthy_session: bool
+    ) -> int:
+        # A session that delivered valid data resets the backoff; the event
+        # that ended it is the first failure of the new sequence.
+        if healthy_session:
+            return 1
+        return consecutive_failures + 1
+
+    def _retry_delay(self, consecutive_failures: int) -> float:
+        index = min(
+            max(consecutive_failures - 1, 0), len(self.retry_delays) - 1
+        )
+        return self.retry_delays[index]
 
     async def _status_loop(self) -> None:
         while not self.stop_event.is_set():

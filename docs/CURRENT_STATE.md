@@ -34,7 +34,7 @@ PLAN_G1_PROJECTION_PIN=COMPLETE_LINUX_RELEASE_27/27
 PLAN_G2=PERSISTENT_RECOVERY_LINUX_RELEASE_27/27
 PLAN_G3=DIAGNOSTICS_CONSUMER_LINUX_RELEASE_27/27
 PLAN_G4=COMPLETE_VPS_2H_PASS_WITH_OBSERVATIONS
-M4_24H=IN_PROGRESS_START_2026-11-12T09:57:33Z_TARGET_2026-11-13T09:57:33Z
+M4_24H=STOPPED_EARLY_2026-11-12T14:13Z_NOT_PASSED
 DEPLOYED_GATEWAY_RELEASE=5e47c59c0769de8b16b67f1aabdb095c3bacdf78
 DEPLOYED_GATEWAY_BINARY_SHA256=f57c1a13670f18a59f34c882c98532934f242d596e9e138852a35a78599c105f
 PLAN_G3C=OPEN_RESOURCE_LATENCY_BUDGET
@@ -129,11 +129,27 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
   p99 publish-to-client bucket 500 ms+ under archive/load peaks) but did not
   establish a new capacity/SLA budget.
 - **M4 / Phase 5 24h**: same-run follow-up started with the consumer at
-  `2026-11-12T09:57:33Z`; target `2026-11-13T09:57:33Z`. It is running, not yet
-  accepted. At 4h08m it was still 40/40 valid with 0 protocol/RPC/identity
-  errors, but cumulative gaps had risen to 45 and two USD-M order books had
-  resubscribed (snapshots 22); load was about 21. M4 needs the 24h endpoint,
-  planned rotation/recovery and resource review before PASS.
+  `2026-11-12T09:57:33Z`. It ran 15,337 s (4h15m37s) and was stopped normally
+  at `2026-11-12T14:13:10Z`; it is **not accepted**. The final consumer summary
+  had 48 gaps (43 BookTicker, 3 AggTrade, 2 USD-M order books), all recovered,
+  with 0 protocol/RPC/status/identity errors. The monitor's 362.6% figure was a
+  single ~30 s interval inside a 486.6 s window, not a 10-minute mean; a short
+  `vmstat` window also showed 33–59% host CPU steal. More importantly, the
+  co-located USD-M Recorder dropped **250,562** WS records at
+  `13:09:52Z–13:10:29Z` (259,047 cumulative at the later review); Spot dropped
+  none. The consumer and M4 monitor were
+  stopped to protect the Recorder; Gateway and Recorder stayed running. A new
+  T0 is required after the monitoring/consumer/R1-R2 fixes and capacity
+  localization; the 4h prefix cannot be spliced into a 24h pass. See
+  [08_current_review](../../../Milestone%20Plan/08_生产长跑中期复核_20261112.md)
+  and `/var/lib/bmdg-consumer/evidence-m4-early-20261112T1413Z/`.
+- **Post-M4 fixes (2026-11-12):** consumer order book now keeps separate
+  `bids`/`asks` dictionaries and resets retry backoff after a healthy session;
+  the acceptance monitor no longer treats a short CPU window as a 10-minute
+  mean, checks every order book for a snapshot instead of requiring exactly 20,
+  and reads `dropped_total`/queue/durability from the Recorder status logs.
+  Tests pass locally; the consumer remains stopped and no 24h run has been
+  restarted.
 - **BMDG/BMDR data parity**: Spot is aligned; USD-M bookTicker/aggTrade/
   markPrice/forceOrder and REST side data are not yet live-provided. See
   [DATA_PARITY](DATA_PARITY.md).

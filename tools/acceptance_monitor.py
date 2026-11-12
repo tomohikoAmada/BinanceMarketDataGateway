@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any
 
 CONSUMER_SUMMARY = Path("/var/lib/bmdg-consumer/summary.json")
+RECORDER_STATUS = {
+    "sbmdr-recorder@spot": Path("/var/log/sbmdr/spot.status.jsonl"),
+    "sbmdr-recorder@usdm": Path("/var/log/sbmdr/usdm.status.jsonl"),
+}
 ARCHIVE_UNIT = "sbmdr-archive.service"
 ARCHIVE_TIMER = "sbmdr-archive.timer"
 RECORDER_UNITS = ("sbmdr-recorder@spot", "sbmdr-recorder@usdm")
@@ -51,6 +55,25 @@ def read_summary() -> dict[str, Any]:
         return {}
 
 
+def read_last_jsonl(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - 64 * 1024))
+            lines = handle.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return {}
+    for line in reversed(lines):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
 def read_meminfo() -> dict[str, int]:
     values: dict[str, int] = {}
     try:
@@ -72,6 +95,7 @@ def read_cpu() -> dict[str, int]:
     return {
         "total": sum(values),
         "idle": values[3] + (values[4] if len(values) > 4 else 0),
+        "steal": values[7] if len(values) > 7 else 0,
     }
 
 
@@ -117,13 +141,19 @@ def collect(
     cpu = read_cpu()
     nproc = os.cpu_count() or 1
     cpu_percent = None
+    steal_percent = None
     if previous_cpu is not None:
         total_delta = cpu["total"] - previous_cpu["total"]
         idle_delta = cpu["idle"] - previous_cpu["idle"]
+        steal_delta = cpu["steal"] - previous_cpu["steal"]
         if total_delta > 0:
             cpu_percent = (
-                (total_delta - idle_delta) / total_delta * nproc * 100.0
+                (total_delta - idle_delta - steal_delta)
+                / total_delta
+                * nproc
+                * 100.0
             )
+            steal_percent = steal_delta / total_delta * nproc * 100.0
     memory = read_meminfo()
     root_disk = shutil.disk_usage("/")
     data_disk = shutil.disk_usage("/srv/recorder-data")
@@ -132,6 +162,12 @@ def collect(
     status = summary.get("status", {})
     live, non_live, unknown = state_counts(summary)
     streams = summary.get("streams", [])
+    order_books = [
+        stream for stream in streams if stream.get("stream") == "order_book"
+    ]
+    books_without_snapshot = sum(
+        1 for stream in order_books if stream.get("snapshot_count", 0) == 0
+    )
     gap_streams = {
         stream.get("key", ""): {
             "gaps": stream.get("gap_count", 0),
@@ -156,10 +192,25 @@ def collect(
         "MemoryPeak,CPUUsageNSec",
     )
     consumer_pid = int(consumer.get("MainPID", "0") or 0)
-    recorder = {
-        unit: show(unit, "ActiveState,SubState,MainPID,NRestarts")
-        for unit in RECORDER_UNITS
-    }
+    recorder: dict[str, dict[str, Any]] = {}
+    for unit in RECORDER_UNITS:
+        values = show(unit, "ActiveState,SubState,MainPID,NRestarts")
+        status = read_last_jsonl(RECORDER_STATUS[unit])
+        recorder[unit] = {
+            "active": values.get("ActiveState", ""),
+            "sub_state": values.get("SubState", ""),
+            "main_pid": int(values.get("MainPID", "0") or 0),
+            "n_restarts": int(values.get("NRestarts", "0") or 0),
+            "records": status.get("records"),
+            "dropped_total": status.get("dropped_total"),
+            "queued_records": status.get("queued_records"),
+            "queued_payload_bytes": status.get("queued_payload_bytes"),
+            "seal_queue_depth": status.get("seal_queue_depth"),
+            "max_durability_ns": status.get("max_durability_ns"),
+            "rss_bytes": status.get("rss_bytes"),
+            "cpu_percent": status.get("cpu_percent"),
+            "elapsed_seconds": status.get("elapsed_seconds"),
+        }
     archive = show(
         ARCHIVE_UNIT,
         "ActiveState,SubState,Result,ExecMainStatus,NRestarts",
@@ -186,6 +237,7 @@ def collect(
             "accepted": totals.get("accepted"),
             "valid": totals.get("valid"),
             "order_books": totals.get("order_books"),
+            "books_without_snapshot": books_without_snapshot,
             "snapshots": totals.get("snapshots"),
             "updates": totals.get("updates"),
             "events": totals.get("events"),
@@ -215,15 +267,7 @@ def collect(
             "memory_bytes": int(gateway.get("MemoryCurrent", "0") or 0),
             "memory_peak_bytes": int(gateway.get("MemoryPeak", "0") or 0),
         },
-        "recorder": {
-            unit: {
-                "active": values.get("ActiveState", ""),
-                "sub_state": values.get("SubState", ""),
-                "main_pid": int(values.get("MainPID", "0") or 0),
-                "n_restarts": int(values.get("NRestarts", "0") or 0),
-            }
-            for unit, values in recorder.items()
-        },
+        "recorder": recorder,
         "archive": {
             "active": archive.get("ActiveState", ""),
             "sub_state": archive.get("SubState", ""),
@@ -237,6 +281,7 @@ def collect(
             "nproc": nproc,
             "load1": os.getloadavg()[0],
             "cpu_busy_percent_1core": cpu_percent,
+            "cpu_steal_percent_1core": steal_percent,
             "mem_available_bytes": memory.get("MemAvailable", 0),
             "swap_free_bytes": memory.get("SwapFree", 0),
             "root_free_bytes": root_disk.free,
@@ -248,7 +293,7 @@ def collect(
 
 def rolling_max(values: list[float], window: int) -> float | None:
     if len(values) < window:
-        return max(values) if values else None
+        return None
     return max(
         statistics.fmean(values[index : index + window])
         for index in range(len(values) - window + 1)
@@ -288,14 +333,31 @@ def final_verdict(samples: list[dict[str, Any]]) -> dict[str, Any]:
             for sample in samples
         ):
             reasons.append(f"{unit} was not active")
+    recorder_drop_deltas: dict[str, int | None] = {}
+    first = samples[0]
+    for unit in RECORDER_UNITS:
+        start_drops = first["recorder"][unit].get("dropped_total")
+        end_drops = last["recorder"][unit].get("dropped_total")
+        if isinstance(start_drops, int) and isinstance(end_drops, int):
+            delta = end_drops - start_drops
+            recorder_drop_deltas[unit] = delta
+            if delta > 0:
+                reasons.append(
+                    f"{unit} dropped {delta} records during the run"
+                )
+        else:
+            recorder_drop_deltas[unit] = None
+            warnings.append(f"{unit} drop counter unavailable")
     if consumer.get("streams") != 40:
         reasons.append(f"streams={consumer.get('streams')} != 40")
     if consumer.get("accepted") != 40:
         reasons.append(f"accepted={consumer.get('accepted')} != 40")
     if consumer.get("valid") != 40:
         reasons.append(f"valid={consumer.get('valid')} != 40")
-    if consumer.get("snapshots") != 20:
-        reasons.append(f"snapshots={consumer.get('snapshots')} != 20")
+    if consumer.get("books_without_snapshot"):
+        reasons.append(
+            f"{consumer.get('books_without_snapshot')} order books have no snapshot"
+        )
     if not consumer.get("updates"):
         reasons.append("no order-book updates")
     if not consumer.get("events"):
@@ -347,6 +409,8 @@ def final_verdict(samples: list[dict[str, Any]]) -> dict[str, Any]:
     cpu_10m = rolling_max(cpu_values, 20)
     if cpu_10m is not None and cpu_10m > 300.0:
         reasons.append(f"10-minute CPU mean {cpu_10m:.1f}% > 300%")
+    if cpu_10m is None:
+        warnings.append("CPU window shorter than 10 minutes; no mean computed")
 
     archive_success = any(
         sample["archive"]["result"] == "success" for sample in samples
@@ -372,6 +436,7 @@ def final_verdict(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "min_root_free_bytes": min(root_free),
         "max_cpu_10m_percent_1core": cpu_10m,
         "archive_success_observed": archive_success,
+        "recorder_drop_deltas": recorder_drop_deltas,
     }
 
 

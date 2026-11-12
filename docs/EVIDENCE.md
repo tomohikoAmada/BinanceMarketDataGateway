@@ -216,11 +216,18 @@ Gateway release `5e47c59c0769de8b16b67f1aabdb095c3bacdf78`; binary SHA-256
 - Full record: [archive/G4_VPS_2H_EVIDENCE.md](archive/G4_VPS_2H_EVIDENCE.md);
   raw monitor verdict [G4_VPS_2H_FINAL.json](archive/G4_VPS_2H_FINAL.json).
 - **M4 / Phase 5 24h follow-up:** same process, consumer start
-  `2026-11-12T09:57:33Z`, target `2026-11-13T09:57:33Z`; running, not yet
-  accepted. At 4h08m it remained 40/40 valid with zero protocol/RPC/identity
-  errors, but gaps had risen to 45 and two USD-M order books had resubscribed
-  (snapshots 22); load1 was about 21. The 24h endpoint, planned rotations and
-  resources still need review.
+  `2026-11-12T09:57:33Z`. It ran 15,337 s (4h15m37s) and was stopped normally
+  at `2026-11-12T14:13:10Z`; it is **not accepted**. The final consumer summary
+  had 48 gaps (43 BookTicker, 3 AggTrade, 2 USD-M order books), all recovered,
+  with 0 protocol/RPC/status/identity errors. The monitor's 362.6% figure was a
+  single ~30 s interval inside a 486.6 s window, not a 10-minute mean; a short
+  `vmstat` window also showed 33–59% host CPU steal. More importantly, the
+  co-located USD-M Recorder dropped **250,562** WS records at
+  `13:09:52Z–13:10:29Z` (259,047 cumulative by the later review), Spot dropped
+  none. The consumer and M4 monitor were stopped to protect the Recorder;
+  Gateway and Recorder stayed running. A new T0 is required after the
+  monitoring/consumer/R1-R2 fixes and capacity localization; the 4h prefix
+  cannot be spliced into a 24h pass.
 
 ## Projection P1 — pre-optimization measured cost
 

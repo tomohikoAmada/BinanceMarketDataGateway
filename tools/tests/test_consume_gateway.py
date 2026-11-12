@@ -520,9 +520,47 @@ def test_stream_state_eof_clears_book_and_validity() -> None:
     )
     state.current_valid = True
     state.snapshot_seen = True
-    state.book["100.00"] = "1.000"
+    state.bids["100.00"] = "1.000"
+    state.asks["101.00"] = "2.000"
     state.on_eof()
     assert state.current_valid is False
     assert state.snapshot_seen is False
-    assert state.book == {}
+    assert state.bids == {}
+    assert state.asks == {}
     assert state.eof_count == 1
+
+
+def test_bid_and_ask_sides_do_not_delete_each_other() -> None:
+    state = consumer_module.StreamState(
+        consumer_module.StreamSpec(
+            enums_pb2.VENUE_BINANCE, SPOT, "BTCUSDT", "order_book"
+        )
+    )
+    world = type("Level", (), {"price": "", "quantity": ""})
+
+    def level(price: str, quantity: str):
+        value = world()
+        value.price = price
+        value.quantity = quantity
+        return value
+
+    state.bids["100.00"] = "1.000"
+    state.asks["101.00"] = "2.000"
+    consumer_module._apply_levels(state.bids, [level("101.00", "3.000")])
+    consumer_module._apply_levels(
+        state.asks,
+        [level("101.00", "0"), level("102.00", "4.000")],
+    )
+    assert state.bids == {"100.00": "1.000", "101.00": "3.000"}
+    assert state.asks == {"102.00": "4.000"}
+    assert state.book_levels == 3
+
+
+def test_retry_backoff_resets_after_healthy_session_and_caps() -> None:
+    consumer = object.__new__(consumer_module.Consumer)
+    consumer.retry_delays = (1.0, 2.0, 4.0)
+    assert consumer._next_failure_count(7, True) == 1
+    assert consumer._next_failure_count(7, False) == 8
+    assert consumer._retry_delay(1) == 1.0
+    assert consumer._retry_delay(2) == 2.0
+    assert consumer._retry_delay(9) == 4.0
