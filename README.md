@@ -1,10 +1,52 @@
-# Binance Market Data Gateway
+# BMDG — Binance Market Data Gateway
 
-以高性能、安全稳定、低延迟、低 CPU/内存消耗为目标的 C++20 币安实时行情网关。通过启动配置选择多个 Spot / USD-M 永续交易对，获取行情、维护 Projection 订单簿、处理恢复与连接轮换，并通过 gRPC 向下游提供数据。Gateway 不负责历史存储，也不依赖 Recorder。
+**BMDG** is a C++20 Binance market-data gateway. One process serves 1..20 exact
+Spot / USD-M perpetual products, maintains a private Projection order book per
+product, and publishes order-book, event and status data over loopback gRPC.
+BMDG does not store history and does not depend on Recorder.
 
-当前支持 1..20 个精确产品，每产品独立 transport/owner/Projection/recovery，共享一个 gRPC 服务。[G3-a离线验证](docs/GATEWAY_G3_OFFLINE_EVIDENCE.md)覆盖20产品的路由、统一启动/回滚、局部及重复集中恢复、40基础流与48上限；P1测量及独立复核也已完成。研究配置见 [gateway-twenty.json](examples/gateway-twenty.json)。四产品历史离线/CI资格见 [G2证据](docs/GATEWAY_G2_V03_EVIDENCE.md)；G3-b联合API预算与G3-c实网/共享VPS及资源验收仍[未完成](docs/MILESTONES.md)。
+## Current status
 
-## 配置与运行
+- Production entry point: `bmdg --config PATH`.
+- Historical G0-G11 / G12-A/B/C work is complete and archived.
+- v0.4 G3-a (20-key offline routing/startup/recovery), G3-b (shared-IP API
+  budget) and M-G1.A (protocol boundaries plus one exchangeInfo parse per
+  market) are complete.
+- **G3-c is open**: shared VPS, real-network, Recorder co-load and resource
+  budgets are not yet accepted. Twenty products are a resource bound, not a
+  measured production capacity.
+- Performance budgets are not established. Projection M-P2.A/B/C are complete:
+  accepted apply no longer copies the full book and the adapter fast path is in
+  place. The earlier P1 attribution is pre-optimization evidence, not a current
+  hotspot claim.
+
+See [current state](docs/CURRENT_STATE.md), [milestones](docs/MILESTONES.md),
+[evidence](docs/EVIDENCE.md) and [architecture](ARCHITECTURE.md).
+
+## Source layout
+
+```text
+include/binance_market_data/gateway/v1/   public Foundation API
+src/foundation/                            config/lifecycle
+src/protocol/                              Spot/USD-M JSON protocol
+src/transport/                             REST/WebSocket transport, API budget
+src/runtime/                               MarketRuntime, MarketKey, clock
+src/recovery/                              reconnect/resync and rotation
+src/publication/                           order-book/event subscriber channels
+src/grpc/                                  gRPC service/server
+src/status/                                GetGatewayStatus
+src/composition/                           ProductRuntime, configured set, registry
+src/production/                            daemon config/metadata/startup/signals
+src/performance/                           opt-in trace instrumentation
+app/bmdg/                                  production daemon
+app/acceptance/                            historical live/acceptance tools
+tests/                                     unit/integration/production tests
+```
+
+Historical `src/g1`, `src/g2`, ... directories no longer exist. See
+[docs/CODE_MAP.md](docs/CODE_MAP.md) for the old-to-new mapping.
+
+## Configuration
 
 ```json
 {
@@ -14,69 +56,123 @@
 }
 ```
 
-```sh
-bmd-gatewayd --config examples/gateway.json
-```
+- 1..20 products total; the same symbol in Spot and USD-M is two products.
+- Symbols are exact Binance uppercase identifiers; no case folding.
+- Unknown config fields are rejected. Changes require restart; no hot reload.
+- All configured products must reach Live/Synchronized before gRPC binds.
+  Any startup failure or exception rolls the whole set back.
+- Insecure gRPC binds numeric loopback only (`127/8` or `::1`).
+- Each product has its own transport, owner thread, private Projection and
+  recovery coordinator. There is one process-wide 48 streaming-context cap,
+  not 48 per product.
 
-可以只配置其中一个市场；总数必须为 1..20，同一 symbol 的现货和永续是不同产品。symbol 使用币安的精确大写标识，不自动修正大小写，且需要通过 exchangeInfo 交易资格与精度验证。配置变更后重启。
+## Build
 
-全部配置产品首次同步成功后才开始服务；启动失败会回滚，运行后单个产品故障独立恢复。SIGINT/SIGTERM 会停止订阅和 transport，并清理 owner。进程流式 context 总上限为 48。无认证 gRPC 必须使用数值 loopback（IPv4 127/8 或 IPv6 ::1）；hostname、wildcard 和非 loopback 配置被拒绝。
-
-20产品各订阅Book和单个Depth Event需要40 contexts；第49条并发流返回RESOURCE_EXHAUSTED，
-取消后释放槽位。全部支持流同时订阅需要60，超出现行48容量。每产品Book/Event各8及队列64不变。
-
-`GetGatewayStatus` 的 owner 观察最多等待一秒，并遵守更短的客户端 deadline；超时返回 DEADLINE_EXCEEDED。新版 v0.3 G0 的修复/离线验证见 [证据](docs/GATEWAY_G0_V03_EVIDENCE.md)。
-
-提供 `SubscribeOrderBook`、`SubscribeEvents` 和 `GetGatewayStatus`。Spot 事件为 DIFF_DEPTH / AGG_TRADE / BOOK_TICKER，USD-M 事件仅 DIFF_DEPTH。`SubscribeMarketState` 尚未实现。
-
-v0.3 G1 起，`GetGatewayStatus.markets[].last_event_utc_ns` 表示当前 generation 最后经 Projection **Applied Depth 的接收 UTC**；重同步、Gap、来源或时间未知时为空，零时间保持 present。该字段从历史“任意 WebSocket 事件时间”收窄，trade/ticker 活跃不会再掩盖停止更新的簿。Live 表示序列同步，不承诺数据年龄；客户端遇墙钟回退时须将年龄视为未知。安静市场不会自动触发 Gap 或重同步。USD-M 深度 `T` 已更正为 transaction-time，trade-time 留空；[G1 证据](docs/GATEWAY_G1_V03_EVIDENCE.md)。
-
-## 构建与验证
-
-独立 Foundation（不包含生产 daemon）：
+Foundation only (no Conan, no network/threads):
 
 ```sh
-cmake --preset gcc-debug
-cmake --build --preset gcc-debug
-ctest --preset gcc-debug
-scripts/format-check.sh
+cmake -S . -B build/foundation -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/foundation --parallel
+ctest --test-dir build/foundation --output-on-failure
 ```
 
-生产图需要固定版本 Contracts/Projection 和 Conan 依赖，显式启用：
+Production daemon plus domain tests (requires the pinned Conan graph):
 
 ```sh
 cmake -S . -B build/production \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE=/absolute/path/to/conan_toolchain.cmake \
-  -DBMD_GATEWAY_BUILD_PRODUCTION_DAEMON=ON \
-  -DBMD_GATEWAY_BUILD_G2_SYNTHETIC_HOST=ON \
-  -DBMD_GATEWAY_BUILD_G8_INTEGRATION_ACCEPTANCE=ON \
-  -DBMD_GATEWAY_BUILD_TESTS=ON
+  -DBMDG_BUILD_PRODUCTION_DAEMON=ON \
+  -DBMDG_BUILD_TESTS=ON
 cmake --build build/production --parallel 4
 ctest --test-dir build/production --output-on-failure
 ```
 
-依赖配方见 [conanfile.py](conanfile.py)，生产依赖 RREV 固定于 [conan.lock](conan.lock)。
-GitHub CI 保留独立 Foundation 检查，另用 Ubuntu 24.04 / GCC 13 构建真实 `bmd-gatewayd`
-并运行生产图离线回归（包括四产品集成及活动 RPC 信号退出），不访问 Binance。
-普通 PR 只恢复二进制缓存并执行 `--build=never --no-remote`；无缓存时明确失败。
-首次接入、缓存过期或依赖变更后，在 **main** 手动运行 Gateway CI，勾选
-`prepare_dependencies`。该入口才允许从固定 Contracts/Projection SHA 准备缺少的二进制；
-缓存按 lock/profile/preparation script 隔离，后续 PR 复用 main 缓存。
-从分支首次接入时，成功的准备 job 会导出二进制归档；合并后 main 准备填写该
-prepare job 所在 run 的 `binary_seed_run`，直接导入同一批二进制。归档保留 14 天，
-无需为转移 GitHub 分支范围再冷编依赖。依赖变更需先准备对应缓存。
-Host/runtime 使用 C++20 固定 profile；独立 build profile 只为 native protoc/gRPC codegen
-选择同版本/RREV 的现成 GNU17 工具二进制，不更改运行侧包身份。
-历史 G1 upstream smoke 仍保持单独显式入口，不随本 CI 重复执行。ASan、UBSan、TSan 可分别启用 `BMD_GATEWAY_ENABLE_ASAN` / `BMD_GATEWAY_ENABLE_UBSAN` / `BMD_GATEWAY_ENABLE_TSAN`。
+Options:
 
-保留的双 BTC 生命周期验收客户端须使用双 BTC 配置，与 daemon 使用同一个文件；它不证明四产品验收：
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `BMDG_BUILD_TESTS` | `BUILD_TESTING` | Foundation tests; domain tests when the domain graph is enabled |
+| `BMDG_BUILD_DOMAIN_TESTS` | `OFF` | Build domain tests without the daemon |
+| `BMDG_BUILD_PRODUCTION_DAEMON` | `OFF` | Build `bmdg` and the production library |
+| `BMDG_BUILD_ACCEPTANCE_TOOLS` | `OFF` | Build historical live apps, synthetic host and acceptance client |
+| `BMDG_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION` | `OFF` | Opt-in trace/delivery measurement; adds about 110 MiB RSS for 20 products |
+| `BMDG_BUILD_UPSTREAM_LINK_SMOKE` | `OFF` | Frozen Contracts/Projection consumer link smoke |
+| `BMDG_ENABLE_ASAN` / `UBSAN` / `TSAN` | `OFF` | Sanitizers |
+
+Dependencies are pinned by `conan.lock` and the `profiles/` files. Do not use
+floating FetchContent. The historical G1 proof scripts are in
+`scripts/archive/`; the current upstream smoke remains an explicit opt-in.
+
+### Naming compatibility
+
+- New CMake options use `BMDG_*`. The old `BMD_GATEWAY_*` names are accepted
+  as deprecated aliases for one transition period.
+- New CMake library targets use `bmdg_*`; old `bmd_gateway_*` library names
+  are aliases.
+- The executable is `bmdg`. A `bmd-gatewayd` symlink/custom target is kept for
+  old scripts and service units during the transition.
+- Internal namespace and include path remain
+  `binance_market_data::gateway` to avoid breaking Contracts/Projection
+  integration.
+
+## Run
 
 ```sh
-bmd-gateway-production-acceptance-client \
-  --daemon /absolute/path/to/bmd-gatewayd \
-  --config /absolute/path/to/two-btc-products.json \
-  --grpc-target 127.0.0.1:50051
+build/production/bmdg --config examples/gateway.json
+# production example: /etc/bmdg/gateway.json
 ```
 
-[当前状态](docs/CURRENT_STATE.md) · [开发计划](docs/MILESTONES.md) · [架构](ARCHITECTURE.md) · [代码审查](docs/CODE_REVIEW_2026-10-04.md)
+A systemd example is provided at `deployment/bmdg.service`.
+
+SIGINT/SIGTERM stop admission, drain/cancel gRPC handlers, stop transports and
+join owners. For systemd, allow a full 300 s quiet interval before restarting
+after a crash or replacement because the shared-IP API budget is in-memory
+while Binance's server-side counters persist.
+
+## gRPC surface
+
+- `SubscribeOrderBook`: Projection-Applied order book; accepted + initial
+  snapshot, then contiguous depth updates.
+- `SubscribeEvents`: exactly one V1 selector. Spot supports DIFF_DEPTH,
+  AGG_TRADE, BOOK_TICKER; USD-M supports DIFF_DEPTH. Depth events are
+  pre-Projection normalized events.
+- `GetGatewayStatus`: dynamic product list, state, active subscriptions,
+  connection generation and last Applied Depth receive time.
+- `SubscribeMarketState`: not implemented.
+
+Per-product active subscriptions are at most 8 order-book and 8 event; ordinary
+queues are 64. Slow consumers are terminalized. The process-wide streaming
+context cap is 48.
+
+`GetGatewayStatus.markets[].last_event_utc_ns` is the receive UTC of the last
+Projection-Applied Depth in the current valid generation; it is absent when the
+book/source is not valid. It is not an age/SLA promise. Clients must treat a
+wall-clock regression as unknown age.
+
+## Validation
+
+Current baseline after the domain-layout refactor and BMDG rename:
+
+- Release production graph: **27/27** tests pass.
+- Release with `BMDG_WARNINGS_AS_ERRORS=ON`: **27/27** tests pass.
+- Debug ASan+UBSan production graph: **27/27** tests pass.
+- Debug TSan production graph: **27/27** tests pass.
+- Release with performance instrumentation: **28/28** tests pass.
+- Foundation-only build: **1/1** test passes.
+
+Sanitizer and real-network/VPS acceptance remain milestone/release activities;
+see [milestones](docs/MILESTONES.md). Historical full evidence is in
+[docs/archive/](docs/archive/) and summarized in [docs/EVIDENCE.md](docs/EVIDENCE.md).
+
+## Documentation
+
+- [Architecture](ARCHITECTURE.md)
+- [Current state](docs/CURRENT_STATE.md)
+- [Milestones](docs/MILESTONES.md)
+- [Evidence summary](docs/EVIDENCE.md)
+- [Code map](docs/CODE_MAP.md)
+- [Binance constraints](docs/official-binance-constraints.md)
+- [Performance instrumentation](docs/PERFORMANCE_BASELINE_INSTRUMENTATION.md)
+- [Data parity with BMDR](docs/DATA_PARITY.md)
+- [Archived historical docs](docs/archive/README.md)

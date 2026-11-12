@@ -1,7 +1,7 @@
 #pragma once
 
-#include "grpc_service.hpp"
-#include "multi_market_runtime.hpp"
+#include "composition/multi_market_runtime.hpp"
+#include "grpc/grpc_service.hpp"
 
 #include <binance_market_data/projection/v1/projection_state/book_projection.hpp>
 
@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+namespace composition = binance_market_data::gateway::composition;
 
 namespace binance_market_data::gateway::production {
 
@@ -41,7 +42,7 @@ enum class StartCode : std::uint8_t {
 
 struct StartResult final {
   StartCode code{StartCode::AlreadyStarted};
-  std::optional<g11::MarketKey> product;
+  std::optional<runtime::MarketKey> product;
 
   friend bool operator==(const StartResult &, const StartResult &) = default;
 };
@@ -49,7 +50,7 @@ struct StartResult final {
 struct GatewayOptions final {
   std::chrono::steady_clock::duration initial_startup_timeout{
       kInitialStartupTimeout};
-  g7::GrpcServiceOptions grpc;
+  rpc::GrpcServiceOptions grpc;
   // Port zero is unavailable to the production CLI. This seam only avoids a
   // loopback port reservation race in deterministic in-process tests.
   bool allow_ephemeral_listen_for_testing{false};
@@ -59,27 +60,28 @@ struct GatewayOptions final {
 };
 
 struct ProductObservation final {
-  g11::MarketKey key;
-  g5::RecoveryObservation recovery;
-  g3::RuntimeObservation runtime;
-  g9::EventPublicationObservation events;
+  runtime::MarketKey key;
+  recovery::RecoveryObservation recovery;
+  runtime::RuntimeObservation runtime;
+  publication::EventPublicationObservation events;
 };
 
 struct GatewayObservation final {
   GatewayState state{GatewayState::Constructed};
   int selected_port{0};
   std::size_t tracked_contexts{0U};
-  std::size_t context_limit{g7::kMaximumGrpcTrackedContexts};
+  std::size_t context_limit{rpc::kMaximumGrpcTrackedContexts};
   std::vector<ProductObservation> products;
 };
 
 [[nodiscard]] std::vector<ProductObservation>
-observe_products(g11::ConfiguredProductRuntimeSet &products);
+observe_products(composition::ConfiguredProductRuntimeSet &products);
 
 class ProductionGateway final {
 public:
-  ProductionGateway(std::vector<g11::ProductRuntimeSpec> specifications,
-                    g3::RuntimeClock clock, std::string gateway_instance_id,
+  ProductionGateway(std::vector<composition::ProductRuntimeSpec> specifications,
+                    runtime::RuntimeClock clock,
+                    std::string gateway_instance_id,
                     std::string grpc_listen_address,
                     GatewayOptions options = {});
   ~ProductionGateway();
@@ -96,14 +98,14 @@ public:
 
   [[nodiscard]] GatewayObservation observe();
   [[nodiscard]] const std::string &gateway_instance_id() const noexcept;
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   [[nodiscard]] bool write_performance_baseline(std::ostream &output) const;
 #endif
 
   // Focused deterministic tests inject data/failures through the already
   // accepted G11 owner boundaries. The production executable does not use
   // these accessors or any acceptance-only recovery hook.
-  [[nodiscard]] g11::ConfiguredProductRuntimeSet &
+  [[nodiscard]] composition::ConfiguredProductRuntimeSet &
   products_for_testing() noexcept;
 
 private:
@@ -123,8 +125,8 @@ private:
 
   // Declaration order is the lifetime proof: server_ is destroyed before its
   // non-owning registry/status references in products_.
-  g11::ConfiguredProductRuntimeSet products_;
-  g7::OrderBookGrpcServer server_;
+  composition::ConfiguredProductRuntimeSet products_;
+  rpc::OrderBookGrpcServer server_;
 
   mutable std::mutex state_mutex_;
   std::condition_variable state_condition_;

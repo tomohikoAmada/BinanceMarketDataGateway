@@ -1,0 +1,1044 @@
+#include "production/daemon_config.hpp"
+#include "production/daemon_runtime.hpp"
+#include "production/production_metadata.hpp"
+#include "protocol/usdm_protocol.hpp"
+#include "support/production_test_support.hpp"
+#include "support/usdm_time_fixture.hpp"
+
+#include <binance_market_data/common/v1/enums.pb.h>
+#include <binance_market_data/gateway/v1/gateway_service.grpc.pb.h>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <chrono>
+#include <cstdint>
+#include <cstdlib>
+#include <exception>
+#include <functional>
+#include <future>
+#include <iostream>
+#include <memory>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <thread>
+#include <utility>
+#include <variant>
+#include <vector>
+namespace composition = binance_market_data::gateway::composition;
+namespace protocol = binance_market_data::gateway::protocol;
+namespace transport = binance_market_data::gateway::transport;
+namespace publication = binance_market_data::gateway::publication;
+namespace rpc = binance_market_data::gateway::rpc;
+namespace status = binance_market_data::gateway::status;
+namespace recovery = binance_market_data::gateway::recovery;
+namespace production = binance_market_data::gateway::production;
+namespace rt = binance_market_data::gateway::runtime;
+
+namespace {
+
+namespace common = binance_market_data::common::v1;
+namespace projection = binance_market_data::projection::v1;
+namespace support = production::test_support;
+namespace wire = binance_market_data::gateway::v1;
+
+class TestFailure final : public std::exception {
+public:
+  explicit TestFailure(std::string message) : message_{std::move(message)} {}
+  [[nodiscard]] const char *what() const noexcept override {
+    return message_.c_str();
+  }
+
+private:
+  std::string message_;
+};
+
+void require(bool condition, std::string_view expression) {
+  if (!condition) {
+    throw TestFailure{std::string{expression}};
+  }
+}
+
+#define REQUIRE(condition) require((condition), #condition)
+
+[[nodiscard]] const production::ProductObservation &
+product(const production::GatewayObservation &observation,
+        const rt::MarketKey &key) {
+  for (const auto &candidate : observation.products) {
+    if (candidate.key == key) {
+      return candidate;
+    }
+  }
+  throw TestFailure{"missing product observation"};
+}
+
+[[nodiscard]] composition::ProductRuntime &
+product(production::ProductionGateway &gateway, const rt::MarketKey &key) {
+  auto *selected = gateway.products_for_testing().find(key);
+  if (selected == nullptr) {
+    throw TestFailure{"missing product runtime"};
+  }
+  return *selected;
+}
+
+template <typename Predicate> void require_eventually(Predicate predicate) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds{2};
+  while (!predicate()) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      throw TestFailure{"bounded readiness deadline expired"};
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+  }
+}
+
+[[nodiscard]] production::ProductionGateway
+make_gateway(std::vector<composition::ProductRuntimeSpec> specifications,
+             production::GatewayOptions options,
+             std::string listen = "127.0.0.1:0") {
+  return {std::move(specifications), support::fixed_clock(),
+          "gw-production-test", std::move(listen), std::move(options)};
+}
+
+[[nodiscard]] production::ProductionGateway
+make_gateway(support::LiveConfiguration configured,
+             std::string listen = "127.0.0.1:0") {
+  return make_gateway(std::move(configured.specifications),
+                      std::move(configured.gateway), std::move(listen));
+}
+
+void require_fully_stopped(production::ProductionGateway &gateway) {
+  const auto final = gateway.observe();
+  REQUIRE(final.state == production::GatewayState::Stopped);
+  REQUIRE(final.tracked_contexts == 0U);
+  for (const auto &entry : final.products) {
+    REQUIRE(entry.recovery.active_transport_count == 0U);
+    REQUIRE(entry.recovery.state == recovery::RecoveryState::Stopped);
+    REQUIRE(entry.runtime.owner_joined);
+    REQUIRE(entry.runtime.resident_subscription_count == 0U);
+    REQUIRE(entry.runtime.pending_admission_count == 0U);
+    REQUIRE(entry.events.active_subscriptions == 0U);
+  }
+}
+
+[[nodiscard]] std::unique_ptr<wire::BinanceMarketDataGatewayService::Stub>
+stub_for(const production::GatewayObservation &observation) {
+  return wire::BinanceMarketDataGatewayService::NewStub(::grpc::CreateChannel(
+      "127.0.0.1:" + std::to_string(observation.selected_port),
+      ::grpc::InsecureChannelCredentials()));
+}
+
+[[nodiscard]] wire::OrderBookSubscriptionRequest
+book_request(common::Market market, std::string id) {
+  wire::OrderBookSubscriptionRequest request;
+  request.set_request_id(std::move(id));
+  request.set_schema_version(publication::kOrderBookRequestSchema);
+  request.set_venue(common::VENUE_BINANCE);
+  request.set_market(market);
+  request.set_symbol("BTCUSDT");
+  request.set_initial_snapshot_mode(common::INITIAL_SNAPSHOT_MODE_REQUIRED);
+  request.add_supported_snapshot_schema_versions(publication::kSnapshotSchema);
+  request.add_supported_update_schema_versions(publication::kUpdateSchema);
+  return request;
+}
+
+[[nodiscard]] wire::EventSubscriptionRequest
+event_request(common::Market market, std::string id) {
+  wire::EventSubscriptionRequest request;
+  request.set_request_id(std::move(id));
+  request.set_schema_version(publication::kEventRequestSchema);
+  auto *selector = request.add_selectors();
+  selector->set_venue(common::VENUE_BINANCE);
+  selector->set_market(market);
+  selector->set_symbol("BTCUSDT");
+  selector->set_stream(common::STREAM_DIFF_DEPTH);
+  request.set_delivery_mode(common::DELIVERY_MODE_CONTIGUOUS_EVENTS);
+  request.add_supported_payload_schema_versions(publication::kDepthEventSchema);
+  return request;
+}
+
+[[nodiscard]] wire::GatewayStatusSnapshot
+status(wire::BinanceMarketDataGatewayService::Stub &stub,
+       std::string request_id) {
+  wire::GatewayStatusRequest request;
+  request.set_request_id(std::move(request_id));
+  request.set_schema_version(status::kStatusRequestSchema);
+  wire::GatewayStatusSnapshot response;
+  ::grpc::ClientContext context;
+  context.set_deadline(std::chrono::system_clock::now() +
+                       std::chrono::seconds{2});
+  const auto result = stub.GetGatewayStatus(&context, request, &response);
+  REQUIRE(result.ok());
+  return response;
+}
+
+class OccupiedPort final {
+public:
+  OccupiedPort() {
+    descriptor_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (descriptor_ < 0) {
+      throw std::runtime_error{"socket failed"};
+    }
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (bind(descriptor_, reinterpret_cast<sockaddr *>(&address),
+             sizeof(address)) != 0 ||
+        listen(descriptor_, 1) != 0) {
+      close(descriptor_);
+      throw std::runtime_error{"loopback bind failed"};
+    }
+    socklen_t size = sizeof(address);
+    if (getsockname(descriptor_, reinterpret_cast<sockaddr *>(&address),
+                    &size) != 0) {
+      close(descriptor_);
+      throw std::runtime_error{"getsockname failed"};
+    }
+    port_ = ntohs(address.sin_port);
+  }
+
+  ~OccupiedPort() { close(descriptor_); }
+  [[nodiscard]] std::uint16_t port() const noexcept { return port_; }
+
+private:
+  int descriptor_{-1};
+  std::uint16_t port_{0U};
+};
+
+void performance_preflight_matches_build_mode() {
+  constexpr auto name = "BMDG_PERFORMANCE_BASELINE_OUTPUT";
+  const auto *previous = std::getenv(name);
+  const std::optional<std::string> saved =
+      previous == nullptr ? std::nullopt : std::optional<std::string>{previous};
+  REQUIRE(setenv(name, "/definitely/missing/stale-performance.json", 1) == 0);
+  const production::DaemonConfig config{
+      "127.0.0.1:50051",
+      {rt::spot_btcusdt_key(),
+       {common::VENUE_BINANCE, common::MARKET_SPOT, "ETHUSDT"},
+       rt::usdm_btcusdt_key(),
+       {common::VENUE_BINANCE, common::MARKET_USD_M_PERPETUAL, "ETHUSDT"}}};
+  std::ostringstream errors;
+  const auto accepted =
+      production::performance_baseline_preflight(config, errors);
+  const auto restored =
+      saved.has_value() ? setenv(name, saved->c_str(), 1) : unsetenv(name);
+  REQUIRE(restored == 0);
+  REQUIRE(accepted);
+  REQUIRE(errors.str().empty());
+}
+
+void normal_start_stop() {
+  auto configured = support::gateway_products();
+  auto gateway = make_gateway(std::move(configured));
+  REQUIRE(gateway.start().code == production::StartCode::Serving);
+  const auto serving = gateway.observe();
+  const auto spot_key = rt::spot_btcusdt_key();
+  const auto usdm_key = rt::usdm_btcusdt_key();
+  const auto &spot = product(serving, spot_key);
+  const auto &usdm = product(serving, usdm_key);
+  REQUIRE(serving.state == production::GatewayState::Serving);
+  REQUIRE(serving.selected_port > 0);
+  REQUIRE(spot.recovery.state == recovery::RecoveryState::Live);
+  REQUIRE(usdm.recovery.state == recovery::RecoveryState::Live);
+  REQUIRE(spot.runtime.state == rt::RuntimeState::Live);
+  REQUIRE(usdm.runtime.state == rt::RuntimeState::Live);
+  REQUIRE(spot.runtime.ingress_capacity == 64U);
+  REQUIRE(spot.runtime.bootstrap_capacity == 64U);
+  REQUIRE(usdm.runtime.ingress_capacity == 64U);
+  REQUIRE(usdm.runtime.bootstrap_capacity == 64U);
+  REQUIRE(spot.recovery.max_active_transport_count == 1U);
+  REQUIRE(usdm.recovery.max_active_transport_count == 1U);
+  gateway.stop();
+  require_fully_stopped(gateway);
+}
+
+void one_configured_product_serves() {
+  const rt::MarketKey key{common::VENUE_BINANCE, common::MARKET_SPOT,
+                          "ETHUSDT"};
+  auto state = std::make_shared<support::AttemptState>();
+  std::vector<composition::ProductRuntimeSpec> specifications;
+  specifications.push_back(
+      support::make_test_product_spec(key, support::AttemptMode::Live, state));
+  production::GatewayOptions options;
+  options.initial_startup_timeout = std::chrono::seconds{2};
+  options.allow_ephemeral_listen_for_testing = true;
+  auto gateway = make_gateway(std::move(specifications), std::move(options));
+  const auto started = gateway.start();
+  REQUIRE(started.code == production::StartCode::Serving);
+  REQUIRE(!started.product.has_value());
+  const auto serving = gateway.observe();
+  REQUIRE(serving.products.size() == 1U);
+  REQUIRE(serving.products[0].key == key);
+  REQUIRE(serving.products[0].runtime.state == rt::RuntimeState::Live);
+  gateway.stop();
+  require_fully_stopped(gateway);
+  REQUIRE(state->active.load() == 0U);
+}
+
+void product_start_failure_is_exact_and_rolls_back() {
+  const rt::MarketKey key{common::VENUE_BINANCE, common::MARKET_SPOT,
+                          "ETHUSDT"};
+  auto spot_state = std::make_shared<support::AttemptState>();
+  auto usdm_state = std::make_shared<support::AttemptState>();
+  std::vector<composition::ProductRuntimeSpec> specifications;
+  specifications.push_back(support::make_test_product_spec(
+      rt::usdm_btcusdt_key(), support::AttemptMode::Live, usdm_state));
+  specifications.push_back(support::make_test_product_spec(
+      key, support::AttemptMode::Live, spot_state));
+  production::GatewayOptions options;
+  options.initial_startup_timeout = std::chrono::seconds{2};
+  options.allow_ephemeral_listen_for_testing = true;
+  auto gateway = make_gateway(std::move(specifications), std::move(options));
+  product(gateway, key).stop();
+  const auto started = gateway.start();
+  REQUIRE(started.code == production::StartCode::ProductStartFailed);
+  REQUIRE(started.product == key);
+  const auto final = gateway.observe();
+  REQUIRE(final.state == production::GatewayState::Stopped);
+  REQUIRE(final.tracked_contexts == 0U);
+  for (const auto &entry : final.products) {
+    REQUIRE(entry.recovery.active_transport_count == 0U);
+    REQUIRE(entry.recovery.state == recovery::RecoveryState::Stopped);
+    REQUIRE(entry.runtime.state == rt::RuntimeState::Stopped ||
+            entry.runtime.state == rt::RuntimeState::Constructed);
+    if (entry.key != key) {
+      REQUIRE(entry.runtime.owner_joined);
+    }
+  }
+  REQUIRE(spot_state->active.load() == 0U);
+  REQUIRE(usdm_state->active.load() == 0U);
+}
+
+void owner_thread_creation_exception_rolls_back_all_products() {
+  auto configured = support::gateway_products();
+  configured.specifications.back()
+      .options.runtime_test.before_owner_thread_creation = [] {
+    throw std::system_error{
+        std::make_error_code(std::errc::resource_unavailable_try_again)};
+  };
+  auto gateway = make_gateway(std::move(configured.specifications),
+                              std::move(configured.gateway));
+  bool caught = false;
+  try {
+    static_cast<void>(gateway.start());
+  } catch (const std::system_error &) {
+    caught = true;
+  }
+  REQUIRE(caught);
+  require_fully_stopped(gateway);
+  REQUIRE(configured.spot->active.load() == 0U);
+  REQUIRE(configured.usdm->active.load() == 0U);
+  REQUIRE(product(gateway, rt::spot_btcusdt_key())
+              .runtime()
+              .observe()
+              .owner_joined);
+  REQUIRE(product(gateway, rt::usdm_btcusdt_key())
+              .runtime()
+              .observe()
+              .owner_joined);
+}
+
+void canonical_first_initial_failure_wins() {
+  const rt::MarketKey first{common::VENUE_BINANCE, common::MARKET_SPOT,
+                            "BTCUSDT"};
+  const rt::MarketKey second{common::VENUE_BINANCE, common::MARKET_SPOT,
+                             "ETHUSDT"};
+  auto first_state = std::make_shared<support::AttemptState>();
+  auto second_state = std::make_shared<support::AttemptState>();
+  std::vector<composition::ProductRuntimeSpec> specifications;
+  specifications.push_back(support::make_test_product_spec(
+      second, support::AttemptMode::Terminal, second_state));
+  specifications.push_back(support::make_test_product_spec(
+      first, support::AttemptMode::Terminal, first_state));
+  production::GatewayOptions options;
+  options.initial_startup_timeout = std::chrono::seconds{2};
+  options.allow_ephemeral_listen_for_testing = true;
+  auto gateway = make_gateway(std::move(specifications), std::move(options));
+  std::size_t checks = 0U;
+  const auto started = gateway.start([&] {
+    if (++checks == 1U) {
+      return false;
+    }
+    require_eventually([&] {
+      return first_state->starts.load() != 0U &&
+             second_state->starts.load() != 0U &&
+             first_state->active.load() == 0U &&
+             second_state->active.load() == 0U;
+    });
+    return false;
+  });
+  REQUIRE(started.code == production::StartCode::ProductInitialFailure);
+  REQUIRE(started.product == first);
+  require_fully_stopped(gateway);
+}
+
+void shared_deadline_is_captured_before_product_start() {
+  const auto key = rt::spot_btcusdt_key();
+  auto state = std::make_shared<support::AttemptState>();
+  std::vector<composition::ProductRuntimeSpec> specifications;
+  specifications.push_back(support::make_test_product_spec(
+      key, support::AttemptMode::NeverLive, state));
+  production::GatewayOptions options;
+  options.initial_startup_timeout = std::chrono::seconds{1};
+  options.allow_ephemeral_listen_for_testing = true;
+  const auto origin = std::chrono::steady_clock::time_point{};
+  std::size_t calls = 0U;
+  bool captured_before_start = false;
+  bool checked_after_start = false;
+  options.startup_now = [&, origin] {
+    ++calls;
+    if (calls == 1U) {
+      captured_before_start = state->starts.load() == 0U;
+      return origin;
+    }
+    require_eventually([&] { return state->starts.load() != 0U; });
+    checked_after_start = true;
+    return origin + std::chrono::seconds{1};
+  };
+  auto gateway = make_gateway(std::move(specifications), std::move(options));
+  const auto started = gateway.start();
+  REQUIRE(started.code == production::StartCode::InitialStartupTimeout);
+  REQUIRE(!started.product.has_value());
+  REQUIRE(captured_before_start);
+  REQUIRE(checked_after_start);
+  REQUIRE(calls == 2U);
+  require_fully_stopped(gateway);
+}
+
+void late_initial_live_does_not_bypass_absolute_deadline() {
+  const auto key = rt::spot_btcusdt_key();
+  auto state = std::make_shared<support::AttemptState>();
+  std::vector<composition::ProductRuntimeSpec> specifications;
+  specifications.push_back(support::make_test_product_spec(
+      key, support::AttemptMode::NeverLive, state));
+  production::GatewayOptions options;
+  options.initial_startup_timeout = std::chrono::seconds{1};
+  options.allow_ephemeral_listen_for_testing = true;
+
+  const auto origin = std::chrono::steady_clock::time_point{};
+  const auto deadline = origin + options.initial_startup_timeout;
+  std::atomic<bool> clock_expired{false};
+  std::size_t clock_calls = 0U;
+  bool deadline_captured_before_start = false;
+  bool readiness_checked_before_deadline = false;
+  production::ProductionGateway *gateway_ptr = nullptr;
+  options.startup_now = [&] {
+    ++clock_calls;
+    if (clock_calls == 1U) {
+      deadline_captured_before_start =
+          state->starts.load() == 0U &&
+          product(*gateway_ptr, key).runtime().observe().state ==
+              rt::RuntimeState::Constructed;
+      return origin;
+    }
+    if (clock_calls == 2U) {
+      state->wait_for_first_start_completion();
+      readiness_checked_before_deadline = true;
+      return origin;
+    }
+    return clock_expired.load(std::memory_order_acquire) ? deadline : origin;
+  };
+
+  auto gateway = make_gateway(std::move(specifications), std::move(options));
+  gateway_ptr = &gateway;
+  std::size_t stop_checks = 0U;
+  bool product_was_not_live_at_expiry = false;
+  bool late_live_transition_succeeded = false;
+  bool recovery_confirmed_live_after_expiry = false;
+  const auto started = gateway.start([&] {
+    ++stop_checks;
+    if (stop_checks < 3U) {
+      return false;
+    }
+    if (stop_checks == 3U) {
+      auto &owner = product(*gateway_ptr, key);
+      product_was_not_live_at_expiry =
+          owner.runtime().observe().state != rt::RuntimeState::Live &&
+          owner.recovery().observe().state != recovery::RecoveryState::Live;
+      clock_expired.store(true, std::memory_order_release);
+      auto *attempt = state->active_attempt.load(std::memory_order_acquire);
+      late_live_transition_succeeded =
+          attempt != nullptr && attempt->make_live_for_testing();
+      if (late_live_transition_succeeded) {
+        const auto recovery = owner.recovery().wait_for_generation_live(1U);
+        recovery_confirmed_live_after_expiry =
+            recovery.state == recovery::RecoveryState::Live &&
+            owner.runtime().observe().state == rt::RuntimeState::Live &&
+            owner.runtime().observe().projection_status ==
+                projection::ProjectionStatus::Synchronized;
+      }
+    }
+    return false;
+  });
+
+  const auto final = gateway.observe();
+  REQUIRE(started.code == production::StartCode::InitialStartupTimeout);
+  REQUIRE(!started.product.has_value());
+  REQUIRE(deadline_captured_before_start);
+  REQUIRE(readiness_checked_before_deadline);
+  REQUIRE(product_was_not_live_at_expiry);
+  REQUIRE(late_live_transition_succeeded);
+  REQUIRE(recovery_confirmed_live_after_expiry);
+  REQUIRE(clock_calls == 3U);
+  REQUIRE(final.state == production::GatewayState::Stopped);
+  REQUIRE(final.selected_port == 0);
+  REQUIRE(final.tracked_contexts == 0U);
+  require_fully_stopped(gateway);
+  REQUIRE(state->active.load() == 0U);
+}
+
+void initial_spot_failure_rolls_back() {
+  auto configured = support::gateway_products(support::AttemptMode::Terminal,
+                                              support::AttemptMode::Live);
+  auto spot_state = configured.spot;
+  auto usdm_state = configured.usdm;
+  auto gateway = make_gateway(std::move(configured));
+  const auto started = gateway.start();
+  REQUIRE(started.code == production::StartCode::ProductInitialFailure);
+  REQUIRE(started.product == rt::spot_btcusdt_key());
+  require_fully_stopped(gateway);
+  REQUIRE(spot_state->active.load() == 0U);
+  REQUIRE(usdm_state->active.load() == 0U);
+}
+
+void initial_usdm_failure_rolls_back() {
+  auto configured = support::gateway_products(support::AttemptMode::Live,
+                                              support::AttemptMode::Terminal);
+  auto spot_state = configured.spot;
+  auto usdm_state = configured.usdm;
+  auto gateway = make_gateway(std::move(configured));
+  const auto started = gateway.start();
+  REQUIRE(started.code == production::StartCode::ProductInitialFailure);
+  REQUIRE(started.product == rt::usdm_btcusdt_key());
+  require_fully_stopped(gateway);
+  REQUIRE(spot_state->active.load() == 0U);
+  REQUIRE(usdm_state->active.load() == 0U);
+}
+
+void grpc_bind_failure_rolls_back() {
+  OccupiedPort occupied;
+  auto configured = support::gateway_products();
+  configured.gateway.allow_ephemeral_listen_for_testing = false;
+  auto gateway = make_gateway(std::move(configured),
+                              "127.0.0.1:" + std::to_string(occupied.port()));
+  REQUIRE(gateway.start().code == production::StartCode::GrpcBindFailed);
+  require_fully_stopped(gateway);
+}
+
+void post_start_failure_isolated() {
+  auto configured = support::gateway_products();
+  auto gateway = make_gateway(std::move(configured));
+  REQUIRE(gateway.start().code == production::StartCode::Serving);
+  auto stub = stub_for(gateway.observe());
+
+  REQUIRE(product(gateway, rt::usdm_btcusdt_key())
+              .runtime()
+              .submit_depth_update(
+                  support::make_update(common::MARKET_USD_M_PERPETUAL, 1U, 102U,
+                                       true),
+                  rt::SourceProvenance{1U}) == rt::AdmissionResult::Accepted);
+  const auto terminal =
+      product(gateway, rt::usdm_btcusdt_key()).recovery().wait_until_terminal();
+  REQUIRE(terminal.terminal);
+
+  const auto serving = gateway.observe();
+  const auto spot_key = rt::spot_btcusdt_key();
+  const auto usdm_key = rt::usdm_btcusdt_key();
+  const auto &spot = product(serving, spot_key);
+  const auto &usdm = product(serving, usdm_key);
+  REQUIRE(serving.state == production::GatewayState::Serving);
+  REQUIRE(spot.recovery.state == recovery::RecoveryState::Live);
+  REQUIRE(usdm.recovery.terminal);
+  const auto snapshot = status(*stub, "status-after-usdm-failure");
+  REQUIRE(snapshot.markets_size() == 2);
+  REQUIRE(snapshot.markets(0).state() == common::STREAM_LIFECYCLE_STATE_LIVE);
+  REQUIRE(snapshot.markets(1).state() != common::STREAM_LIFECYCLE_STATE_LIVE);
+
+  ::grpc::ClientContext spot_context;
+  spot_context.set_deadline(std::chrono::system_clock::now() +
+                            std::chrono::seconds{2});
+  auto spot_reader = stub->SubscribeOrderBook(
+      &spot_context,
+      book_request(common::MARKET_SPOT, "spot-after-usdm-failure"));
+  wire::OrderBookStreamItem spot_item;
+  REQUIRE(spot_reader->Read(&spot_item));
+  REQUIRE(spot_item.has_subscription_accepted());
+  REQUIRE(spot_reader->Read(&spot_item));
+  REQUIRE(spot_item.has_snapshot());
+  spot_context.TryCancel();
+  while (spot_reader->Read(&spot_item)) {
+  }
+  static_cast<void>(spot_reader->Finish());
+  gateway.stop();
+  require_fully_stopped(gateway);
+}
+
+void active_stream_shutdown() {
+  auto configured = support::gateway_products();
+  auto gateway = make_gateway(std::move(configured));
+  REQUIRE(gateway.start().code == production::StartCode::Serving);
+  auto stub = stub_for(gateway.observe());
+
+  ::grpc::ClientContext spot_book_context;
+  ::grpc::ClientContext usdm_book_context;
+  ::grpc::ClientContext spot_event_context;
+  ::grpc::ClientContext usdm_event_context;
+  auto spot_book = stub->SubscribeOrderBook(
+      &spot_book_context, book_request(common::MARKET_SPOT, "spot-book"));
+  auto usdm_book = stub->SubscribeOrderBook(
+      &usdm_book_context,
+      book_request(common::MARKET_USD_M_PERPETUAL, "usdm-book"));
+  auto spot_event = stub->SubscribeEvents(
+      &spot_event_context, event_request(common::MARKET_SPOT, "spot-event"));
+  auto usdm_event = stub->SubscribeEvents(
+      &usdm_event_context,
+      event_request(common::MARKET_USD_M_PERPETUAL, "usdm-event"));
+
+  wire::OrderBookStreamItem book_item;
+  wire::GatewayEventEnvelope event_item;
+  REQUIRE(spot_book->Read(&book_item));
+  REQUIRE(usdm_book->Read(&book_item));
+  REQUIRE(spot_event->Read(&event_item));
+  REQUIRE(usdm_event->Read(&event_item));
+  require_eventually(
+      [&gateway] { return gateway.observe().tracked_contexts == 4U; });
+  const auto before = gateway.observe();
+  REQUIRE(product(before, rt::spot_btcusdt_key())
+              .runtime.resident_subscription_count == 1U);
+  REQUIRE(product(before, rt::usdm_btcusdt_key())
+              .runtime.resident_subscription_count == 1U);
+  REQUIRE(product(before, rt::spot_btcusdt_key()).events.active_subscriptions ==
+          1U);
+  REQUIRE(product(before, rt::usdm_btcusdt_key()).events.active_subscriptions ==
+          1U);
+  REQUIRE(status(*stub, "status-near-shutdown").markets_size() == 2);
+
+  gateway.stop();
+  while (spot_book->Read(&book_item)) {
+  }
+  while (usdm_book->Read(&book_item)) {
+  }
+  while (spot_event->Read(&event_item)) {
+  }
+  while (usdm_event->Read(&event_item)) {
+  }
+  static_cast<void>(spot_book->Finish());
+  static_cast<void>(usdm_book->Finish());
+  static_cast<void>(spot_event->Finish());
+  static_cast<void>(usdm_event->Finish());
+  require_fully_stopped(gateway);
+}
+
+void active_handler_drains_before_product_stop() {
+  auto configured = support::gateway_products();
+  std::promise<void> finalization_entered;
+  std::promise<void> release_finalization;
+  auto release = release_finalization.get_future().share();
+  configured.gateway.grpc.before_context_finalization =
+      [&finalization_entered, release](::grpc::StatusCode) {
+        finalization_entered.set_value();
+        release.wait();
+      };
+  auto gateway = make_gateway(std::move(configured));
+  REQUIRE(gateway.start().code == production::StartCode::Serving);
+  auto stub = stub_for(gateway.observe());
+
+  ::grpc::ClientContext context;
+  auto reader = stub->SubscribeOrderBook(
+      &context, book_request(common::MARKET_SPOT, "lifetime-book"));
+  wire::OrderBookStreamItem item;
+  REQUIRE(reader->Read(&item));
+  REQUIRE(reader->Read(&item));
+
+  auto stopped = std::async(std::launch::async, [&gateway] { gateway.stop(); });
+  auto entered = finalization_entered.get_future();
+  REQUIRE(entered.wait_for(std::chrono::seconds{2}) ==
+          std::future_status::ready);
+  REQUIRE(stopped.wait_for(std::chrono::milliseconds{0}) ==
+          std::future_status::timeout);
+  const auto during_drain = gateway.observe();
+  REQUIRE(!product(during_drain, rt::spot_btcusdt_key()).runtime.owner_joined);
+  REQUIRE(!product(during_drain, rt::usdm_btcusdt_key()).runtime.owner_joined);
+
+  release_finalization.set_value();
+  REQUIRE(stopped.wait_for(std::chrono::seconds{2}) ==
+          std::future_status::ready);
+  stopped.get();
+  while (reader->Read(&item)) {
+  }
+  static_cast<void>(reader->Finish());
+  require_fully_stopped(gateway);
+}
+
+void repeated_stop() {
+  auto configured = support::gateway_products();
+  auto gateway = make_gateway(std::move(configured));
+  REQUIRE(gateway.start().code == production::StartCode::Serving);
+  gateway.request_stop();
+  gateway.request_stop();
+  gateway.stop();
+  gateway.stop();
+  require_fully_stopped(gateway);
+}
+
+void startup_stop_request_rolls_back() {
+  auto configured = support::gateway_products(support::AttemptMode::NeverLive,
+                                              support::AttemptMode::NeverLive);
+  auto spot_state = configured.spot;
+  auto usdm_state = configured.usdm;
+  auto gateway = make_gateway(std::move(configured));
+  auto start =
+      std::async(std::launch::async, [&gateway] { return gateway.start(); });
+  require_eventually([&] {
+    return spot_state->starts.load() != 0U && usdm_state->starts.load() != 0U;
+  });
+  gateway.request_stop();
+  REQUIRE(start.wait_for(std::chrono::seconds{2}) == std::future_status::ready);
+  REQUIRE(start.get().code == production::StartCode::StopRequested);
+  require_fully_stopped(gateway);
+}
+
+void grpc_waits_for_every_product_initial_live() {
+  auto configured = support::gateway_products(support::AttemptMode::Live,
+                                              support::AttemptMode::NeverLive);
+  auto spot_state = configured.spot;
+  auto usdm_state = configured.usdm;
+  auto gateway = make_gateway(std::move(configured));
+  auto start =
+      std::async(std::launch::async, [&gateway] { return gateway.start(); });
+  require_eventually([&] {
+    return spot_state->starts.load() != 0U && usdm_state->starts.load() != 0U;
+  });
+  const auto starting = gateway.observe();
+  REQUIRE(starting.state == production::GatewayState::Starting);
+  REQUIRE(starting.selected_port == 0);
+  REQUIRE(product(starting, rt::spot_btcusdt_key()).runtime.state ==
+          rt::RuntimeState::Live);
+  REQUIRE(product(starting, rt::usdm_btcusdt_key()).runtime.state !=
+          rt::RuntimeState::Live);
+  gateway.request_stop();
+  REQUIRE(start.wait_for(std::chrono::seconds{2}) == std::future_status::ready);
+  REQUIRE(start.get().code == production::StartCode::StopRequested);
+  require_fully_stopped(gateway);
+}
+
+void initial_startup_deadline_is_bounded() {
+  auto configured = support::gateway_products(support::AttemptMode::NeverLive,
+                                              support::AttemptMode::NeverLive);
+  configured.gateway.initial_startup_timeout = std::chrono::milliseconds{25};
+  auto gateway = make_gateway(std::move(configured));
+  const auto started_at = std::chrono::steady_clock::now();
+  REQUIRE(gateway.start().code == production::StartCode::InitialStartupTimeout);
+  REQUIRE(std::chrono::steady_clock::now() - started_at <
+          std::chrono::seconds{2});
+  require_fully_stopped(gateway);
+}
+
+void stalled_owner_does_not_block_startup_timeout_or_stop() {
+  for (const bool cancel : {false, true}) {
+    auto configured = support::gateway_products();
+    configured.specifications[0].options.runtime_test.owner_starts_paused =
+        true;
+    configured.gateway.initial_startup_timeout = std::chrono::milliseconds{30};
+    auto gateway = make_gateway(std::move(configured));
+    const auto started_at = std::chrono::steady_clock::now();
+    const auto result = gateway.start([&] {
+      return cancel && std::chrono::steady_clock::now() - started_at >=
+                           std::chrono::milliseconds{10};
+    });
+    REQUIRE(result.code ==
+            (cancel ? production::StartCode::StopRequested
+                    : production::StartCode::InitialStartupTimeout));
+    REQUIRE(std::chrono::steady_clock::now() - started_at <
+            std::chrono::seconds{1});
+    require_fully_stopped(gateway);
+  }
+}
+
+void constructor_rejects_nonloopback_without_starting_products() {
+  for (const auto address : {"0.0.0.0:50051", "[::]:50051",
+                             "203.0.113.10:50051", "localhost:50051"}) {
+    auto configured = support::gateway_products();
+    const auto state = configured.spot;
+    bool rejected = false;
+    try {
+      auto gateway = make_gateway(std::move(configured), address);
+    } catch (const std::invalid_argument &) {
+      rejected = true;
+    }
+    REQUIRE(rejected);
+    REQUIRE(state->starts.load() == 0U);
+    REQUIRE(state->active.load() == 0U);
+  }
+}
+
+void context_bound_preserved() {
+  static_assert(rpc::kMaximumGrpcTrackedContexts == 48U);
+  auto configured = support::gateway_products();
+  auto gateway = make_gateway(std::move(configured));
+  REQUIRE(gateway.start().code == production::StartCode::Serving);
+  REQUIRE(gateway.observe().context_limit == 48U);
+  gateway.stop();
+}
+
+void dynamic_gateway_observation_is_canonical() {
+  const rt::MarketKey spot_btc = rt::spot_btcusdt_key();
+  const rt::MarketKey spot_eth{common::VENUE_BINANCE, common::MARKET_SPOT,
+                               "ETHUSDT"};
+  const rt::MarketKey usdm_btc = rt::usdm_btcusdt_key();
+  const rt::MarketKey usdm_eth{common::VENUE_BINANCE,
+                               common::MARKET_USD_M_PERPETUAL, "ETHUSDT"};
+  const auto specification = [](rt::MarketKey key) {
+    return composition::ProductRuntimeSpec{
+        std::move(key), support::numeric_spec(), {}};
+  };
+  std::vector<composition::ProductRuntimeSpec> scrambled;
+  scrambled.push_back(specification(usdm_eth));
+  scrambled.push_back(specification(spot_eth));
+  scrambled.push_back(specification(usdm_btc));
+  scrambled.push_back(specification(spot_btc));
+  composition::ConfiguredProductRuntimeSet products{
+      std::move(scrambled), support::fixed_clock(), "gw-observation-four"};
+  const auto observations = production::observe_products(products);
+  REQUIRE(observations.size() == 4U);
+  REQUIRE(observations[0].key == spot_btc);
+  REQUIRE(observations[1].key == spot_eth);
+  REQUIRE(observations[2].key == usdm_btc);
+  REQUIRE(observations[3].key == usdm_eth);
+  for (const auto &observation : observations) {
+    REQUIRE(observation.runtime.state == rt::RuntimeState::Constructed);
+    REQUIRE(observation.events.active_subscriptions == 0U);
+  }
+}
+
+void recovery_diagnostic_formatter_supports_both_products() {
+  production::GatewayObservation observation;
+  observation.products.resize(2U);
+  observation.products[0].key = rt::spot_btcusdt_key();
+  observation.products[0].recovery.failure_history_size = 1U;
+  observation.products[0].recovery.failure_history[0].connection_generation =
+      3U;
+  observation.products[0].recovery.failure_history[0].cause =
+      recovery::RecoveryCause::NeedsResync;
+  observation.products[1].key = {common::VENUE_BINANCE,
+                                 common::MARKET_USD_M_PERPETUAL, "ETHUSDT"};
+  observation.products[1].recovery.failure_history_size = 1U;
+  observation.products[1].recovery.failure_history[0].connection_generation =
+      5U;
+  observation.products[1].recovery.failure_history[0].cause =
+      recovery::RecoveryCause::TransportFailure;
+
+  std::ostringstream output;
+  production::write_recovery_failure_diagnostics(output, observation);
+  const auto text = output.str();
+  REQUIRE(text.find("gateway_recovery_failure venue=VENUE_BINANCE "
+                    "market=MARKET_SPOT symbol=\"BTCUSDT\" "
+                    "symbol_truncated=no index=0 generation=3 "
+                    "cause=needs-resync") != std::string::npos);
+  REQUIRE(text.find("gateway_recovery_failure venue=VENUE_BINANCE "
+                    "market=MARKET_USD_M_PERPETUAL symbol=\"ETHUSDT\" "
+                    "symbol_truncated=no index=0 generation=5 "
+                    "cause=transport-failure") != std::string::npos);
+
+  std::ostringstream clean;
+  production::write_recovery_failure_diagnostics(
+      clean, production::GatewayObservation{});
+  REQUIRE(clean.str().empty());
+}
+
+void metadata_failures_are_ordered() {
+  bool usdm_called = false;
+  production::MetadataSources spot_failure;
+  spot_failure.spot_fetch = [] {
+    return binance_market_data::gateway::transport::ExchangeInfoResult{
+        binance_market_data::gateway::transport::NetworkError{
+            binance_market_data::gateway::transport::NetworkErrorCode::Dns,
+            "spot", "failed", std::nullopt, std::nullopt}};
+  };
+  spot_failure.usdm_fetch = [&usdm_called] {
+    usdm_called = true;
+    return binance_market_data::gateway::transport::ExchangeInfoResult{
+        binance_market_data::gateway::transport::ExchangeInfoResponse{}};
+  };
+  const auto spot = production::acquire_production_metadata(
+      {rt::spot_btcusdt_key(), rt::usdm_btcusdt_key()},
+      std::move(spot_failure));
+  REQUIRE(std::get<production::MetadataError>(spot).stage ==
+          production::MetadataStage::SpotFetch);
+  REQUIRE(!usdm_called);
+
+  production::MetadataSources usdm_failure;
+  usdm_failure.spot_fetch = [] {
+    return binance_market_data::gateway::transport::ExchangeInfoResult{
+        binance_market_data::gateway::transport::ExchangeInfoResponse{
+            R"json({"timezone":"UTC","symbols":[{"symbol":"BTCUSDT","status":"TRADING","baseAssetPrecision":1,"quotePrecision":17,"isSpotTradingAllowed":true,"filters":[{"filterType":"PRICE_FILTER","tickSize":"0.01"},{"filterType":"LOT_SIZE","stepSize":"0.001"}]}]})json",
+            true}};
+  };
+  usdm_failure.usdm_fetch = [] {
+    return binance_market_data::gateway::transport::ExchangeInfoResult{
+        binance_market_data::gateway::transport::NetworkError{
+            binance_market_data::gateway::transport::NetworkErrorCode::Timeout,
+            "usdm", "failed", std::nullopt, std::nullopt}};
+  };
+  const auto usdm = production::acquire_production_metadata(
+      {rt::spot_btcusdt_key(), rt::usdm_btcusdt_key()},
+      std::move(usdm_failure));
+  REQUIRE(std::get<production::MetadataError>(usdm).stage ==
+          production::MetadataStage::UsdMFetch);
+}
+
+void cli_is_fixed_and_fail_closed() {
+  char program[] = "bmdg";
+  char listen[] = "--grpc-listen";
+  char endpoint[] = "127.0.0.1:50051";
+  char help[] = "--help";
+  char *help_argv[]{program, help};
+  char *invalid_argv[]{program, listen, endpoint};
+  REQUIRE(std::holds_alternative<production::HelpRequested>(
+      production::parse_daemon_config(2, help_argv)));
+  REQUIRE(std::holds_alternative<production::DaemonConfigError>(
+      production::parse_daemon_config(3, invalid_argv)));
+}
+
+void contracts_c0_time_reaches_projection_and_both_grpc_streams() {
+  namespace fixtures = binance_market_data::gateway::test_support;
+  auto gateway = make_gateway(support::gateway_products());
+  REQUIRE(gateway.start().code == production::StartCode::Serving);
+  auto stub = stub_for(gateway.observe());
+  ::grpc::ClientContext book_context;
+  ::grpc::ClientContext event_context;
+  book_context.set_deadline(std::chrono::system_clock::now() +
+                            std::chrono::seconds{3});
+  event_context.set_deadline(std::chrono::system_clock::now() +
+                             std::chrono::seconds{3});
+  auto book = stub->SubscribeOrderBook(
+      &book_context, book_request(common::MARKET_USD_M_PERPETUAL, "c0-book"));
+  auto events = stub->SubscribeEvents(
+      &event_context,
+      event_request(common::MARKET_USD_M_PERPETUAL, "c0-event"));
+  wire::OrderBookStreamItem book_item;
+  wire::GatewayEventEnvelope event_item;
+  REQUIRE(book->Read(&book_item) && book_item.has_subscription_accepted());
+  REQUIRE(book->Read(&book_item) && book_item.has_snapshot());
+  REQUIRE(events->Read(&event_item) && event_item.has_subscription_accepted());
+  const auto fixture = fixtures::usdm_time_fixture();
+  auto &usdm = product(gateway, rt::usdm_btcusdt_key());
+  const auto spot_before = product(gateway, rt::spot_btcusdt_key())
+                               .runtime()
+                               .observe()
+                               .last_applied_depth;
+  std::uint64_t final_id = 101U;
+  for (const auto &test_case : fixture.at("cases")) {
+    auto source = fixtures::source_case(fixture, test_case);
+    // Continue the existing synthetic Live baseline; the time oracle is
+    // unchanged.
+    source["pu"] = final_id;
+    source["U"] = ++final_id;
+    source["u"] = final_id;
+    source["b"] = nlohmann::json::array({{"100.00", "3.000"}});
+    source["a"] = nlohmann::json::array({{"101.00", "0.000"}});
+    const auto received = rt::ClockSample{1000U + final_id, 2000U + final_id};
+    auto parsed = protocol::parse_usdm_depth_frame(source.dump(), received,
+                                                   "usdm-test-g1");
+    REQUIRE(std::holds_alternative<protocol::market::DepthUpdate>(parsed));
+    const auto update =
+        std::get<protocol::market::DepthUpdate>(std::move(parsed));
+    REQUIRE(usdm.event_publication().publish(
+                std::make_shared<const protocol::NormalizedMarketEvent>(update),
+                1U) == publication::EventPublishResult::Published);
+    REQUIRE(usdm.runtime().submit_depth_update(update, {1U}) ==
+            rt::AdmissionResult::Accepted);
+    const auto applied = usdm.runtime().observe();
+    REQUIRE(applied.last_apply->disposition ==
+            projection::ApplyDisposition::Applied);
+    REQUIRE(applied.last_applied_depth->receive_time_utc_ns == received.utc_ns);
+    REQUIRE(applied.last_applied_depth->receive_monotonic_ns ==
+            received.monotonic_ns);
+    REQUIRE(book->Read(&book_item) && book_item.has_depth_update());
+    REQUIRE(events->Read(&event_item) && event_item.has_depth_update());
+    REQUIRE(book_item.depth_update().SerializeAsString() ==
+            update.SerializeAsString());
+    REQUIRE(event_item.depth_update().SerializeAsString() ==
+            update.SerializeAsString());
+    REQUIRE(!book_item.depth_update().metadata().has_exchange_trade_time_ms());
+    REQUIRE(book_item.delivery_metadata().connection_generation() == 1U);
+    REQUIRE(event_item.delivery_metadata().connection_generation() == 1U);
+  }
+  REQUIRE(product(gateway, rt::spot_btcusdt_key())
+              .runtime()
+              .observe()
+              .last_applied_depth == spot_before);
+  book_context.TryCancel();
+  event_context.TryCancel();
+  while (book->Read(&book_item)) {
+  }
+  while (events->Read(&event_item)) {
+  }
+  static_cast<void>(book->Finish());
+  static_cast<void>(events->Finish());
+  gateway.stop();
+  require_fully_stopped(gateway);
+}
+
+} // namespace
+
+int main() {
+  const std::vector<std::pair<std::string_view, std::function<void()>>> tests{
+      {"PERFORMANCE_PREFLIGHT_MATCHES_BUILD_MODE",
+       performance_preflight_matches_build_mode},
+      {"NORMAL_PRODUCTION_START_STOP", normal_start_stop},
+      {"CONTRACTS_C0_TIME_PROJECTION_GRPC",
+       contracts_c0_time_reaches_projection_and_both_grpc_streams},
+      {"ONE_CONFIGURED_PRODUCT_SERVES", one_configured_product_serves},
+      {"PRODUCT_START_FAILURE_EXACT_ROLLBACK",
+       product_start_failure_is_exact_and_rolls_back},
+      {"OWNER_THREAD_EXCEPTION_FULL_ROLLBACK",
+       owner_thread_creation_exception_rolls_back_all_products},
+      {"INITIAL_SPOT_FAILURE_ROLLBACK", initial_spot_failure_rolls_back},
+      {"INITIAL_USDM_FAILURE_ROLLBACK", initial_usdm_failure_rolls_back},
+      {"CANONICAL_FIRST_INITIAL_FAILURE_WINS",
+       canonical_first_initial_failure_wins},
+      {"GRPC_BIND_FAILURE_ROLLBACK", grpc_bind_failure_rolls_back},
+      {"POST_START_SINGLE_MARKET_FAILURE_ISOLATED",
+       post_start_failure_isolated},
+      {"ACTIVE_FOUR_STREAM_SHUTDOWN", active_stream_shutdown},
+      {"ACTIVE_HANDLER_DRAINS_BEFORE_PRODUCT_STOP",
+       active_handler_drains_before_product_stop},
+      {"REPEATED_STOP", repeated_stop},
+      {"STARTUP_STOP_REQUEST_ROLLBACK", startup_stop_request_rolls_back},
+      {"GRPC_WAITS_FOR_EVERY_PRODUCT_INITIAL_LIVE",
+       grpc_waits_for_every_product_initial_live},
+      {"INITIAL_STARTUP_DEADLINE_BOUNDED", initial_startup_deadline_is_bounded},
+      {"STALLED_OWNER_STARTUP_TIMEOUT_AND_STOP",
+       stalled_owner_does_not_block_startup_timeout_or_stop},
+      {"CONSTRUCTOR_REJECTS_NONLOOPBACK",
+       constructor_rejects_nonloopback_without_starting_products},
+      {"SHARED_DEADLINE_CAPTURED_BEFORE_PRODUCT_START",
+       shared_deadline_is_captured_before_product_start},
+      {"LATE_INITIAL_LIVE_DOES_NOT_BYPASS_ABSOLUTE_DEADLINE",
+       late_initial_live_does_not_bypass_absolute_deadline},
+      {"CONTEXT_48_PRESERVED", context_bound_preserved},
+      {"DYNAMIC_GATEWAY_OBSERVATION_IS_CANONICAL",
+       dynamic_gateway_observation_is_canonical},
+      {"RECOVERY_DIAGNOSTIC_FORMATTER_SUPPORTS_BOTH_PRODUCTS",
+       recovery_diagnostic_formatter_supports_both_products},
+      {"METADATA_FAILURES_ORDERED", metadata_failures_are_ordered},
+      {"CONFIG_CLI_FAILS_CLOSED", cli_is_fixed_and_fail_closed},
+  };
+  for (const auto &[name, test] : tests) {
+    try {
+      test();
+      std::cout << name << "=PASS\n";
+    } catch (const std::exception &error) {
+      std::cerr << name << "=FAIL " << error.what() << '\n';
+      return 1;
+    }
+  }
+  return 0;
+}

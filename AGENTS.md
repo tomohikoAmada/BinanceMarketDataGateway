@@ -1,47 +1,41 @@
-# Gateway contribution rules
+# BMDG contribution rules
 
 Read before changes:
 
 1. [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md)
 2. [docs/MILESTONES.md](docs/MILESTONES.md)
 3. [ARCHITECTURE.md](ARCHITECTURE.md)
-4. relevant implementation and evidence
+4. [docs/CODE_MAP.md](docs/CODE_MAP.md), [docs/DATA_PARITY.md](docs/DATA_PARITY.md) and relevant evidence
 
-The current plan replaces stale historical stage/authorization prose. If code,
-protocol facts or measurements contradict documentation, establish evidence and
-update the current documents. User instructions take precedence. Do not add
-permission steps inferred from old milestone freezes.
+If code, protocol facts or measurements contradict documentation, establish
+evidence and update the current documents. User instructions take precedence.
+Do not infer permission steps from archived milestone freezes.
 
-Historical G0-G11 and G12-A/B/C are complete. The 2026-10-12 BinanceMarketData
-v0.3 overall and Gateway module plans now define G0-G3; these new labels do not
-reopen historical dependency proof. G0's independent review and reset-observation
-fix are complete. The user authorized v0.3 G1 on 2026-10-15; implementation,
-offline validation and independent review completed on 2026-10-16. G2 was
-authorized on 2026-10-18; four-product offline verification, production CI,
-independent review and PR merge are complete. The owner authorized the v0.4 twenty-key offline P1 increment on 2026-10-19; G3 shared-VPS/API qualification remains open.
-The owner also authorized G3-a offline closeout: twenty-key routing, the unchanged
-global 48-context cap, startup rollback/shared deadline, and repeated all-product
-recovery are verified and independently reviewed; delivery status is recorded in
-docs/GATEWAY_G3_OFFLINE_EVIDENCE.md. G3-b/BMD-RL-01 and G3-c remain open.
-High performance, low latency, low CPU/RSS
-and safe stable behavior are delivery requirements; no multi-product performance
-budget has yet been established. Do not label future acceptance complete
-because configurable code exists. Keep Foundation independently buildable.
+## Current status
+
+Historical G0-G11 / G12-A/B/C are complete and archived. Current v0.4 G3-a
+(20-key offline lifecycle/routing/P1), G3-b (shared-IP API budget) and M-G1.A
+(protocol boundaries plus one exchangeInfo decode per market) are complete.
+**G3-c is open**: shared VPS, real network, Recorder co-load and resource
+budgets are not accepted. Twenty products is a resource bound, not measured
+production capacity. Performance budgets are not established. Keep Foundation
+independently buildable.
 
 ## Boundaries
 
-- Gateway owns Binance transport, metadata, lifecycle, bounded publication and
-  gRPC. Contracts owns proto/wire; Projection owns numeric semantics, order
-  book and Spot/USD-M sequencing (including `pu`). No Recorder dependency.
+- BMDG owns Binance transport, metadata, lifecycle, bounded publication and
+  gRPC. Contracts owns proto/wire; Projection owns numeric semantics, order book
+  and Spot/USD-M sequencing (including `pu`). No Recorder dependency.
 - Reuse `ConfiguredProductRuntimeSet` and the immutable registry. Exact
-  `MarketKey = (venue, market, exact symbol)`, 1..20 configured products, one
-  isolated ProductRuntime/private Projection/owner/recovery/transport per key.
-  The process-global streaming context cap remains 48, not 48 per product.
+  `MarketKey = (venue, market, exact symbol)`, 1..20 products, one isolated
+  ProductRuntime/private Projection/owner/recovery/transport per key. The
+  process-global streaming-context cap remains 48, not 48 per product.
 - All configured products must initially reach Live/Synchronized. Any startup
   return failure or exception rolls everything back. Later product failure is
   isolated. Shut down and drain handlers before destroying products.
-- Use startup JSON `bmd-gatewayd --config PATH`. No hot reload, runtime add/remove,
-  generic event bus, DI/plugins, shared multiplexed transport or second classifier.
+- Use startup JSON `bmdg --config PATH`. No hot reload, runtime
+  add/remove, generic event bus, DI/plugins, shared multiplexed transport or
+  second classifier.
 - Insecure gRPC must bind numeric loopback only; reject hostname, wildcard and
   non-loopback endpoints before starting products or binding.
 - Preserve bounded queues, slow-client isolation, cancellation lifetime safety,
@@ -52,20 +46,67 @@ because configurable code exists. Keep Foundation independently buildable.
 - Tests may use existing internal seams; production must not contain an
   acceptance-only hook or expose test controls in configuration.
 - Do not copy proto files or add floating dependencies. Preserve the separate,
-  explicit frozen G1 upstream smoke; do not repin it merely for newer upstream main.
-- Twenty products is a resource bound, not measured capacity. Historical fixed-two
-  performance evidence is not multi-product proof. Optimize only an evidenced
-  problem; keep changes small and avoid speculative concurrency frameworks.
+  explicit frozen upstream link smoke; do not repin it merely for newer
+  upstream main.
+- Twenty products is a resource bound, not measured capacity. Historical
+  fixed-two performance evidence is not multi-product proof. Optimize only an
+  evidenced problem; keep changes small and avoid speculative concurrency
+  frameworks.
+- Research/live parity is a delivery requirement. Any BMDR-only field used by
+  a production signal must be provided by BMDG or explicitly marked
+  research-only; see [docs/DATA_PARITY.md](docs/DATA_PARITY.md).
+
+## Source layout
+
+Use domain directories and namespaces; do not add new `gN` directories.
+
+```text
+src/foundation/  src/protocol/   src/transport/  src/runtime/
+src/recovery/    src/publication/ src/grpc/      src/status/
+src/composition/ src/production/ src/performance/
+```
+
+`src/grpc/` uses namespace `rpc` because `grpc` would collide with the gRPC
+library. Historical docs/scripts are in `docs/archive/` and `scripts/archive/`;
+they are not current build instructions.
+
+Naming: BMDG is the product/brand, `bmdg` is the binary, CMake options are
+`BMDG_*`, and library targets are `bmdg_*`. Old `BMD_GATEWAY_*` options,
+`bmd_gateway_*` library targets and `bmd-gatewayd` remain as transition aliases.
 
 ## Validation and delivery
 
-Use CMake >=3.24. For runtime changes explicitly enable the production graph,
-build/run the affected offline CTest groups, relevant sanitizers and
-`scripts/format-check.sh`. Existing GitHub Foundation checks alone do not verify
-production changes. Reuse pinned binary dependencies; do not repeat historical
-G1 proof or cold-build all third-party sources for routine fixes. Full offline
-and necessary sanitizer checks belong at milestone/release closeout. Keep
-build/cache output under ignored directories.
+Use CMake >=3.24. Foundation-only:
+
+```sh
+cmake -S . -B build/foundation -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/foundation --parallel
+ctest --test-dir build/foundation --output-on-failure
+```
+
+Production graph:
+
+```sh
+cmake -S . -B build/production -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE=/absolute/path/to/conan_toolchain.cmake \
+  -DBMDG_BUILD_PRODUCTION_DAEMON=ON \
+  -DBMDG_BUILD_TESTS=ON
+cmake --build build/production --parallel 4
+ctest --test-dir build/production --output-on-failure
+```
+
+Use `BMDG_BUILD_ACCEPTANCE_TOOLS=ON` for historical live/acceptance
+executables. Use `BMDG_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION=ON`
+only for measurement (about +110 MiB RSS for 20 products). Use
+`BMDG_BUILD_UPSTREAM_LINK_SMOKE=ON` only for the frozen link proof.
+
+For runtime changes explicitly enable the production graph, run affected
+offline tests, relevant sanitizers and `scripts/format-check.sh`. Existing
+GitHub Foundation checks alone do not verify production changes. Reuse pinned
+binary dependencies; do not repeat historical G1 proof or cold-build all
+third-party sources for routine fixes. Full offline and necessary sanitizer
+checks belong at milestone/release closeout. Keep build/cache output under
+ignored directories.
 
 Update current state, milestone status and evidence with each milestone. Push
 reviewable commits; merge completed PRs before removing their remote branch.

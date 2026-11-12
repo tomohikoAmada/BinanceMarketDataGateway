@@ -1,4 +1,4 @@
-name: Gateway CI
+name: BMDG CI
 
 on:
   push:
@@ -6,11 +6,11 @@ on:
   workflow_dispatch:
     inputs:
       prepare_dependencies:
-        description: Prepare the pinned Linux production binary cache (one-time / dependency changes)
+        description: Prepare the pinned Linux BMDG production binary cache (one-time / dependency changes)
         type: boolean
         default: false
       binary_seed_run:
-        description: Optional successful preparation run ID to reuse its binary archive on main
+        description: Optional successful BMDG preparation run ID to reuse its binary archive on main
         type: string
         default: ''
 
@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   foundation:
-    name: Foundation ${{ matrix.compiler }}
+    name: BMDG Foundation ${{ matrix.compiler }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -45,15 +45,15 @@ jobs:
         run: >-
           cmake -S . -B build/foundation-${{ matrix.compiler }}
           -DCMAKE_BUILD_TYPE=Debug
-          -DBMD_GATEWAY_BUILD_TESTS=ON
-          -DBMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE=OFF
+          -DBMDG_BUILD_TESTS=ON
+          -DBMDG_BUILD_UPSTREAM_LINK_SMOKE=OFF
       - name: Build
         run: cmake --build build/foundation-${{ matrix.compiler }} --parallel
       - name: Test
         run: ctest --test-dir build/foundation-${{ matrix.compiler }} --output-on-failure
 
   sanitizers:
-    name: Sanitizer ${{ matrix.sanitizer }}
+    name: BMDG Sanitizer ${{ matrix.sanitizer }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -72,10 +72,10 @@ jobs:
         run: >-
           cmake -S . -B build/sanitizer-${{ matrix.sanitizer }}
           -DCMAKE_BUILD_TYPE=Debug
-          -DBMD_GATEWAY_BUILD_TESTS=ON
-          -DBMD_GATEWAY_ENABLE_ASAN=${{ matrix.sanitizer == 'asan' && 'ON' || 'OFF' }}
-          -DBMD_GATEWAY_ENABLE_UBSAN=${{ matrix.sanitizer == 'ubsan' && 'ON' || 'OFF' }}
-          -DBMD_GATEWAY_ENABLE_TSAN=${{ matrix.sanitizer == 'tsan' && 'ON' || 'OFF' }}
+          -DBMDG_BUILD_TESTS=ON
+          -DBMDG_ENABLE_ASAN=${{ matrix.sanitizer == 'asan' && 'ON' || 'OFF' }}
+          -DBMDG_ENABLE_UBSAN=${{ matrix.sanitizer == 'ubsan' && 'ON' || 'OFF' }}
+          -DBMDG_ENABLE_TSAN=${{ matrix.sanitizer == 'tsan' && 'ON' || 'OFF' }}
       - name: Build
         run: cmake --build build/sanitizer-${{ matrix.sanitizer }} --parallel
       - name: Test
@@ -92,7 +92,7 @@ jobs:
         run: scripts/format-check.sh
 
   production-dependencies:
-    name: Prepare production binaries (manual)
+    name: Prepare BMDG production binaries (manual)
     if: github.event_name == 'workflow_dispatch' && inputs.prepare_dependencies
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -103,11 +103,18 @@ jobs:
       CONAN_HOME: ${{ github.workspace }}/.cache/production-conan
       CC: gcc-13
       CXX: g++-13
+      BMDG_UPSTREAM_TOKEN: ${{ secrets.BMDG_UPSTREAM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Authenticate private upstream reads
+        if: env.BMDG_UPSTREAM_TOKEN != ''
+        run: |
+          git config --global \
+            url."https://x-access-token:${BMDG_UPSTREAM_TOKEN}@github.com/tomohikoAmada/BinanceMarketDataContracts.git".insteadOf \
+            "https://github.com/tomohikoAmada/BinanceMarketDataContracts.git"
       - run: python -m pip install 'conan==2.31.2' 'protobuf==6.33.5' 'pytest==8.4.2'
       - uses: actions/cache/restore@v4
         id: binaries
@@ -146,7 +153,7 @@ jobs:
           key: ${{ steps.binaries.outputs.cache-primary-key }}
 
   production:
-    name: Production Release / four- and twenty-product offline
+    name: BMDG Production Release / four- and twenty-product offline
     needs: production-dependencies
     if: always() && (needs.production-dependencies.result == 'skipped' || needs.production-dependencies.result == 'success')
     runs-on: ubuntu-24.04
@@ -173,9 +180,9 @@ jobs:
         run: >-
           cmake -S . -B build/production -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/build/production-deps/conan_toolchain.cmake
-          -DBMD_GATEWAY_BUILD_PRODUCTION_DAEMON=ON
-          -DBMD_GATEWAY_BUILD_TESTS=ON
-          -DBMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE=OFF
+          -DBMDG_BUILD_PRODUCTION_DAEMON=ON
+          -DBMDG_BUILD_TESTS=ON
+          -DBMDG_BUILD_UPSTREAM_LINK_SMOKE=OFF
       - name: Build real daemon and offline tests
         run: cmake --build build/production --parallel 4
       - name: Production offline regression

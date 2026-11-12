@@ -1,6 +1,6 @@
 #pragma once
 
-#include "market_registry.hpp"
+#include "composition/market_registry.hpp"
 
 #include <cstddef>
 #include <iosfwd>
@@ -15,7 +15,7 @@ inline constexpr std::size_t kMaximumDaemonConfigBytes = 64U * 1024U;
 
 struct DaemonConfig final {
   std::string grpc_listen;
-  std::vector<g11::MarketKey> market_keys;
+  std::vector<runtime::MarketKey> market_keys;
 };
 
 struct HelpRequested final {};

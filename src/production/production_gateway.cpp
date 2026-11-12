@@ -1,49 +1,52 @@
-#include "production_gateway.hpp"
+#include "production/production_gateway.hpp"
 
 #include <chrono>
 #include <optional>
 #include <stdexcept>
 #include <thread>
 #include <utility>
+namespace composition = binance_market_data::gateway::composition;
 
 namespace binance_market_data::gateway::production {
 
 namespace {
 
-[[nodiscard]] bool initial_live(g11::ProductRuntime &product) {
+[[nodiscard]] bool initial_live(composition::ProductRuntime &product) {
   const auto recovery =
       product.recovery().observe_until(std::chrono::steady_clock::now());
   const auto runtime =
       product.runtime().observe_until(std::chrono::steady_clock::now());
-  return recovery.has_value() && recovery->state == g5::RecoveryState::Live &&
+  return recovery.has_value() &&
+         recovery->state == recovery::RecoveryState::Live &&
          !recovery->terminal && recovery->connection_generation >= 1U &&
          recovery->active_transport_count == 1U && runtime.has_value() &&
-         runtime->state == g3::RuntimeState::Live &&
+         runtime->state == runtime::RuntimeState::Live &&
          runtime->projection_status ==
              projection::v1::ProjectionStatus::Synchronized &&
          runtime->owner_thread_id != std::thread::id{};
 }
 
-[[nodiscard]] bool initial_failure(g11::ProductRuntime &product) {
+[[nodiscard]] bool initial_failure(composition::ProductRuntime &product) {
   const auto recovery =
       product.recovery().observe_until(std::chrono::steady_clock::now());
   const auto runtime =
       product.runtime().observe_until(std::chrono::steady_clock::now());
   return (recovery.has_value() &&
           (recovery->terminal || recovery->exhausted ||
-           recovery->state == g5::RecoveryState::Stopped)) ||
-         (runtime.has_value() && (runtime->state == g3::RuntimeState::Faulted ||
-                                  runtime->state == g3::RuntimeState::Stopped));
+           recovery->state == recovery::RecoveryState::Stopped)) ||
+         (runtime.has_value() &&
+          (runtime->state == runtime::RuntimeState::Faulted ||
+           runtime->state == runtime::RuntimeState::Stopped));
 }
 
 } // namespace
 
 std::vector<ProductObservation>
-observe_products(g11::ConfiguredProductRuntimeSet &products) {
+observe_products(composition::ConfiguredProductRuntimeSet &products) {
   std::vector<ProductObservation> observations;
   observations.reserve(products.size());
   const auto deadline =
-      std::chrono::steady_clock::now() + g3::kObservationTimeout;
+      std::chrono::steady_clock::now() + runtime::kObservationTimeout;
   for (const auto &owner : products.products()) {
     const auto runtime = owner->runtime().observe_until(deadline);
     const auto recovery = owner->recovery().observe_until(deadline);
@@ -57,9 +60,9 @@ observe_products(g11::ConfiguredProductRuntimeSet &products) {
 }
 
 ProductionGateway::ProductionGateway(
-    std::vector<g11::ProductRuntimeSpec> specifications, g3::RuntimeClock clock,
-    std::string gateway_instance_id, std::string grpc_listen_address,
-    GatewayOptions options)
+    std::vector<composition::ProductRuntimeSpec> specifications,
+    runtime::RuntimeClock clock, std::string gateway_instance_id,
+    std::string grpc_listen_address, GatewayOptions options)
     : gateway_instance_id_{std::move(gateway_instance_id)},
       grpc_listen_address_{std::move(grpc_listen_address)},
       initial_startup_timeout_{options.initial_startup_timeout},
@@ -75,8 +78,8 @@ ProductionGateway::ProductionGateway(
   if (!startup_now_) {
     throw std::invalid_argument{"startup monotonic-now function is required"};
   }
-  if (!g7::valid_loopback_listen_address(grpc_listen_address_,
-                                         allow_ephemeral_listen_for_testing_)) {
+  if (!rpc::valid_loopback_listen_address(
+          grpc_listen_address_, allow_ephemeral_listen_for_testing_)) {
     throw std::invalid_argument{
         "gRPC listen address must be numeric loopback with a valid port"};
   }
@@ -104,7 +107,7 @@ ProductionGateway::start(const std::function<bool()> &external_stop_requested) {
     const auto deadline = startup_now_() + initial_startup_timeout_;
     const auto starts = products_.start();
     for (const auto &started : starts) {
-      if (started.result != g5::RecoveryStartResult::Started) {
+      if (started.result != recovery::RecoveryStartResult::Started) {
         const StartResult result{StartCode::ProductStartFailed, started.key};
         rollback();
         return result;
@@ -185,7 +188,7 @@ const std::string &ProductionGateway::gateway_instance_id() const noexcept {
   return gateway_instance_id_;
 }
 
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
 bool ProductionGateway::write_performance_baseline(std::ostream &output) const {
   {
     std::lock_guard state_lock{state_mutex_};
@@ -200,7 +203,7 @@ bool ProductionGateway::write_performance_baseline(std::ostream &output) const {
 }
 #endif
 
-g11::ConfiguredProductRuntimeSet &
+composition::ConfiguredProductRuntimeSet &
 ProductionGateway::products_for_testing() noexcept {
   return products_;
 }

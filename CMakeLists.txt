@@ -1,96 +1,81 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(
-    BinanceMarketDataGateway
+    BMDG
     VERSION 0.1.0
     LANGUAGES CXX
 )
 
 include(CTest)
 
-option(BMD_GATEWAY_BUILD_TESTS "Build the offline Gateway foundation tests" ${BUILD_TESTING})
-option(BMD_GATEWAY_BUILD_G2_SYNTHETIC_HOST
-       "Build the deterministic G2 synthetic Spot host and focused tests" OFF)
-option(BMD_GATEWAY_BUILD_G3_RUNTIME
-       "Build the serialized G3 MarketRuntime and focused tests" OFF)
-option(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT
-       "Build the real G4 Binance Spot BTCUSDT transport and offline tests" OFF)
-option(BMD_GATEWAY_BUILD_G5_RECOVERY
-       "Build bounded G5 Spot reconnect/resync recovery and focused tests" OFF)
-option(BMD_GATEWAY_BUILD_G6_ROTATION
-       "Build planned G6 Spot connection rotation and focused tests" OFF)
-option(BMD_GATEWAY_BUILD_G7_PUBLICATION
-       "Build bounded G7 order-book publication and synchronous gRPC" OFF)
-option(BMD_GATEWAY_BUILD_G8_INTEGRATION_ACCEPTANCE
-       "Build G8 Projection M6 integration acceptance" OFF)
-option(BMD_GATEWAY_BUILD_G9_EVENTS
-       "Build G9 contiguous event publication and SubscribeEvents" OFF)
-option(BMD_GATEWAY_BUILD_G10_STATUS
-       "Build G10 minimal GetGatewayStatus" OFF)
-option(BMD_GATEWAY_BUILD_G11_MULTI_MARKET
-       "Build G11 fixed Spot/USD-M BTCUSDT multi-market runtime" OFF)
-option(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON
-       "Build the configured-product production bmd-gatewayd" OFF)
-option(BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION
-       "Instrument the real fixed two-product production daemon" OFF)
-option(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE
-       "Build the opt-in exact candidate Contracts/Projection consumer link smoke" OFF)
-option(BMD_GATEWAY_ENABLE_WARNINGS "Enable GCC/Clang warnings" ON)
-option(BMD_GATEWAY_WARNINGS_AS_ERRORS "Treat project warnings as errors" ON)
-option(BMD_GATEWAY_ENABLE_ASAN "Enable AddressSanitizer" OFF)
-option(BMD_GATEWAY_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
-option(BMD_GATEWAY_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
+# ---------------------------------------------------------------------------
+# Options
+# ---------------------------------------------------------------------------
 
-if(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT)
-    set(BMD_GATEWAY_BUILD_G3_RUNTIME ON)
+# New BMDG_* options. The old BMD_GATEWAY_* names remain accepted as
+# deprecated aliases for one transition period.
+function(bmdg_option name legacy default description)
+    if(DEFINED ${legacy} AND NOT DEFINED ${name})
+        set(${name} "${${legacy}}" CACHE BOOL
+            "${description} (deprecated alias: ${legacy})" FORCE)
+        message(DEPRECATION
+                "${legacy} is deprecated; use ${name}")
+    endif()
+    option(${name} "${description}" ${default})
+endfunction()
+
+bmdg_option(BMDG_BUILD_TESTS BMD_GATEWAY_BUILD_TESTS "${BUILD_TESTING}"
+            "Build offline tests (Foundation always; domain tests require the pinned graph)")
+bmdg_option(BMDG_BUILD_DOMAIN_TESTS BMD_GATEWAY_BUILD_DOMAIN_TESTS OFF
+            "Build domain tests that require pinned Contracts/Projection/Boost/OpenSSL")
+bmdg_option(BMDG_BUILD_PRODUCTION_DAEMON BMD_GATEWAY_BUILD_PRODUCTION_DAEMON OFF
+            "Build the configured-product production bmdg")
+bmdg_option(BMDG_BUILD_ACCEPTANCE_TOOLS BMD_GATEWAY_BUILD_ACCEPTANCE_TOOLS OFF
+            "Build historical live/acceptance executables and the synthetic Spot host")
+bmdg_option(BMDG_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION OFF
+            "Build the opt-in performance trace/delivery instrumentation")
+bmdg_option(BMDG_BUILD_UPSTREAM_LINK_SMOKE BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE OFF
+            "Build the opt-in exact Contracts/Projection consumer link smoke")
+bmdg_option(BMDG_ENABLE_WARNINGS BMD_GATEWAY_ENABLE_WARNINGS ON
+            "Enable GCC/Clang warnings")
+bmdg_option(BMDG_WARNINGS_AS_ERRORS BMD_GATEWAY_WARNINGS_AS_ERRORS ON
+            "Treat project warnings as errors")
+bmdg_option(BMDG_ENABLE_ASAN BMD_GATEWAY_ENABLE_ASAN OFF
+            "Enable AddressSanitizer")
+bmdg_option(BMDG_ENABLE_UBSAN BMD_GATEWAY_ENABLE_UBSAN OFF
+            "Enable UndefinedBehaviorSanitizer")
+bmdg_option(BMDG_ENABLE_TSAN BMD_GATEWAY_ENABLE_TSAN OFF
+            "Enable ThreadSanitizer")
+
+if(BMDG_ENABLE_ASAN AND BMDG_ENABLE_TSAN)
+    message(FATAL_ERROR "AddressSanitizer and ThreadSanitizer cannot be enabled together")
 endif()
 
-if(BMD_GATEWAY_BUILD_G8_INTEGRATION_ACCEPTANCE)
-    set(BMD_GATEWAY_BUILD_G7_PUBLICATION ON)
-endif()
-
-if(BMD_GATEWAY_BUILD_G9_EVENTS)
-    set(BMD_GATEWAY_BUILD_G7_PUBLICATION ON)
-endif()
-
-if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
-    set(BMD_GATEWAY_BUILD_G11_MULTI_MARKET ON)
-endif()
-
-if(BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION AND
-   NOT BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
+if(BMDG_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION AND
+   NOT BMDG_BUILD_PRODUCTION_DAEMON)
     message(FATAL_ERROR
             "Performance baseline instrumentation requires the production daemon graph")
 endif()
 
-if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
-    set(BMD_GATEWAY_BUILD_G10_STATUS ON)
+# A production or acceptance build implies the full domain graph and, when
+# tests are enabled, the domain tests. Foundation remains independently
+# buildable with no Conan packages.
+if(BMDG_BUILD_PRODUCTION_DAEMON OR BMDG_BUILD_ACCEPTANCE_TOOLS)
+    set(BMDG_BUILD_DOMAIN_GRAPH ON)
+endif()
+if(BMDG_BUILD_DOMAIN_TESTS)
+    set(BMDG_BUILD_DOMAIN_GRAPH ON)
+endif()
+if(BMDG_BUILD_TESTS AND BMDG_BUILD_DOMAIN_GRAPH)
+    set(BMDG_BUILD_DOMAIN_TESTS ON)
 endif()
 
-if(BMD_GATEWAY_BUILD_G10_STATUS)
-    set(BMD_GATEWAY_BUILD_G9_EVENTS ON)
-    set(BMD_GATEWAY_BUILD_G7_PUBLICATION ON)
-endif()
+# ---------------------------------------------------------------------------
+# Common helpers
+# ---------------------------------------------------------------------------
 
-if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
-    set(BMD_GATEWAY_BUILD_G6_ROTATION ON)
-endif()
-
-if(BMD_GATEWAY_BUILD_G6_ROTATION)
-    set(BMD_GATEWAY_BUILD_G5_RECOVERY ON)
-endif()
-
-if(BMD_GATEWAY_BUILD_G5_RECOVERY)
-    set(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT ON)
-    set(BMD_GATEWAY_BUILD_G3_RUNTIME ON)
-endif()
-
-if(BMD_GATEWAY_ENABLE_ASAN AND BMD_GATEWAY_ENABLE_TSAN)
-    message(FATAL_ERROR "AddressSanitizer and ThreadSanitizer cannot be enabled together")
-endif()
-
-function(bmd_gateway_apply_warnings target)
-    if(NOT BMD_GATEWAY_ENABLE_WARNINGS)
+function(bmdg_apply_warnings target)
+    if(NOT BMDG_ENABLE_WARNINGS)
         return()
     endif()
 
@@ -105,33 +90,33 @@ function(bmd_gateway_apply_warnings target)
                 -Wsign-conversion
                 -Wshadow
         )
-        if(BMD_GATEWAY_WARNINGS_AS_ERRORS)
+        if(BMDG_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE -Werror)
         endif()
     elseif(MSVC)
         target_compile_options(${target} PRIVATE /W4)
-        if(BMD_GATEWAY_WARNINGS_AS_ERRORS)
+        if(BMDG_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE /WX)
         endif()
     endif()
 endfunction()
 
-function(bmd_gateway_apply_sanitizers target)
+function(bmdg_apply_sanitizers target)
     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
-        if(BMD_GATEWAY_ENABLE_ASAN OR BMD_GATEWAY_ENABLE_UBSAN OR BMD_GATEWAY_ENABLE_TSAN)
+        if(BMDG_ENABLE_ASAN OR BMDG_ENABLE_UBSAN OR BMDG_ENABLE_TSAN)
             message(FATAL_ERROR "Sanitizers require GCC, Clang, or AppleClang")
         endif()
         return()
     endif()
 
     set(sanitizer_flags)
-    if(BMD_GATEWAY_ENABLE_ASAN)
+    if(BMDG_ENABLE_ASAN)
         list(APPEND sanitizer_flags -fsanitize=address -fno-omit-frame-pointer)
     endif()
-    if(BMD_GATEWAY_ENABLE_UBSAN)
+    if(BMDG_ENABLE_UBSAN)
         list(APPEND sanitizer_flags -fsanitize=undefined -fno-omit-frame-pointer)
     endif()
-    if(BMD_GATEWAY_ENABLE_TSAN)
+    if(BMDG_ENABLE_TSAN)
         list(APPEND sanitizer_flags -fsanitize=thread -fno-omit-frame-pointer)
     endif()
     if(sanitizer_flags)
@@ -140,1271 +125,707 @@ function(bmd_gateway_apply_sanitizers target)
     endif()
 endfunction()
 
-add_library(bmd_gateway_foundation
-    src/config.cpp
-    src/lifecycle.cpp
-)
-add_library(BinanceMarketDataGateway::Foundation ALIAS bmd_gateway_foundation)
+function(bmdg_configure_target target)
+    set_target_properties(
+        ${target}
+        PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+    )
+    target_compile_features(${target} PRIVATE cxx_std_20)
+    bmdg_apply_warnings(${target})
+    bmdg_apply_sanitizers(${target})
+endfunction()
 
-set_target_properties(
-    bmd_gateway_foundation
-    PROPERTIES
-        CXX_STANDARD 20
-        CXX_STANDARD_REQUIRED YES
-        CXX_EXTENSIONS NO
-        POSITION_INDEPENDENT_CODE YES
+function(bmdg_configure_library target)
+    bmdg_configure_target(${target})
+    target_compile_features(${target} PUBLIC cxx_std_20)
+    target_include_directories(
+        ${target}
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+    )
+endfunction()
+
+function(bmdg_add_test name source)
+    add_executable(${name} ${source})
+    target_include_directories(
+        ${name}
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests
+            ${CMAKE_CURRENT_SOURCE_DIR}/app
+    )
+    target_link_libraries(${name} PRIVATE ${ARGN})
+    bmdg_configure_target(${name})
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
+
+function(bmdg_add_acceptance name source)
+    add_executable(${name} ${source})
+    target_include_directories(
+        ${name}
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests
+            ${CMAKE_CURRENT_SOURCE_DIR}/app
+    )
+    target_link_libraries(${name} PRIVATE ${ARGN})
+    bmdg_configure_target(${name})
+endfunction()
+
+# ---------------------------------------------------------------------------
+# Foundation: no network, no threads, no third-party runtime dependency.
+# ---------------------------------------------------------------------------
+
+add_library(bmdg_foundation
+    src/foundation/config.cpp
+    src/foundation/lifecycle.cpp
 )
-target_compile_features(bmd_gateway_foundation PUBLIC cxx_std_20)
+add_library(BMDG::Foundation ALIAS bmdg_foundation)
+add_library(BinanceMarketDataGateway::Foundation ALIAS bmdg_foundation)
+add_library(bmd_gateway_foundation ALIAS bmdg_foundation)
+bmdg_configure_library(bmdg_foundation)
 target_include_directories(
-    bmd_gateway_foundation
+    bmdg_foundation
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-bmd_gateway_apply_warnings(bmd_gateway_foundation)
-bmd_gateway_apply_sanitizers(bmd_gateway_foundation)
 
-if(BMD_GATEWAY_BUILD_TESTS)
+if(BMDG_BUILD_TESTS)
     enable_testing()
-    add_executable(bmd_gateway_foundation_tests tests/foundation_tests.cpp)
-    set_target_properties(
-        bmd_gateway_foundation_tests
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
+    bmdg_add_test(
+        bmdg_foundation_tests
+        tests/foundation/foundation_tests.cpp
+        BinanceMarketDataGateway::Foundation
     )
-    target_link_libraries(bmd_gateway_foundation_tests PRIVATE BinanceMarketDataGateway::Foundation)
-    bmd_gateway_apply_warnings(bmd_gateway_foundation_tests)
-    bmd_gateway_apply_sanitizers(bmd_gateway_foundation_tests)
-    add_test(NAME gateway_foundation_tests COMMAND bmd_gateway_foundation_tests)
 endif()
 
-if(BMD_GATEWAY_BUILD_G2_SYNTHETIC_HOST)
-    find_package(BinanceMarketDataContracts 0.1.0 EXACT CONFIG REQUIRED COMPONENTS Protobuf)
-    find_package(BinanceMarketDataProjection 0.1.0 EXACT CONFIG REQUIRED COMPONENTS Core ProtoAdapter)
+# ---------------------------------------------------------------------------
+# Domain graph: protocol -> publication -> runtime -> transport -> recovery
+#               -> composition -> status/grpc -> production
+# ---------------------------------------------------------------------------
 
-    add_library(bmd_gateway_g2_synthetic
-        src/g2/synthetic_spot_host.cpp
-    )
-    set_target_properties(
-        bmd_gateway_g2_synthetic
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_include_directories(
-        bmd_gateway_g2_synthetic
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/g2
-    )
-    target_link_libraries(
-        bmd_gateway_g2_synthetic
-        PUBLIC
-            BinanceMarketDataContracts::Protobuf
-            BinanceMarketDataProjection::Core
-            BinanceMarketDataProjection::ProtoAdapter
-    )
-    bmd_gateway_apply_warnings(bmd_gateway_g2_synthetic)
-    bmd_gateway_apply_sanitizers(bmd_gateway_g2_synthetic)
-
-    add_executable(bmd-gateway-g2-synthetic app/g2_synthetic/main.cpp)
-    set_target_properties(
-        bmd-gateway-g2-synthetic
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_link_libraries(bmd-gateway-g2-synthetic PRIVATE bmd_gateway_g2_synthetic)
-    bmd_gateway_apply_warnings(bmd-gateway-g2-synthetic)
-    bmd_gateway_apply_sanitizers(bmd-gateway-g2-synthetic)
-
-    if(BMD_GATEWAY_BUILD_TESTS)
-        add_executable(bmd_gateway_g2_synthetic_tests tests/g2_synthetic_host_tests.cpp)
-        set_target_properties(
-            bmd_gateway_g2_synthetic_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(bmd_gateway_g2_synthetic_tests PRIVATE bmd_gateway_g2_synthetic)
-        bmd_gateway_apply_warnings(bmd_gateway_g2_synthetic_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_g2_synthetic_tests)
-        add_test(NAME gateway_g2_synthetic_host_tests COMMAND bmd_gateway_g2_synthetic_tests)
-    endif()
-endif()
-
-if(BMD_GATEWAY_BUILD_G3_RUNTIME)
+if(BMDG_BUILD_DOMAIN_GRAPH)
     find_package(Threads REQUIRED)
     find_package(BinanceMarketDataContracts 0.1.0 EXACT CONFIG REQUIRED COMPONENTS Protobuf)
     find_package(BinanceMarketDataProjection 0.1.0 EXACT CONFIG REQUIRED COMPONENTS Core ProtoAdapter)
+    find_package(Boost 1.91.0 EXACT CONFIG REQUIRED)
+    find_package(OpenSSL 3.6.3 EXACT CONFIG REQUIRED)
+    find_package(nlohmann_json 3.12.0 EXACT CONFIG REQUIRED)
+    find_package(BinanceMarketDataContractsGrpc 0.1.0 EXACT CONFIG REQUIRED)
 
-    add_library(bmd_gateway_g3_runtime
-        src/g3/market_runtime.cpp
-        src/g7/order_book_publication.cpp
+    if(BMDG_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION)
+        add_compile_definitions(BMDG_PERFORMANCE_BASELINE_ENABLED=1)
+    endif()
+
+    # The domain graph is the complete V1 surface. These macros only preserve
+    # the historical compile-time split inside the gRPC/status sources.
+    add_compile_definitions(
+        BMDG_G9_ENABLED=1
+        BMDG_G10_ENABLED=1
+        BMDG_G11_ENABLED=1
     )
-    if(BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION)
+
+    add_library(bmdg_protocol
+        src/protocol/spot_protocol.cpp
+        src/protocol/usdm_protocol.cpp
+    )
+    bmdg_configure_library(bmdg_protocol)
+    target_link_libraries(
+        bmdg_protocol
+        PUBLIC
+            BinanceMarketDataContracts::Protobuf
+            BinanceMarketDataProjection::Core
+            nlohmann_json::nlohmann_json
+    )
+
+    add_library(bmdg_publication
+        src/publication/order_book_publication.cpp
+        src/publication/event_publication.cpp
+    )
+    if(BMDG_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION)
         target_sources(
-            bmd_gateway_g3_runtime
+            bmdg_publication
             PRIVATE
                 src/performance/performance_baseline.cpp
         )
-        target_compile_definitions(
-            bmd_gateway_g3_runtime
-            PUBLIC
-                BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED=1
-        )
     endif()
-    set_target_properties(
-        bmd_gateway_g3_runtime
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_include_directories(
-        bmd_gateway_g3_runtime
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/g3
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/g7
-            $<$<BOOL:${BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION}>:${CMAKE_CURRENT_SOURCE_DIR}/src/performance>
-    )
+    bmdg_configure_library(bmdg_publication)
     target_link_libraries(
-        bmd_gateway_g3_runtime
+        bmdg_publication
         PUBLIC
+            bmdg_protocol
+            BinanceMarketDataContracts::Protobuf
+            BinanceMarketDataProjection::Core
+    )
+
+    add_library(bmdg_runtime
+        src/runtime/market_runtime.cpp
+    )
+    bmdg_configure_library(bmdg_runtime)
+    target_link_libraries(
+        bmdg_runtime
+        PUBLIC
+            bmdg_publication
             BinanceMarketDataContracts::Protobuf
             BinanceMarketDataProjection::Core
             BinanceMarketDataProjection::ProtoAdapter
             Threads::Threads
     )
-    bmd_gateway_apply_warnings(bmd_gateway_g3_runtime)
-    bmd_gateway_apply_sanitizers(bmd_gateway_g3_runtime)
 
-    if(BMD_GATEWAY_BUILD_TESTS)
-        add_executable(bmd_gateway_g3_runtime_tests tests/g3_market_runtime_tests.cpp)
-        set_target_properties(
-            bmd_gateway_g3_runtime_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(bmd_gateway_g3_runtime_tests PRIVATE bmd_gateway_g3_runtime)
-        bmd_gateway_apply_warnings(bmd_gateway_g3_runtime_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_g3_runtime_tests)
-        add_test(NAME gateway_g3_market_runtime_tests COMMAND bmd_gateway_g3_runtime_tests)
-    endif()
-endif()
-
-if(BMD_GATEWAY_BUILD_G4_SPOT_TRANSPORT)
-    find_package(Boost 1.91.0 EXACT CONFIG REQUIRED)
-    find_package(OpenSSL 3.6.3 EXACT CONFIG REQUIRED)
-    find_package(nlohmann_json 3.12.0 EXACT CONFIG REQUIRED)
-
-    add_library(bmd_gateway_g4_spot_protocol
-        src/g4/spot_protocol.cpp
+    add_library(bmdg_transport
+        src/transport/spot_transport.cpp
+        src/transport/usdm_transport.cpp
     )
-    set_target_properties(
-        bmd_gateway_g4_spot_protocol
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_include_directories(
-        bmd_gateway_g4_spot_protocol
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/g4
-    )
+    bmdg_configure_library(bmdg_transport)
     target_link_libraries(
-        bmd_gateway_g4_spot_protocol
+        bmdg_transport
         PUBLIC
-            bmd_gateway_g3_runtime
-            nlohmann_json::nlohmann_json
-    )
-    bmd_gateway_apply_warnings(bmd_gateway_g4_spot_protocol)
-    bmd_gateway_apply_sanitizers(bmd_gateway_g4_spot_protocol)
-
-    add_library(bmd_gateway_g4_spot_transport
-        src/g4/spot_transport.cpp
-    )
-    set_target_properties(
-        bmd_gateway_g4_spot_transport
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_include_directories(
-        bmd_gateway_g4_spot_transport
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/g4
-    )
-    target_link_libraries(
-        bmd_gateway_g4_spot_transport
-        PUBLIC
-            bmd_gateway_g4_spot_protocol
+            bmdg_runtime
+            bmdg_protocol
             boost::boost
             openssl::openssl
     )
-    bmd_gateway_apply_warnings(bmd_gateway_g4_spot_transport)
-    bmd_gateway_apply_sanitizers(bmd_gateway_g4_spot_transport)
 
-    add_executable(bmd-gateway-g4-spot-live app/g4_spot_live/main.cpp)
-    set_target_properties(
-        bmd-gateway-g4-spot-live
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
+    add_library(bmdg_recovery
+        src/recovery/spot_recovery.cpp
     )
+    bmdg_configure_library(bmdg_recovery)
     target_link_libraries(
-        bmd-gateway-g4-spot-live
-        PRIVATE
-            bmd_gateway_g4_spot_transport
-    )
-    bmd_gateway_apply_warnings(bmd-gateway-g4-spot-live)
-    bmd_gateway_apply_sanitizers(bmd-gateway-g4-spot-live)
-
-    if(BMD_GATEWAY_BUILD_TESTS)
-        add_executable(bmd_gateway_g4_spot_protocol_tests
-            tests/g4_spot_protocol_tests.cpp
-        )
-        set_target_properties(
-            bmd_gateway_g4_spot_protocol_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(
-            bmd_gateway_g4_spot_protocol_tests
-            PRIVATE
-                bmd_gateway_g4_spot_protocol
-        )
-        bmd_gateway_apply_warnings(bmd_gateway_g4_spot_protocol_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_g4_spot_protocol_tests)
-        add_test(NAME gateway_g4_spot_protocol_tests
-                 COMMAND bmd_gateway_g4_spot_protocol_tests)
-
-        add_executable(bmd_gateway_public_api_budget_tests
-            tests/public_api_budget_tests.cpp)
-        target_include_directories(bmd_gateway_public_api_budget_tests PRIVATE src/g4)
-        target_compile_features(bmd_gateway_public_api_budget_tests PRIVATE cxx_std_20)
-        target_link_libraries(bmd_gateway_public_api_budget_tests PRIVATE Threads::Threads)
-        bmd_gateway_apply_warnings(bmd_gateway_public_api_budget_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_public_api_budget_tests)
-        add_test(NAME gateway_public_api_budget_tests
-                 COMMAND bmd_gateway_public_api_budget_tests)
-
-        add_executable(bmd_gateway_g4_spot_transport_tests
-            tests/g4_spot_transport_tests.cpp
-        )
-        set_target_properties(
-            bmd_gateway_g4_spot_transport_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(
-            bmd_gateway_g4_spot_transport_tests
-            PRIVATE
-                bmd_gateway_g4_spot_transport
-        )
-        bmd_gateway_apply_warnings(bmd_gateway_g4_spot_transport_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_g4_spot_transport_tests)
-        add_test(NAME gateway_g4_spot_transport_tests
-                 COMMAND bmd_gateway_g4_spot_transport_tests)
-    endif()
-endif()
-
-if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
-    add_library(bmd_gateway_g11_usdm_protocol
-        src/g11/usdm_protocol.cpp
-    )
-    set_target_properties(
-        bmd_gateway_g11_usdm_protocol
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_include_directories(
-        bmd_gateway_g11_usdm_protocol
+        bmdg_recovery
         PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/g11
+            bmdg_transport
     )
+
+    add_library(bmdg_composition
+        src/composition/market_registry.cpp
+        src/composition/multi_market_runtime.cpp
+    )
+    bmdg_configure_library(bmdg_composition)
     target_link_libraries(
-        bmd_gateway_g11_usdm_protocol
+        bmdg_composition
         PUBLIC
-            bmd_gateway_g4_spot_protocol
+            bmdg_runtime
+            bmdg_transport
+            bmdg_recovery
+            bmdg_publication
     )
-    bmd_gateway_apply_warnings(bmd_gateway_g11_usdm_protocol)
-    bmd_gateway_apply_sanitizers(bmd_gateway_g11_usdm_protocol)
 
-    add_library(bmd_gateway_g11_usdm_transport
-        src/g11/usdm_transport.cpp
+    add_library(bmdg_status
+        src/status/gateway_status.cpp
     )
-    set_target_properties(
-        bmd_gateway_g11_usdm_transport
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_include_directories(
-        bmd_gateway_g11_usdm_transport
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/g11
-    )
+    bmdg_configure_library(bmdg_status)
     target_link_libraries(
-        bmd_gateway_g11_usdm_transport
+        bmdg_status
         PUBLIC
-            bmd_gateway_g11_usdm_protocol
-            bmd_gateway_g4_spot_transport
+            bmdg_composition
+            bmdg_runtime
+            bmdg_recovery
+            bmdg_publication
     )
-    bmd_gateway_apply_warnings(bmd_gateway_g11_usdm_transport)
-    bmd_gateway_apply_sanitizers(bmd_gateway_g11_usdm_transport)
 
-    if(BMD_GATEWAY_BUILD_TESTS)
-        add_executable(bmd_gateway_g11_usdm_protocol_tests
-            tests/g11_usdm_protocol_tests.cpp
-        )
-        target_compile_definitions(bmd_gateway_g11_usdm_protocol_tests PRIVATE
-            BMD_GATEWAY_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
-        set_target_properties(
-            bmd_gateway_g11_usdm_protocol_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(
-            bmd_gateway_g11_usdm_protocol_tests
-            PRIVATE
-                bmd_gateway_g11_usdm_protocol
-        )
-        bmd_gateway_apply_warnings(bmd_gateway_g11_usdm_protocol_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_g11_usdm_protocol_tests)
-        add_test(NAME gateway_g11_usdm_protocol_tests
-                 COMMAND bmd_gateway_g11_usdm_protocol_tests)
-
-        add_executable(bmd_gateway_g11_usdm_transport_tests
-            tests/g11_usdm_transport_tests.cpp
-        )
-        set_target_properties(
-            bmd_gateway_g11_usdm_transport_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(
-            bmd_gateway_g11_usdm_transport_tests
-            PRIVATE
-                bmd_gateway_g11_usdm_transport
-        )
-        bmd_gateway_apply_warnings(bmd_gateway_g11_usdm_transport_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_g11_usdm_transport_tests)
-        add_test(NAME gateway_g11_usdm_transport_tests
-                 COMMAND bmd_gateway_g11_usdm_transport_tests)
-    endif()
-endif()
-
-if(BMD_GATEWAY_BUILD_G5_RECOVERY)
-    add_library(bmd_gateway_g5_recovery
-        src/g5/spot_recovery.cpp
+    add_library(bmdg_grpc
+        src/grpc/grpc_service.cpp
     )
-    set_target_properties(
-        bmd_gateway_g5_recovery
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_include_directories(
-        bmd_gateway_g5_recovery
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/g5
-    )
+    bmdg_configure_library(bmdg_grpc)
     target_link_libraries(
-        bmd_gateway_g5_recovery
+        bmdg_grpc
         PUBLIC
-            bmd_gateway_g4_spot_transport
-    )
-    bmd_gateway_apply_warnings(bmd_gateway_g5_recovery)
-    bmd_gateway_apply_sanitizers(bmd_gateway_g5_recovery)
-
-    add_executable(bmd-gateway-g5-spot-recovery-live
-        app/g5_spot_recovery_live/main.cpp
-    )
-    set_target_properties(
-        bmd-gateway-g5-spot-recovery-live
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_link_libraries(
-        bmd-gateway-g5-spot-recovery-live
-        PRIVATE
-            bmd_gateway_g5_recovery
-    )
-    bmd_gateway_apply_warnings(bmd-gateway-g5-spot-recovery-live)
-    bmd_gateway_apply_sanitizers(bmd-gateway-g5-spot-recovery-live)
-
-    if(BMD_GATEWAY_BUILD_TESTS)
-        add_executable(bmd_gateway_g5_recovery_tests
-            tests/g5_spot_recovery_tests.cpp
-        )
-        set_target_properties(
-            bmd_gateway_g5_recovery_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(
-            bmd_gateway_g5_recovery_tests
-            PRIVATE
-                bmd_gateway_g5_recovery
-        )
-        bmd_gateway_apply_warnings(bmd_gateway_g5_recovery_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_g5_recovery_tests)
-        add_test(NAME gateway_g5_recovery_tests
-                 COMMAND bmd_gateway_g5_recovery_tests)
-    endif()
-endif()
-
-if(BMD_GATEWAY_BUILD_G6_ROTATION)
-    add_library(bmd_gateway_g6_rotation INTERFACE)
-    target_include_directories(
-        bmd_gateway_g6_rotation
-        INTERFACE
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/g6
-    )
-    target_link_libraries(
-        bmd_gateway_g6_rotation
-        INTERFACE
-            bmd_gateway_g5_recovery
-    )
-
-    add_executable(bmd-gateway-g6-spot-rotation-live
-        app/g6_spot_rotation_live/main.cpp
-    )
-    set_target_properties(
-        bmd-gateway-g6-spot-rotation-live
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_link_libraries(
-        bmd-gateway-g6-spot-rotation-live
-        PRIVATE
-            bmd_gateway_g6_rotation
-    )
-    bmd_gateway_apply_warnings(bmd-gateway-g6-spot-rotation-live)
-    bmd_gateway_apply_sanitizers(bmd-gateway-g6-spot-rotation-live)
-
-    if(BMD_GATEWAY_BUILD_TESTS)
-        add_executable(bmd_gateway_g6_rotation_tests
-            tests/g6_spot_rotation_tests.cpp
-        )
-        set_target_properties(
-            bmd_gateway_g6_rotation_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(
-            bmd_gateway_g6_rotation_tests
-            PRIVATE
-                bmd_gateway_g6_rotation
-        )
-        bmd_gateway_apply_warnings(bmd_gateway_g6_rotation_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_g6_rotation_tests)
-        add_test(NAME gateway_g6_rotation_tests
-                 COMMAND bmd_gateway_g6_rotation_tests)
-    endif()
-endif()
-
-if(BMD_GATEWAY_BUILD_G9_EVENTS)
-    add_library(bmd_gateway_g9_events
-        src/g9/event_publication.cpp
-    )
-    set_target_properties(
-        bmd_gateway_g9_events
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_include_directories(
-        bmd_gateway_g9_events
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/g9
-    )
-    target_link_libraries(
-        bmd_gateway_g9_events
-        PUBLIC
-            bmd_gateway_g4_spot_protocol
-    )
-    bmd_gateway_apply_warnings(bmd_gateway_g9_events)
-    bmd_gateway_apply_sanitizers(bmd_gateway_g9_events)
-
-    if(BMD_GATEWAY_BUILD_TESTS)
-        add_executable(bmd_gateway_g9_event_publication_tests
-            tests/g9_event_publication_tests.cpp
-        )
-        set_target_properties(
-            bmd_gateway_g9_event_publication_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(
-            bmd_gateway_g9_event_publication_tests
-            PRIVATE
-                bmd_gateway_g9_events
-        )
-        bmd_gateway_apply_warnings(
-            bmd_gateway_g9_event_publication_tests)
-        bmd_gateway_apply_sanitizers(
-            bmd_gateway_g9_event_publication_tests)
-        add_test(NAME gateway_g9_event_publication_tests
-                 COMMAND bmd_gateway_g9_event_publication_tests)
-    endif()
-endif()
-
-if(BMD_GATEWAY_BUILD_G10_STATUS)
-    add_library(bmd_gateway_g10_status
-        src/g10/gateway_status.cpp
-    )
-    set_target_properties(
-        bmd_gateway_g10_status
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_include_directories(
-        bmd_gateway_g10_status
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/g10
-    )
-    target_link_libraries(
-        bmd_gateway_g10_status
-        PUBLIC
-            bmd_gateway_g5_recovery
-            bmd_gateway_g9_events
-    )
-    bmd_gateway_apply_warnings(bmd_gateway_g10_status)
-    bmd_gateway_apply_sanitizers(bmd_gateway_g10_status)
-
-    if(BMD_GATEWAY_BUILD_TESTS)
-        add_executable(bmd_gateway_g10_gateway_status_tests
-            tests/g10_gateway_status_tests.cpp
-        )
-        set_target_properties(
-            bmd_gateway_g10_gateway_status_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(
-            bmd_gateway_g10_gateway_status_tests
-            PRIVATE
-                bmd_gateway_g10_status
-        )
-        bmd_gateway_apply_warnings(bmd_gateway_g10_gateway_status_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_g10_gateway_status_tests)
-        add_test(NAME gateway_g10_gateway_status_tests
-                 COMMAND bmd_gateway_g10_gateway_status_tests)
-    endif()
-endif()
-
-if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
-    add_library(bmd_gateway_g11_registry
-        src/g11/market_registry.cpp
-    )
-    set_target_properties(
-        bmd_gateway_g11_registry
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_include_directories(
-        bmd_gateway_g11_registry
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/g11
-    )
-    target_link_libraries(
-        bmd_gateway_g11_registry
-        PUBLIC
-            bmd_gateway_g5_recovery
-            bmd_gateway_g9_events
-    )
-    bmd_gateway_apply_warnings(bmd_gateway_g11_registry)
-    bmd_gateway_apply_sanitizers(bmd_gateway_g11_registry)
-
-    add_library(bmd_gateway_g11_multi_market_runtime
-        src/g11/multi_market_runtime.cpp
-    )
-    set_target_properties(
-        bmd_gateway_g11_multi_market_runtime
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_include_directories(
-        bmd_gateway_g11_multi_market_runtime
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/g11
-    )
-    target_link_libraries(
-        bmd_gateway_g11_multi_market_runtime
-        PUBLIC
-            bmd_gateway_g11_registry
-            bmd_gateway_g11_usdm_transport
-            bmd_gateway_g6_rotation
-    )
-    bmd_gateway_apply_warnings(bmd_gateway_g11_multi_market_runtime)
-    bmd_gateway_apply_sanitizers(bmd_gateway_g11_multi_market_runtime)
-
-    target_compile_definitions(
-        bmd_gateway_g10_status
-        PUBLIC
-            BMD_GATEWAY_G11_ENABLED=1
-    )
-    target_link_libraries(
-        bmd_gateway_g10_status
-        PUBLIC
-            bmd_gateway_g11_registry
-    )
-
-    if(BMD_GATEWAY_BUILD_TESTS)
-        add_executable(bmd_gateway_g11_multi_market_runtime_tests
-            tests/g11_multi_market_runtime_tests.cpp
-        )
-        set_target_properties(
-            bmd_gateway_g11_multi_market_runtime_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(
-            bmd_gateway_g11_multi_market_runtime_tests
-            PRIVATE
-                bmd_gateway_g11_multi_market_runtime
-        )
-        bmd_gateway_apply_warnings(
-            bmd_gateway_g11_multi_market_runtime_tests)
-        bmd_gateway_apply_sanitizers(
-            bmd_gateway_g11_multi_market_runtime_tests)
-        add_test(NAME gateway_g11_multi_market_runtime_tests
-                 COMMAND bmd_gateway_g11_multi_market_runtime_tests)
-
-    endif()
-endif()
-
-if(BMD_GATEWAY_BUILD_G7_PUBLICATION)
-    find_package(BinanceMarketDataContractsGrpc 0.1.0 EXACT CONFIG REQUIRED)
-
-    add_library(bmd_gateway_g7_grpc
-        src/g7/grpc_service.cpp
-    )
-    set_target_properties(
-        bmd_gateway_g7_grpc
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_include_directories(
-        bmd_gateway_g7_grpc
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/g7
-    )
-    target_link_libraries(
-        bmd_gateway_g7_grpc
-        PUBLIC
-            bmd_gateway_g6_rotation
+            bmdg_status
+            bmdg_composition
+            bmdg_runtime
+            bmdg_recovery
+            bmdg_publication
             BinanceMarketDataContracts::Grpc
     )
-    if(BMD_GATEWAY_BUILD_G9_EVENTS)
-        target_compile_definitions(
-            bmd_gateway_g7_grpc
-            PUBLIC
-                BMD_GATEWAY_G9_ENABLED=1
-        )
-        target_link_libraries(
-            bmd_gateway_g7_grpc
-            PUBLIC
-                bmd_gateway_g9_events
-        )
-    endif()
-    if(BMD_GATEWAY_BUILD_G10_STATUS)
-        target_compile_definitions(
-            bmd_gateway_g7_grpc
-            PUBLIC
-                BMD_GATEWAY_G10_ENABLED=1
-        )
-        target_link_libraries(
-            bmd_gateway_g7_grpc
-            PUBLIC
-                bmd_gateway_g10_status
-        )
-    endif()
-    if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
-        target_compile_definitions(
-            bmd_gateway_g7_grpc
-            PUBLIC
-                BMD_GATEWAY_G11_ENABLED=1
-        )
-        target_link_libraries(
-            bmd_gateway_g7_grpc
-            PUBLIC
-                bmd_gateway_g11_registry
-        )
-    endif()
-    bmd_gateway_apply_warnings(bmd_gateway_g7_grpc)
-    bmd_gateway_apply_sanitizers(bmd_gateway_g7_grpc)
 
-    if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
-        add_executable(bmd-gateway-g11-multi-market-live
-            app/g11_multi_market_live/main.cpp
-        )
-        set_target_properties(
-            bmd-gateway-g11-multi-market-live
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(
-            bmd-gateway-g11-multi-market-live
-            PRIVATE
-                bmd_gateway_g7_grpc
-                bmd_gateway_g11_multi_market_runtime
-        )
-        bmd_gateway_apply_warnings(bmd-gateway-g11-multi-market-live)
-        bmd_gateway_apply_sanitizers(bmd-gateway-g11-multi-market-live)
-    endif()
-
-    add_executable(bmd-gateway-g7-spot-grpc-live
-        app/g7_spot_grpc_live/main.cpp
-    )
-    set_target_properties(
-        bmd-gateway-g7-spot-grpc-live
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_link_libraries(
-        bmd-gateway-g7-spot-grpc-live
-        PRIVATE
-            bmd_gateway_g7_grpc
-    )
-    bmd_gateway_apply_warnings(bmd-gateway-g7-spot-grpc-live)
-    bmd_gateway_apply_sanitizers(bmd-gateway-g7-spot-grpc-live)
-
-    if(BMD_GATEWAY_BUILD_TESTS)
-        add_executable(bmd_gateway_g7_order_book_publication_tests
-            tests/g7_order_book_publication_tests.cpp
-        )
-        set_target_properties(
-            bmd_gateway_g7_order_book_publication_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(
-            bmd_gateway_g7_order_book_publication_tests
-            PRIVATE
-                bmd_gateway_g3_runtime
-        )
-        bmd_gateway_apply_warnings(
-            bmd_gateway_g7_order_book_publication_tests)
-        bmd_gateway_apply_sanitizers(
-            bmd_gateway_g7_order_book_publication_tests)
-        add_test(NAME gateway_g7_order_book_publication_tests
-                 COMMAND bmd_gateway_g7_order_book_publication_tests)
-
-        add_executable(bmd_gateway_g7_grpc_service_tests
-            tests/g7_grpc_service_tests.cpp
-        )
-        set_target_properties(
-            bmd_gateway_g7_grpc_service_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(
-            bmd_gateway_g7_grpc_service_tests
-            PRIVATE
-                bmd_gateway_g7_grpc
-        )
-        bmd_gateway_apply_warnings(bmd_gateway_g7_grpc_service_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_g7_grpc_service_tests)
-        add_test(NAME gateway_g7_grpc_service_tests
-                 COMMAND bmd_gateway_g7_grpc_service_tests)
-
-        if(BMD_GATEWAY_BUILD_G9_EVENTS)
-            add_executable(bmd_gateway_g9_grpc_service_tests
-                tests/g9_grpc_service_tests.cpp
-            )
-            set_target_properties(
-                bmd_gateway_g9_grpc_service_tests
-                PROPERTIES
-                    CXX_STANDARD 20
-                    CXX_STANDARD_REQUIRED YES
-                    CXX_EXTENSIONS NO
-            )
-            target_link_libraries(
-                bmd_gateway_g9_grpc_service_tests
-                PRIVATE
-                    bmd_gateway_g7_grpc
-            )
-            bmd_gateway_apply_warnings(
-                bmd_gateway_g9_grpc_service_tests)
-            bmd_gateway_apply_sanitizers(
-                bmd_gateway_g9_grpc_service_tests)
-            add_test(NAME gateway_g9_grpc_service_tests
-                     COMMAND bmd_gateway_g9_grpc_service_tests)
-        endif()
-        if(BMD_GATEWAY_BUILD_G10_STATUS)
-            add_executable(bmd_gateway_g10_grpc_service_tests
-                tests/g10_grpc_service_tests.cpp
-            )
-            set_target_properties(
-                bmd_gateway_g10_grpc_service_tests
-                PROPERTIES
-                    CXX_STANDARD 20
-                    CXX_STANDARD_REQUIRED YES
-                    CXX_EXTENSIONS NO
-            )
-            target_link_libraries(
-                bmd_gateway_g10_grpc_service_tests
-                PRIVATE
-                    bmd_gateway_g7_grpc
-            )
-            bmd_gateway_apply_warnings(bmd_gateway_g10_grpc_service_tests)
-            bmd_gateway_apply_sanitizers(bmd_gateway_g10_grpc_service_tests)
-            add_test(NAME gateway_g10_grpc_service_tests
-                     COMMAND bmd_gateway_g10_grpc_service_tests)
-        endif()
-        if(BMD_GATEWAY_BUILD_G11_MULTI_MARKET)
-            add_executable(bmd_gateway_g11_grpc_routing_tests
-                tests/g11_grpc_routing_tests.cpp
-            )
-            set_target_properties(
-                bmd_gateway_g11_grpc_routing_tests
-                PROPERTIES
-                    CXX_STANDARD 20
-                    CXX_STANDARD_REQUIRED YES
-                    CXX_EXTENSIONS NO
-            )
-            target_link_libraries(
-                bmd_gateway_g11_grpc_routing_tests
-                PRIVATE
-                    bmd_gateway_g7_grpc
-                    bmd_gateway_g11_multi_market_runtime
-            )
-            bmd_gateway_apply_warnings(bmd_gateway_g11_grpc_routing_tests)
-            bmd_gateway_apply_sanitizers(bmd_gateway_g11_grpc_routing_tests)
-            add_test(NAME gateway_g11_grpc_routing_tests
-                     COMMAND bmd_gateway_g11_grpc_routing_tests)
-        endif()
-    endif()
-endif()
-
-if(BMD_GATEWAY_BUILD_G9_EVENTS)
-    add_executable(bmd-gateway-g9-spot-events-live
-        app/g9_spot_events_live/main.cpp
-    )
-    set_target_properties(
-        bmd-gateway-g9-spot-events-live
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_link_libraries(
-        bmd-gateway-g9-spot-events-live
-        PRIVATE
-            bmd_gateway_g7_grpc
-    )
-    bmd_gateway_apply_warnings(bmd-gateway-g9-spot-events-live)
-    bmd_gateway_apply_sanitizers(bmd-gateway-g9-spot-events-live)
-endif()
-
-if(BMD_GATEWAY_BUILD_G8_INTEGRATION_ACCEPTANCE)
-    add_executable(bmd-gateway-g8-integration-live
-        app/g8_integration_live/main.cpp
-    )
-    set_target_properties(
-        bmd-gateway-g8-integration-live
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_link_libraries(
-        bmd-gateway-g8-integration-live
-        PRIVATE
-            bmd_gateway_g7_grpc
-    )
-    bmd_gateway_apply_warnings(bmd-gateway-g8-integration-live)
-    bmd_gateway_apply_sanitizers(bmd-gateway-g8-integration-live)
-
-    if(BMD_GATEWAY_BUILD_TESTS)
-        add_executable(bmd_gateway_g8_projection_m6_integration_tests
-            tests/g8_projection_m6_integration_tests.cpp
-        )
-        set_target_properties(
-            bmd_gateway_g8_projection_m6_integration_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
-        target_link_libraries(
-            bmd_gateway_g8_projection_m6_integration_tests
-            PRIVATE
-                bmd_gateway_g7_grpc
-        )
-        bmd_gateway_apply_warnings(
-            bmd_gateway_g8_projection_m6_integration_tests)
-        bmd_gateway_apply_sanitizers(
-            bmd_gateway_g8_projection_m6_integration_tests)
-        add_test(NAME gateway_g8_projection_m6_integration_tests
-                 COMMAND bmd_gateway_g8_projection_m6_integration_tests)
-    endif()
-endif()
-
-if(BMD_GATEWAY_BUILD_PRODUCTION_DAEMON)
-    find_package(Threads REQUIRED)
-
-    add_library(bmd_gateway_production
+    add_library(bmdg_production
         src/production/daemon_config.cpp
         src/production/daemon_runtime.cpp
         src/production/production_gateway.cpp
         src/production/production_metadata.cpp
         src/production/termination_signals.cpp
     )
-    set_target_properties(
-        bmd_gateway_production
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_include_directories(
-        bmd_gateway_production
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/production
-    )
+    bmdg_configure_library(bmdg_production)
     target_link_libraries(
-        bmd_gateway_production
+        bmdg_production
         PUBLIC
             BinanceMarketDataGateway::Foundation
-            bmd_gateway_g7_grpc
-            bmd_gateway_g11_multi_market_runtime
+            bmdg_grpc
+            bmdg_composition
+            bmdg_transport
+            bmdg_protocol
             nlohmann_json::nlohmann_json
             Threads::Threads
     )
-    bmd_gateway_apply_warnings(bmd_gateway_production)
-    bmd_gateway_apply_sanitizers(bmd_gateway_production)
 
-    add_executable(bmd-gatewayd app/gatewayd/main.cpp)
-    set_target_properties(
-        bmd-gatewayd
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_link_libraries(bmd-gatewayd PRIVATE bmd_gateway_production)
-    bmd_gateway_apply_warnings(bmd-gatewayd)
-    bmd_gateway_apply_sanitizers(bmd-gatewayd)
+    if(BMDG_BUILD_PRODUCTION_DAEMON)
+        add_executable(bmdg app/bmdg/main.cpp)
+        target_link_libraries(bmdg PRIVATE bmdg_production)
+        bmdg_configure_target(bmdg)
 
-    add_executable(bmd-gateway-production-acceptance-client
-        app/production_daemon_acceptance/main.cpp
-    )
-    set_target_properties(
-        bmd-gateway-production-acceptance-client
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
-    )
-    target_link_libraries(
-        bmd-gateway-production-acceptance-client
-        PRIVATE
-            bmd_gateway_production
-    )
-    bmd_gateway_apply_warnings(
-        bmd-gateway-production-acceptance-client)
-    bmd_gateway_apply_sanitizers(
-        bmd-gateway-production-acceptance-client)
-
-    install(TARGETS bmd-gatewayd RUNTIME DESTINATION bin)
-
-    if(BMD_GATEWAY_BUILD_TESTS)
-        add_executable(bmd_gateway_production_acceptance_config_tests
-            tests/production_acceptance_config_tests.cpp
+        # Transitional compatibility: old scripts and service units may still
+        # look for bmd-gatewayd. The real binary is bmdg.
+        add_custom_command(
+            TARGET bmdg POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E create_symlink
+                    $<TARGET_FILE_NAME:bmdg>
+                    $<TARGET_FILE_DIR:bmdg>/bmd-gatewayd
         )
-        set_target_properties(bmd_gateway_production_acceptance_config_tests
-            PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
-        target_include_directories(bmd_gateway_production_acceptance_config_tests
-            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/app/production_daemon_acceptance)
-        target_link_libraries(bmd_gateway_production_acceptance_config_tests
-            PRIVATE bmd_gateway_production)
-        bmd_gateway_apply_warnings(bmd_gateway_production_acceptance_config_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_production_acceptance_config_tests)
-        add_test(NAME gateway_production_acceptance_config_tests
-                 COMMAND bmd_gateway_production_acceptance_config_tests)
-        set_tests_properties(gateway_production_acceptance_config_tests
-                             PROPERTIES TIMEOUT 10)
+        add_custom_target(bmd-gatewayd DEPENDS bmdg)
 
-        add_executable(bmd_gateway_projection_p1_measurements
-            tests/projection_p1_measurements.cpp)
-        set_target_properties(bmd_gateway_projection_p1_measurements
-            PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
-        target_include_directories(bmd_gateway_projection_p1_measurements
-            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-        target_compile_definitions(bmd_gateway_projection_p1_measurements PRIVATE
-            BMD_GATEWAY_FOUR_PRODUCT_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/examples/gateway.json"
-            BMD_GATEWAY_TWENTY_PRODUCT_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/examples/gateway-twenty.json")
-        target_link_libraries(bmd_gateway_projection_p1_measurements PRIVATE bmd_gateway_production)
-        bmd_gateway_apply_warnings(bmd_gateway_projection_p1_measurements)
-        bmd_gateway_apply_sanitizers(bmd_gateway_projection_p1_measurements)
-        add_test(NAME gateway_projection_p1_smoke COMMAND bmd_gateway_projection_p1_measurements
-            8 1 8 1000 "${CMAKE_CURRENT_BINARY_DIR}/p1-smoke.json")
-        set_tests_properties(gateway_projection_p1_smoke PROPERTIES TIMEOUT 30)
-        add_test(NAME gateway_projection_p1_twenty_smoke COMMAND bmd_gateway_projection_p1_measurements
-            --profile "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/projection-p1-twenty.json"
-            smoke "${CMAKE_CURRENT_BINARY_DIR}/p1-twenty-smoke.json")
-        set_tests_properties(gateway_projection_p1_twenty_smoke PROPERTIES TIMEOUT 60)
+        install(TARGETS bmdg RUNTIME DESTINATION bin)
+        install(CODE [[
+            execute_process(
+                COMMAND "${CMAKE_COMMAND}" -E create_symlink
+                        "bmdg"
+                        "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/bmd-gatewayd"
+                RESULT_VARIABLE _bmdg_symlink_result)
+            if(NOT _bmdg_symlink_result EQUAL 0)
+                message(WARNING "failed to create bmd-gatewayd compatibility symlink")
+            endif()
+        ]])
+    endif()
 
-        add_executable(bmd_gateway_twenty_product_integration_tests
-            tests/four_product_integration_tests.cpp)
-        set_target_properties(bmd_gateway_twenty_product_integration_tests
-            PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
-        target_include_directories(bmd_gateway_twenty_product_integration_tests
-            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-        target_compile_definitions(bmd_gateway_twenty_product_integration_tests PRIVATE
-            BMD_GATEWAY_TWENTY_INTEGRATION=1
-            BMD_GATEWAY_TWENTY_PROFILE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/projection-p1-twenty.json"
-            BMD_GATEWAY_TWENTY_PRODUCT_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/examples/gateway-twenty.json")
-        target_link_libraries(bmd_gateway_twenty_product_integration_tests PRIVATE bmd_gateway_production)
-        bmd_gateway_apply_warnings(bmd_gateway_twenty_product_integration_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_twenty_product_integration_tests)
-        add_test(NAME gateway_twenty_product_integration_tests COMMAND bmd_gateway_twenty_product_integration_tests)
-        set_tests_properties(gateway_twenty_product_integration_tests PROPERTIES TIMEOUT 90)
+    # -----------------------------------------------------------------------
+    # Test support and domain tests
+    # -----------------------------------------------------------------------
 
+    # Old target names remain available as aliases for one transition period.
+    foreach(_bmdg_pair IN ITEMS
+            "bmd_gateway_protocol;bmdg_protocol"
+            "bmd_gateway_publication;bmdg_publication"
+            "bmd_gateway_runtime;bmdg_runtime"
+            "bmd_gateway_transport;bmdg_transport"
+            "bmd_gateway_recovery;bmdg_recovery"
+            "bmd_gateway_composition;bmdg_composition"
+            "bmd_gateway_status;bmdg_status"
+            "bmd_gateway_grpc;bmdg_grpc"
+            "bmd_gateway_production;bmdg_production")
+        list(GET _bmdg_pair 0 _bmdg_old)
+        list(GET _bmdg_pair 1 _bmdg_new)
+        add_library(${_bmdg_old} ALIAS ${_bmdg_new})
+    endforeach()
 
-        add_executable(bmd_gateway_four_product_integration_tests
-            tests/four_product_integration_tests.cpp)
-        set_target_properties(bmd_gateway_four_product_integration_tests
-            PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
-        target_include_directories(bmd_gateway_four_product_integration_tests
-            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-        target_compile_definitions(bmd_gateway_four_product_integration_tests PRIVATE
-            BMD_GATEWAY_FOUR_PRODUCT_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/examples/gateway.json")
-        target_link_libraries(bmd_gateway_four_product_integration_tests
-            PRIVATE bmd_gateway_production)
-        bmd_gateway_apply_warnings(bmd_gateway_four_product_integration_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_four_product_integration_tests)
-        add_test(NAME gateway_four_product_integration_tests
-                 COMMAND bmd_gateway_four_product_integration_tests)
-        set_tests_properties(gateway_four_product_integration_tests
-                             PROPERTIES TIMEOUT 60)
-
-        add_executable(bmd_gateway_production_tests
-            tests/production_gateway_tests.cpp
+    if(BMDG_BUILD_DOMAIN_TESTS OR BMDG_BUILD_ACCEPTANCE_TOOLS)
+        add_library(bmdg_synthetic_host
+            tests/support/synthetic_spot_host.cpp
         )
-        target_compile_definitions(bmd_gateway_production_tests PRIVATE
-            BMD_GATEWAY_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
-        set_target_properties(
-            bmd_gateway_production_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
-        )
+        bmdg_configure_library(bmdg_synthetic_host)
         target_include_directories(
-            bmd_gateway_production_tests
-            PRIVATE
+            bmdg_synthetic_host
+            PUBLIC
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests
         )
         target_link_libraries(
-            bmd_gateway_production_tests
-            PRIVATE
-                bmd_gateway_production
+            bmdg_synthetic_host
+            PUBLIC
+                BinanceMarketDataContracts::Protobuf
+                BinanceMarketDataProjection::Core
+                BinanceMarketDataProjection::ProtoAdapter
         )
-        bmd_gateway_apply_warnings(bmd_gateway_production_tests)
-        bmd_gateway_apply_sanitizers(bmd_gateway_production_tests)
-        add_test(NAME gateway_production_tests
-                 COMMAND bmd_gateway_production_tests)
-        set_tests_properties(gateway_production_tests PROPERTIES TIMEOUT 30)
+        add_library(bmd_gateway_synthetic_host ALIAS bmdg_synthetic_host)
+    endif()
 
-        add_executable(bmd_gateway_production_config_metadata_tests
-            tests/production_config_metadata_tests.cpp
+    if(BMDG_BUILD_DOMAIN_TESTS)
+        bmdg_add_test(
+            bmdg_synthetic_host_tests
+            tests/support/synthetic_spot_host_tests.cpp
+            bmdg_synthetic_host
         )
-        set_target_properties(
-            bmd_gateway_production_config_metadata_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
+
+        bmdg_add_test(
+            bmdg_protocol_tests
+            tests/protocol/spot_protocol_tests.cpp
+            bmdg_protocol
+        )
+
+        bmdg_add_test(
+            bmdg_usdm_protocol_tests
+            tests/protocol/usdm_protocol_tests.cpp
+            bmdg_runtime
+        )
+        target_compile_definitions(
+            bmdg_usdm_protocol_tests
+            PRIVATE
+                BMDG_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+        )
+
+        bmdg_add_test(
+            bmdg_public_api_budget_tests
+            tests/transport/public_api_budget_tests.cpp
+            Threads::Threads
+        )
+        target_include_directories(
+            bmdg_public_api_budget_tests
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+
+        bmdg_add_test(
+            bmdg_spot_transport_tests
+            tests/transport/spot_transport_tests.cpp
+            bmdg_transport
+        )
+        bmdg_add_test(
+            bmdg_usdm_transport_tests
+            tests/transport/usdm_transport_tests.cpp
+            bmdg_transport
+        )
+
+        bmdg_add_test(
+            bmdg_market_runtime_tests
+            tests/runtime/market_runtime_tests.cpp
+            bmdg_runtime
+        )
+
+        bmdg_add_test(
+            bmdg_composition_tests
+            tests/composition/multi_market_runtime_tests.cpp
+            bmdg_composition
+        )
+
+        bmdg_add_test(
+            bmdg_recovery_tests
+            tests/recovery/spot_recovery_tests.cpp
+            bmdg_recovery
+        )
+        bmdg_add_test(
+            bmdg_rotation_tests
+            tests/recovery/spot_rotation_tests.cpp
+            bmdg_recovery
+        )
+
+        bmdg_add_test(
+            bmdg_publication_tests
+            tests/publication/order_book_publication_tests.cpp
+            bmdg_runtime
+        )
+        bmdg_add_test(
+            bmdg_event_publication_tests
+            tests/publication/event_publication_tests.cpp
+            bmdg_publication
+        )
+
+        bmdg_add_test(
+            bmdg_grpc_service_tests
+            tests/grpc/grpc_service_tests.cpp
+            bmdg_grpc
+        )
+        bmdg_add_test(
+            bmdg_event_service_tests
+            tests/grpc/event_service_tests.cpp
+            bmdg_grpc
+        )
+        bmdg_add_test(
+            bmdg_status_service_tests
+            tests/grpc/status_service_tests.cpp
+            bmdg_grpc
+        )
+        bmdg_add_test(
+            bmdg_routing_tests
+            tests/grpc/routing_tests.cpp
+            bmdg_grpc
+        )
+
+        bmdg_add_test(
+            bmdg_status_tests
+            tests/status/gateway_status_tests.cpp
+            bmdg_status
+        )
+
+        bmdg_add_test(
+            bmdg_projection_integration_tests
+            tests/integration/projection_integration_tests.cpp
+            bmdg_production
+        )
+
+        bmdg_add_test(
+            bmdg_four_product_integration_tests
+            tests/integration/four_product_integration_tests.cpp
+            bmdg_production
+        )
+        target_compile_definitions(
+            bmdg_four_product_integration_tests
+            PRIVATE
+                BMDG_FOUR_PRODUCT_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/examples/gateway.json"
+        )
+
+        bmdg_add_test(
+            bmdg_twenty_product_integration_tests
+            tests/integration/four_product_integration_tests.cpp
+            bmdg_production
+        )
+        target_compile_definitions(
+            bmdg_twenty_product_integration_tests
+            PRIVATE
+                BMDG_TWENTY_INTEGRATION=1
+                BMDG_TWENTY_PROFILE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/projection-p1-twenty.json"
+                BMDG_TWENTY_PRODUCT_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/examples/gateway-twenty.json"
+        )
+
+        bmdg_add_test(
+            bmdg_production_tests
+            tests/production/production_gateway_tests.cpp
+            bmdg_production
+        )
+        target_compile_definitions(
+            bmdg_production_tests
+            PRIVATE
+                BMDG_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+        )
+
+        bmdg_add_test(
+            bmdg_production_config_metadata_tests
+            tests/production/production_config_metadata_tests.cpp
+            bmdg_production
+        )
+
+        bmdg_add_test(
+            bmdg_production_acceptance_config_tests
+            tests/production/production_acceptance_config_tests.cpp
+            bmdg_production
+        )
+
+        add_executable(
+            bmdg_projection_p1_measurements
+            tests/performance/projection_p1_measurements.cpp
+        )
+        target_include_directories(
+            bmdg_projection_p1_measurements
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests
+                ${CMAKE_CURRENT_SOURCE_DIR}/app
         )
         target_link_libraries(
-            bmd_gateway_production_config_metadata_tests
+            bmdg_projection_p1_measurements
             PRIVATE
-                bmd_gateway_production
+                bmdg_production
         )
-        bmd_gateway_apply_warnings(
-            bmd_gateway_production_config_metadata_tests)
-        bmd_gateway_apply_sanitizers(
-            bmd_gateway_production_config_metadata_tests)
-        add_test(NAME gateway_production_config_metadata_tests
-                 COMMAND bmd_gateway_production_config_metadata_tests)
-        set_tests_properties(gateway_production_config_metadata_tests
-                             PROPERTIES TIMEOUT 30)
+        bmdg_configure_target(bmdg_projection_p1_measurements)
+        target_compile_definitions(
+            bmdg_projection_p1_measurements
+            PRIVATE
+                BMDG_FOUR_PRODUCT_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/examples/gateway.json"
+                BMDG_TWENTY_PRODUCT_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/examples/gateway-twenty.json"
+        )
+        add_test(
+            NAME bmdg_projection_p1_smoke
+            COMMAND bmdg_projection_p1_measurements
+                    8 1 8 1000 "${CMAKE_CURRENT_BINARY_DIR}/p1-smoke.json"
+        )
+        set_tests_properties(bmdg_projection_p1_smoke PROPERTIES TIMEOUT 30)
+        add_test(
+            NAME bmdg_projection_p1_twenty_smoke
+            COMMAND bmdg_projection_p1_measurements
+                    --profile "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/projection-p1-twenty.json"
+                    smoke "${CMAKE_CURRENT_BINARY_DIR}/p1-twenty-smoke.json"
+        )
+        set_tests_properties(bmdg_projection_p1_twenty_smoke PROPERTIES TIMEOUT 60)
 
-        if(BMD_GATEWAY_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION)
-            add_executable(bmd_gateway_performance_baseline_tests
-                tests/performance_baseline_tests.cpp
+        if(BMDG_ENABLE_PERFORMANCE_BASELINE_INSTRUMENTATION)
+            bmdg_add_test(
+                bmdg_performance_baseline_tests
+                tests/performance/performance_baseline_tests.cpp
+                bmdg_production
             )
-            set_target_properties(
-                bmd_gateway_performance_baseline_tests
-                PROPERTIES
-                    CXX_STANDARD 20
-                    CXX_STANDARD_REQUIRED YES
-                    CXX_EXTENSIONS NO
-            )
-            target_link_libraries(
-                bmd_gateway_performance_baseline_tests
-                PRIVATE
-                    bmd_gateway_production
-            )
-            bmd_gateway_apply_warnings(
-                bmd_gateway_performance_baseline_tests)
-            bmd_gateway_apply_sanitizers(
-                bmd_gateway_performance_baseline_tests)
-            add_test(NAME gateway_performance_baseline_tests
-                     COMMAND bmd_gateway_performance_baseline_tests)
-            set_tests_properties(gateway_performance_baseline_tests
-                                 PROPERTIES TIMEOUT 30)
         endif()
 
-        add_executable(bmd_gateway_production_daemon_fixture
-            tests/production_daemon_fixture.cpp
-        )
-        set_target_properties(
-            bmd_gateway_production_daemon_fixture
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
+        add_executable(
+            bmdg_production_daemon_fixture
+            tests/production/production_daemon_fixture.cpp
         )
         target_include_directories(
-            bmd_gateway_production_daemon_fixture
+            bmdg_production_daemon_fixture
             PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests
         )
         target_link_libraries(
-            bmd_gateway_production_daemon_fixture
+            bmdg_production_daemon_fixture
             PRIVATE
-                bmd_gateway_production
+                bmdg_production
         )
-        bmd_gateway_apply_warnings(bmd_gateway_production_daemon_fixture)
-        bmd_gateway_apply_sanitizers(bmd_gateway_production_daemon_fixture)
+        bmdg_configure_target(bmdg_production_daemon_fixture)
 
-        add_executable(bmd_gateway_production_daemon_process_tests
-            tests/production_daemon_process_tests.cpp
+        if(BMDG_BUILD_PRODUCTION_DAEMON)
+            add_executable(
+                bmdg_production_daemon_process_tests
+                tests/production/production_daemon_process_tests.cpp
+            )
+            target_include_directories(
+                bmdg_production_daemon_process_tests
+                PRIVATE
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests
+                    ${CMAKE_CURRENT_SOURCE_DIR}/app
+            )
+            target_link_libraries(
+                bmdg_production_daemon_process_tests
+                PRIVATE
+                    bmdg_production
+            )
+            bmdg_configure_target(
+                bmdg_production_daemon_process_tests)
+            add_test(
+                NAME bmdg_production_daemon_process
+                COMMAND bmdg_production_daemon_process_tests
+                        $<TARGET_FILE:bmdg>
+                        $<TARGET_FILE:bmdg_production_daemon_fixture>
+            )
+            set_tests_properties(
+                bmdg_production_daemon_process
+                PROPERTIES TIMEOUT 45)
+        endif()
+    endif()
+
+    # -----------------------------------------------------------------------
+    # Historical live/acceptance tools. They are intentionally outside the
+    # production daemon target and are only built on request.
+    # -----------------------------------------------------------------------
+
+    if(BMDG_BUILD_ACCEPTANCE_TOOLS)
+        bmdg_add_acceptance(
+            bmdg-synthetic-spot-host
+            app/acceptance/synthetic_spot_host/main.cpp
+            bmdg_synthetic_host
         )
-        set_target_properties(
-            bmd_gateway_production_daemon_process_tests
-            PROPERTIES
-                CXX_STANDARD 20
-                CXX_STANDARD_REQUIRED YES
-                CXX_EXTENSIONS NO
+        bmdg_add_acceptance(
+            bmdg-spot-live
+            app/acceptance/spot_live/main.cpp
+            bmdg_transport
         )
-        target_link_libraries(bmd_gateway_production_daemon_process_tests
-            PRIVATE bmd_gateway_production)
-        bmd_gateway_apply_warnings(
-            bmd_gateway_production_daemon_process_tests)
-        bmd_gateway_apply_sanitizers(
-            bmd_gateway_production_daemon_process_tests)
-        add_test(
-            NAME gateway_production_daemon_process_tests
-            COMMAND bmd_gateway_production_daemon_process_tests
-                    $<TARGET_FILE:bmd-gatewayd>
-                    $<TARGET_FILE:bmd_gateway_production_daemon_fixture>
+        bmdg_add_acceptance(
+            bmdg-spot-recovery-live
+            app/acceptance/spot_recovery_live/main.cpp
+            bmdg_recovery
         )
-        set_tests_properties(
-            gateway_production_daemon_process_tests
-            PROPERTIES TIMEOUT 45
+        bmdg_add_acceptance(
+            bmdg-spot-rotation-live
+            app/acceptance/spot_rotation_live/main.cpp
+            bmdg_recovery
+        )
+        bmdg_add_acceptance(
+            bmdg-spot-grpc-live
+            app/acceptance/spot_grpc_live/main.cpp
+            bmdg_grpc
+        )
+        bmdg_add_acceptance(
+            bmdg-integration-live
+            app/acceptance/integration_live/main.cpp
+            bmdg_grpc
+        )
+        bmdg_add_acceptance(
+            bmdg-spot-events-live
+            app/acceptance/spot_events_live/main.cpp
+            bmdg_grpc
+        )
+        bmdg_add_acceptance(
+            bmdg-multi-market-live
+            app/acceptance/multi_market_live/main.cpp
+            bmdg_grpc
+        )
+        bmdg_add_acceptance(
+            bmdg-production-acceptance-client
+            app/acceptance/production_daemon/main.cpp
+            bmdg_production
         )
     endif()
 endif()
 
-if(BMD_GATEWAY_BUILD_UPSTREAM_LINK_SMOKE)
+# ---------------------------------------------------------------------------
+# Opt-in upstream link smoke (frozen dependency boundary proof).
+# ---------------------------------------------------------------------------
+
+if(BMDG_BUILD_UPSTREAM_LINK_SMOKE)
+    if(NOT BMDG_BUILD_TESTS)
+        enable_testing()
+    endif()
     find_package(BinanceMarketDataContracts 0.1.0 EXACT CONFIG REQUIRED COMPONENTS Protobuf)
     find_package(BinanceMarketDataContractsGrpc 0.1.0 EXACT CONFIG REQUIRED)
     find_package(BinanceMarketDataProjection 0.1.0 EXACT CONFIG REQUIRED COMPONENTS Core ProtoAdapter)
 
-    foreach(bmd_gateway_package IN ITEMS
+    foreach(bmdg_package IN ITEMS
             BinanceMarketDataContracts
             BinanceMarketDataContractsGrpc
             BinanceMarketDataProjection)
-        if(NOT DEFINED ${bmd_gateway_package}_DIR)
-            message(FATAL_ERROR "G1 package directory was not resolved: ${bmd_gateway_package}_DIR")
+        if(NOT DEFINED ${bmdg_package}_DIR)
+            message(FATAL_ERROR "Upstream package directory was not resolved: ${bmdg_package}_DIR")
         endif()
-        set(bmd_gateway_config
-            "${${bmd_gateway_package}_DIR}/${bmd_gateway_package}Config.cmake")
-        if(NOT EXISTS "${bmd_gateway_config}")
-            message(FATAL_ERROR "G1 canonical package config is missing: ${bmd_gateway_config}")
+        set(bmdg_config
+            "${${bmdg_package}_DIR}/${bmdg_package}Config.cmake")
+        if(NOT EXISTS "${bmdg_config}")
+            message(FATAL_ERROR "Upstream canonical package config is missing: ${bmdg_config}")
         endif()
-        message(STATUS "G1 canonical config: ${bmd_gateway_package}=${bmd_gateway_config}")
+        message(STATUS "Upstream canonical config: ${bmdg_package}=${bmdg_config}")
     endforeach()
 
-    add_executable(bmd_gateway_upstream_link_smoke tests/upstream_link_smoke.cpp)
-    set_target_properties(
-        bmd_gateway_upstream_link_smoke
-        PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED YES
-            CXX_EXTENSIONS NO
+    bmdg_add_test(
+        bmdg_upstream_link_smoke
+        tests/smoke/upstream_link_smoke.cpp
+        BinanceMarketDataGateway::Foundation
+        BinanceMarketDataContracts::Protobuf
+        BinanceMarketDataContracts::Grpc
+        BinanceMarketDataProjection::Core
+        BinanceMarketDataProjection::ProtoAdapter
     )
-    target_link_libraries(
-        bmd_gateway_upstream_link_smoke
-        PRIVATE
-            BinanceMarketDataGateway::Foundation
-            BinanceMarketDataContracts::Protobuf
-            BinanceMarketDataContracts::Grpc
-            BinanceMarketDataProjection::Core
-            BinanceMarketDataProjection::ProtoAdapter
-    )
-    bmd_gateway_apply_warnings(bmd_gateway_upstream_link_smoke)
-    bmd_gateway_apply_sanitizers(bmd_gateway_upstream_link_smoke)
-    if(NOT BMD_GATEWAY_BUILD_TESTS)
-        enable_testing()
-    endif()
-    add_test(NAME gateway_upstream_link_smoke COMMAND bmd_gateway_upstream_link_smoke)
 endif()
+
+# ---------------------------------------------------------------------------
+# Transitional target aliases (old bmd_gateway_* / bmd-gateway-* names).
+# These are aliases, not build outputs; the real targets are bmdg_*.
+# ---------------------------------------------------------------------------
+
+function(bmdg_alias_executable old_name new_name)
+    if(TARGET ${new_name})
+        add_executable(${old_name} ALIAS ${new_name})
+    endif()
+endfunction()
+
+foreach(_bmdg_pair IN ITEMS
+        "bmd_gateway_foundation_tests;bmdg_foundation_tests"
+        "bmd_gateway_synthetic_host_tests;bmdg_synthetic_host_tests"
+        "bmd_gateway_protocol_tests;bmdg_protocol_tests"
+        "bmd_gateway_usdm_protocol_tests;bmdg_usdm_protocol_tests"
+        "bmd_gateway_public_api_budget_tests;bmdg_public_api_budget_tests"
+        "bmd_gateway_spot_transport_tests;bmdg_spot_transport_tests"
+        "bmd_gateway_usdm_transport_tests;bmdg_usdm_transport_tests"
+        "bmd_gateway_market_runtime_tests;bmdg_market_runtime_tests"
+        "bmd_gateway_composition_tests;bmdg_composition_tests"
+        "bmd_gateway_recovery_tests;bmdg_recovery_tests"
+        "bmd_gateway_rotation_tests;bmdg_rotation_tests"
+        "bmd_gateway_publication_tests;bmdg_publication_tests"
+        "bmd_gateway_event_publication_tests;bmdg_event_publication_tests"
+        "bmd_gateway_grpc_service_tests;bmdg_grpc_service_tests"
+        "bmd_gateway_event_service_tests;bmdg_event_service_tests"
+        "bmd_gateway_status_service_tests;bmdg_status_service_tests"
+        "bmd_gateway_routing_tests;bmdg_routing_tests"
+        "bmd_gateway_status_tests;bmdg_status_tests"
+        "bmd_gateway_projection_integration_tests;bmdg_projection_integration_tests"
+        "bmd_gateway_four_product_integration_tests;bmdg_four_product_integration_tests"
+        "bmd_gateway_twenty_product_integration_tests;bmdg_twenty_product_integration_tests"
+        "bmd_gateway_production_tests;bmdg_production_tests"
+        "bmd_gateway_production_config_metadata_tests;bmdg_production_config_metadata_tests"
+        "bmd_gateway_production_acceptance_config_tests;bmdg_production_acceptance_config_tests"
+        "bmd_gateway_projection_p1_measurements;bmdg_projection_p1_measurements"
+        "bmd_gateway_performance_baseline_tests;bmdg_performance_baseline_tests"
+        "bmd_gateway_production_daemon_fixture;bmdg_production_daemon_fixture"
+        "bmd_gateway_production_daemon_process_tests;bmdg_production_daemon_process_tests"
+        "bmd_gateway_upstream_link_smoke;bmdg_upstream_link_smoke"
+        "bmd-gateway-synthetic-spot-host;bmdg-synthetic-spot-host"
+        "bmd-gateway-spot-live;bmdg-spot-live"
+        "bmd-gateway-spot-recovery-live;bmdg-spot-recovery-live"
+        "bmd-gateway-spot-rotation-live;bmdg-spot-rotation-live"
+        "bmd-gateway-spot-grpc-live;bmdg-spot-grpc-live"
+        "bmd-gateway-integration-live;bmdg-integration-live"
+        "bmd-gateway-spot-events-live;bmdg-spot-events-live"
+        "bmd-gateway-multi-market-live;bmdg-multi-market-live"
+        "bmd-gateway-production-acceptance-client;bmdg-production-acceptance-client")
+    list(GET _bmdg_pair 0 _bmdg_old)
+    list(GET _bmdg_pair 1 _bmdg_new)
+    bmdg_alias_executable(${_bmdg_old} ${_bmdg_new})
+endforeach()

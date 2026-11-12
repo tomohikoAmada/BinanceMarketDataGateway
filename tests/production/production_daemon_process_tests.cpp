@@ -1,0 +1,448 @@
+#include "grpc/grpc_service.hpp"
+#include "publication/event_publication.hpp"
+#include "status/gateway_status.hpp"
+
+#include <binance_market_data/gateway/v1/gateway_service.grpc.pb.h>
+
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <memory>
+#include <netinet/in.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <chrono>
+#include <cstdint>
+#include <cstdlib>
+#include <exception>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
+namespace publication = binance_market_data::gateway::publication;
+namespace rpc = binance_market_data::gateway::rpc;
+namespace status = binance_market_data::gateway::status;
+
+namespace {
+namespace common = binance_market_data::common::v1;
+namespace wire = binance_market_data::gateway::v1;
+
+class TestFailure final : public std::exception {
+public:
+  explicit TestFailure(std::string message) : message_{std::move(message)} {}
+  [[nodiscard]] const char *what() const noexcept override {
+    return message_.c_str();
+  }
+
+private:
+  std::string message_;
+};
+
+void require(bool condition, std::string_view expression) {
+  if (!condition) {
+    throw TestFailure{std::string{expression}};
+  }
+}
+
+#define REQUIRE(condition) require((condition), #condition)
+
+struct Child final {
+  pid_t pid{-1};
+  int output{-1};
+};
+
+class ConfigFile final {
+public:
+  explicit ConfigFile(std::string contents) {
+    std::string pattern{"/tmp/bmdg-config-XXXXXX"};
+    const auto descriptor = mkstemp(pattern.data());
+    if (descriptor < 0) {
+      throw std::runtime_error{"mkstemp failed"};
+    }
+    path_ = pattern;
+    std::size_t offset = 0U;
+    while (offset < contents.size()) {
+      const auto written =
+          write(descriptor, contents.data() + offset, contents.size() - offset);
+      if (written < 0 && errno == EINTR) {
+        continue;
+      }
+      if (written <= 0) {
+        close(descriptor);
+        unlink(path_.c_str());
+        throw std::runtime_error{"config write failed"};
+      }
+      offset += static_cast<std::size_t>(written);
+    }
+    close(descriptor);
+  }
+
+  ~ConfigFile() { unlink(path_.c_str()); }
+  [[nodiscard]] const std::string &path() const noexcept { return path_; }
+
+private:
+  std::string path_;
+};
+
+[[nodiscard]] Child spawn(const std::string &path,
+                          const std::vector<std::string> &arguments,
+                          std::string_view scenario = {}) {
+  int pipe_descriptors[2]{};
+  if (pipe(pipe_descriptors) != 0) {
+    throw std::runtime_error{"pipe failed"};
+  }
+  const auto pid = fork();
+  if (pid < 0) {
+    close(pipe_descriptors[0]);
+    close(pipe_descriptors[1]);
+    throw std::runtime_error{"fork failed"};
+  }
+  if (pid == 0) {
+    close(pipe_descriptors[0]);
+    static_cast<void>(dup2(pipe_descriptors[1], STDOUT_FILENO));
+    static_cast<void>(dup2(pipe_descriptors[1], STDERR_FILENO));
+    close(pipe_descriptors[1]);
+    if (scenario.empty()) {
+      static_cast<void>(unsetenv("BMDG_TEST_SCENARIO"));
+    } else {
+      const std::string scenario_value{scenario};
+      static_cast<void>(
+          setenv("BMDG_TEST_SCENARIO", scenario_value.c_str(), 1));
+    }
+#if !defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
+    // An ordinary daemon must ignore stale instrumentation settings, including
+    // a composition the historical exporter does not support.
+    static_cast<void>(setenv("BMDG_PERFORMANCE_BASELINE_OUTPUT",
+                             "/definitely/missing/stale-performance.json", 1));
+#endif
+    std::vector<char *> argv;
+    argv.reserve(arguments.size() + 2U);
+    argv.push_back(const_cast<char *>(path.c_str()));
+    for (const auto &argument : arguments) {
+      argv.push_back(const_cast<char *>(argument.c_str()));
+    }
+    argv.push_back(nullptr);
+    execv(path.c_str(), argv.data());
+    _exit(127);
+  }
+  close(pipe_descriptors[1]);
+  const auto flags = fcntl(pipe_descriptors[0], F_GETFL, 0);
+  static_cast<void>(fcntl(pipe_descriptors[0], F_SETFL, flags | O_NONBLOCK));
+  return {pid, pipe_descriptors[0]};
+}
+
+[[nodiscard]] std::size_t count_occurrences(std::string_view value,
+                                            std::string_view needle) {
+  std::size_t count = 0U;
+  std::size_t position = 0U;
+  while ((position = value.find(needle, position)) != std::string_view::npos) {
+    ++count;
+    position += needle.size();
+  }
+  return count;
+}
+
+void collect_available(Child &child, std::string &output) {
+  char buffer[4096];
+  for (;;) {
+    const auto count = read(child.output, buffer, sizeof(buffer));
+    if (count > 0) {
+      output.append(buffer, static_cast<std::size_t>(count));
+      continue;
+    }
+    if (count == -1 && errno == EINTR) {
+      continue;
+    }
+    return;
+  }
+}
+
+[[nodiscard]] int wait_bounded(Child &child, std::string &output) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds{15};
+  int status = 0;
+  while (std::chrono::steady_clock::now() < deadline) {
+    collect_available(child, output);
+    const auto result = waitpid(child.pid, &status, WNOHANG);
+    if (result == child.pid) {
+      collect_available(child, output);
+      close(child.output);
+      child.output = -1;
+      return status;
+    }
+    if (result < 0) {
+      throw std::runtime_error{"waitpid failed"};
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+  }
+  static_cast<void>(kill(child.pid, SIGKILL));
+  static_cast<void>(waitpid(child.pid, &status, 0));
+  close(child.output);
+  child.output = -1;
+  throw TestFailure{"child exit deadline expired"};
+}
+
+[[nodiscard]] std::uint16_t available_port() {
+  const auto descriptor = socket(AF_INET, SOCK_STREAM, 0);
+  if (descriptor < 0) {
+    throw std::runtime_error{"socket failed"};
+  }
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  address.sin_port = 0;
+  if (bind(descriptor, reinterpret_cast<sockaddr *>(&address),
+           sizeof(address)) != 0) {
+    close(descriptor);
+    throw std::runtime_error{"bind failed"};
+  }
+  socklen_t size = sizeof(address);
+  if (getsockname(descriptor, reinterpret_cast<sockaddr *>(&address), &size) !=
+      0) {
+    close(descriptor);
+    throw std::runtime_error{"getsockname failed"};
+  }
+  const auto port = ntohs(address.sin_port);
+  close(descriptor);
+  return port;
+}
+
+void cli_processes(const std::string &daemon) {
+  {
+    auto child = spawn(daemon, {"--help"});
+    std::string output;
+    const auto status = wait_bounded(child, output);
+    REQUIRE(WIFEXITED(status));
+    REQUIRE(WEXITSTATUS(status) == 0);
+    REQUIRE(output.find("--config PATH") != std::string::npos);
+    REQUIRE(output.find("--grpc-listen") == std::string::npos);
+  }
+  {
+    auto child = spawn(daemon, {"--grpc-listen", "127.0.0.1:50051"});
+    std::string output;
+    const auto status = wait_bounded(child, output);
+    REQUIRE(WIFEXITED(status));
+    REQUIRE(WEXITSTATUS(status) == 2);
+    REQUIRE(output.find("configuration_error=") != std::string::npos);
+    REQUIRE(output.find("gateway_state=starting") == std::string::npos);
+  }
+  for (const auto &arguments : std::vector<std::vector<std::string>>{
+           {},
+           {"--config"},
+           {"--unknown"},
+           {"--config", "a", "--config", "b"}}) {
+    auto child = spawn(daemon, arguments);
+    std::string output;
+    const auto status = wait_bounded(child, output);
+    REQUIRE(WIFEXITED(status));
+    REQUIRE(WEXITSTATUS(status) == 2);
+    REQUIRE(output.find("configuration_error=") != std::string::npos);
+    REQUIRE(output.find("gateway_state=starting") == std::string::npos);
+  }
+}
+
+void signal_process(const std::string &fixture, int signal,
+                    bool prove_still_running, std::string_view scenario = {}) {
+  const auto endpoint = "127.0.0.1:" + std::to_string(available_port());
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
+  // The optional historical trace exporter still accepts only two BTC keys.
+  const bool four = false;
+#else
+  const bool four = scenario.empty();
+#endif
+  const auto symbols = four ? "[\"BTCUSDT\",\"ETHUSDT\"]" : "[\"BTCUSDT\"]";
+  ConfigFile config{"{\"grpc_listen\":\"" + endpoint + "\",\"spot_symbols\":" +
+                    symbols + ",\"usdm_symbols\":" + symbols + "}"};
+  auto child = spawn(fixture, {"--config", config.path()}, scenario);
+  std::string output;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds{15};
+  bool serving = false;
+  while (std::chrono::steady_clock::now() < deadline) {
+    collect_available(child, output);
+    if (output.find("gateway_state=serving") != std::string::npos) {
+      serving = true;
+      break;
+    }
+    int status = 0;
+    REQUIRE(waitpid(child.pid, &status, WNOHANG) == 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+  }
+  REQUIRE(serving);
+  const std::string count = four ? "4" : "2";
+  REQUIRE(output.find("gateway_state=starting stage=runtime products=" + count +
+                      " ") != std::string::npos);
+  REQUIRE(output.find("gateway_state=serving products=" + count +
+                      " grpc_port=") != std::string::npos);
+  REQUIRE(output.find("spot_generation=") == std::string::npos);
+  REQUIRE(output.find("usdm_generation=") == std::string::npos);
+  std::vector<std::unique_ptr<::grpc::ClientContext>> contexts;
+  std::vector<std::unique_ptr<::grpc::ClientReader<wire::OrderBookStreamItem>>>
+      books;
+  std::vector<std::unique_ptr<::grpc::ClientReader<wire::GatewayEventEnvelope>>>
+      events;
+  if (four) {
+    auto stub = wire::BinanceMarketDataGatewayService::NewStub(
+        ::grpc::CreateChannel(endpoint, ::grpc::InsecureChannelCredentials()));
+    for (const auto market :
+         {common::MARKET_SPOT, common::MARKET_USD_M_PERPETUAL}) {
+      for (const auto symbol : {"BTCUSDT", "ETHUSDT"}) {
+        contexts.push_back(std::make_unique<::grpc::ClientContext>());
+        contexts.back()->set_deadline(std::chrono::system_clock::now() +
+                                      std::chrono::seconds{15});
+        wire::OrderBookSubscriptionRequest request;
+        request.set_request_id("signal-book");
+        request.set_schema_version(publication::kOrderBookRequestSchema);
+        request.set_venue(common::VENUE_BINANCE);
+        request.set_market(market);
+        request.set_symbol(symbol);
+        request.set_initial_snapshot_mode(
+            common::INITIAL_SNAPSHOT_MODE_REQUIRED);
+        request.add_supported_snapshot_schema_versions(
+            publication::kSnapshotSchema);
+        request.add_supported_update_schema_versions(
+            publication::kUpdateSchema);
+        books.push_back(
+            stub->SubscribeOrderBook(contexts.back().get(), request));
+        wire::OrderBookStreamItem item;
+        REQUIRE(books.back()->Read(&item) && item.has_subscription_accepted());
+        REQUIRE(books.back()->Read(&item) && item.has_snapshot());
+        REQUIRE(item.snapshot().symbol() == symbol);
+        REQUIRE(item.snapshot().market() == market);
+        contexts.push_back(std::make_unique<::grpc::ClientContext>());
+        contexts.back()->set_deadline(std::chrono::system_clock::now() +
+                                      std::chrono::seconds{15});
+        wire::EventSubscriptionRequest event_request;
+        event_request.set_request_id("signal-event");
+        event_request.set_schema_version(publication::kEventRequestSchema);
+        auto *selector = event_request.add_selectors();
+        selector->set_venue(common::VENUE_BINANCE);
+        selector->set_market(market);
+        selector->set_symbol(symbol);
+        selector->set_stream(common::STREAM_DIFF_DEPTH);
+        event_request.set_delivery_mode(
+            common::DELIVERY_MODE_CONTIGUOUS_EVENTS);
+        event_request.add_supported_payload_schema_versions(
+            publication::kDepthEventSchema);
+        events.push_back(
+            stub->SubscribeEvents(contexts.back().get(), event_request));
+        wire::GatewayEventEnvelope event;
+        REQUIRE(events.back()->Read(&event) &&
+                event.has_subscription_accepted());
+      }
+    }
+    ::grpc::ClientContext status_context;
+    status_context.set_deadline(std::chrono::system_clock::now() +
+                                std::chrono::seconds{2});
+    wire::GatewayStatusRequest request;
+    request.set_request_id("signal-status");
+    request.set_schema_version(status::kStatusRequestSchema);
+    wire::GatewayStatusSnapshot response;
+    REQUIRE(stub->GetGatewayStatus(&status_context, request, &response).ok());
+    REQUIRE(response.markets_size() == 4);
+  }
+  if (prove_still_running) {
+    int status = 0;
+    REQUIRE(waitpid(child.pid, &status, WNOHANG) == 0);
+    REQUIRE(kill(child.pid, 0) == 0);
+  }
+  REQUIRE(kill(child.pid, signal) == 0);
+  const auto status = wait_bounded(child, output);
+  REQUIRE(WIFEXITED(status));
+  REQUIRE(WEXITSTATUS(status) == 0);
+  REQUIRE(output.find(signal == SIGINT ? "signal=SIGINT" : "signal=SIGTERM") !=
+          std::string::npos);
+  REQUIRE(output.find("gateway_state=stopped contexts=0 transports=0 "
+                      "subscriptions=0 owners_joined=yes") !=
+          std::string::npos);
+  for (auto &reader : books) {
+    wire::OrderBookStreamItem item;
+    while (reader->Read(&item)) {
+    }
+    REQUIRE(reader->Finish().error_code() !=
+            ::grpc::StatusCode::DEADLINE_EXCEEDED);
+  }
+  for (auto &reader : events) {
+    wire::GatewayEventEnvelope item;
+    while (reader->Read(&item)) {
+    }
+    REQUIRE(reader->Finish().error_code() !=
+            ::grpc::StatusCode::DEADLINE_EXCEEDED);
+  }
+  if (scenario == "spot-recovery") {
+    constexpr std::string_view prefix{
+        "gateway_recovery_failure venue=VENUE_BINANCE market=MARKET_SPOT "
+        "symbol=\"BTCUSDT\" symbol_truncated=no index=0 generation=1 "
+        "cause=transport-failure"};
+    REQUIRE(count_occurrences(output, "gateway_recovery_failure") == 1U);
+    const auto start = output.find(prefix);
+    REQUIRE(start != std::string::npos);
+    const auto end = output.find('\n', start);
+    REQUIRE(end != std::string::npos);
+    const auto diagnostic = std::string_view{output}.substr(start, end - start);
+    REQUIRE(diagnostic.find(
+                "network_error_code=websocket-read network_stage=\"spot-test"
+                "\\nstage\\\\source\"") != std::string_view::npos);
+    REQUIRE(diagnostic.find("network_message_truncated=yes") !=
+            std::string_view::npos);
+    REQUIRE(diagnostic.find('\t') == std::string_view::npos);
+  } else {
+    REQUIRE(output.find("gateway_recovery_failure") == std::string::npos);
+  }
+}
+
+void startup_failure_diagnostic(const std::string &fixture) {
+  const auto endpoint = "127.0.0.1:" + std::to_string(available_port());
+  ConfigFile config{"{\"grpc_listen\":\"" + endpoint +
+                    "\",\"spot_symbols\":[\"BTCUSDT\"],"
+                    "\"usdm_symbols\":[\"BTCUSDT\"]}"};
+  auto child =
+      spawn(fixture, {"--config", config.path()}, "startup-spot-failure");
+  std::string output;
+  const auto status = wait_bounded(child, output);
+  REQUIRE(WIFEXITED(status));
+  REQUIRE(WEXITSTATUS(status) == 1);
+  REQUIRE(output.find("gateway_start=failed reason=product-initial-failure "
+                      "venue=VENUE_BINANCE market=MARKET_SPOT "
+                      "symbol=\"BTCUSDT\"") != std::string::npos);
+  REQUIRE(output.find("gateway_recovery_failure venue=VENUE_BINANCE "
+                      "market=MARKET_SPOT symbol=\"BTCUSDT\" "
+                      "symbol_truncated=no index=0 generation=1 "
+                      "cause=internal-failure") != std::string::npos);
+  REQUIRE(output.find("network_error_code=internal") != std::string::npos);
+  REQUIRE(output.find("network_stage=\"spot-test-terminal\"") !=
+          std::string::npos);
+  REQUIRE(count_occurrences(output, "gateway_recovery_failure") == 1U);
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+  if (argc != 3) {
+    std::cerr << "expected bmdg and fixture paths\n";
+    return EXIT_FAILURE;
+  }
+  try {
+    cli_processes(argv[1]);
+    std::cout << "DAEMON_HELP_AND_INVALID_CLI=PASS\n";
+    signal_process(argv[2], SIGINT, true);
+    std::cout << "DAEMON_SIGINT_LONG_RUNNING=PASS\n";
+    signal_process(argv[2], SIGTERM, false);
+    std::cout << "DAEMON_SIGTERM=PASS\n";
+    startup_failure_diagnostic(argv[2]);
+    std::cout << "DAEMON_STARTUP_FAILURE_DIAGNOSTIC=PASS\n";
+    signal_process(argv[2], SIGTERM, false, "spot-recovery");
+    std::cout << "DAEMON_POST_RECOVERY_SHUTDOWN_DIAGNOSTIC=PASS\n";
+  } catch (const std::exception &error) {
+    std::cerr << "PRODUCTION_DAEMON_PROCESS_TEST=FAIL " << error.what() << '\n';
+    return EXIT_FAILURE;
+  }
+  return EXIT_SUCCESS;
+}

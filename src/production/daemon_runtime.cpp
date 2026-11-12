@@ -1,6 +1,6 @@
-#include "daemon_runtime.hpp"
+#include "production/daemon_runtime.hpp"
 
-#include "spot_transport.hpp"
+#include "transport/spot_transport.hpp"
 
 #include <algorithm>
 #include <csignal>
@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+namespace composition = binance_market_data::gateway::composition;
 
 namespace binance_market_data::gateway::production {
 
@@ -18,107 +19,108 @@ namespace {
 namespace adapter = projection_adapter::v1;
 namespace core = projection::v1;
 
-[[nodiscard]] std::string_view diagnostic_name(g5::RecoveryCause value) {
+[[nodiscard]] std::string_view diagnostic_name(recovery::RecoveryCause value) {
   switch (value) {
-  case g5::RecoveryCause::NeedsResync:
+  case recovery::RecoveryCause::NeedsResync:
     return "needs-resync";
-  case g5::RecoveryCause::TransportFailure:
+  case recovery::RecoveryCause::TransportFailure:
     return "transport-failure";
-  case g5::RecoveryCause::SnapshotFailure:
+  case recovery::RecoveryCause::SnapshotFailure:
     return "snapshot-failure";
-  case g5::RecoveryCause::IngressOverflow:
+  case recovery::RecoveryCause::IngressOverflow:
     return "ingress-overflow";
-  case g5::RecoveryCause::BootstrapBufferOverflow:
+  case recovery::RecoveryCause::BootstrapBufferOverflow:
     return "bootstrap-buffer-overflow";
-  case g5::RecoveryCause::Protocol:
+  case recovery::RecoveryCause::Protocol:
     return "protocol";
-  case g5::RecoveryCause::ServerShutdown:
+  case recovery::RecoveryCause::ServerShutdown:
     return "server-shutdown";
-  case g5::RecoveryCause::Http429:
+  case recovery::RecoveryCause::Http429:
     return "http-429";
-  case g5::RecoveryCause::Http418:
+  case recovery::RecoveryCause::Http418:
     return "http-418";
-  case g5::RecoveryCause::Http5xx:
+  case recovery::RecoveryCause::Http5xx:
     return "http-5xx";
-  case g5::RecoveryCause::TerminalHttp4xx:
+  case recovery::RecoveryCause::TerminalHttp4xx:
     return "terminal-http-4xx";
-  case g5::RecoveryCause::InternalFailure:
+  case recovery::RecoveryCause::InternalFailure:
     return "internal-failure";
   }
   return "unknown";
 }
 
-[[nodiscard]] std::string_view diagnostic_name(g4::NetworkErrorCode value) {
+[[nodiscard]] std::string_view
+diagnostic_name(transport::NetworkErrorCode value) {
   switch (value) {
-  case g4::NetworkErrorCode::Timeout:
+  case transport::NetworkErrorCode::Timeout:
     return "timeout";
-  case g4::NetworkErrorCode::Dns:
+  case transport::NetworkErrorCode::Dns:
     return "dns";
-  case g4::NetworkErrorCode::Tcp:
+  case transport::NetworkErrorCode::Tcp:
     return "tcp";
-  case g4::NetworkErrorCode::Tls:
+  case transport::NetworkErrorCode::Tls:
     return "tls";
-  case g4::NetworkErrorCode::WebSocketHandshake:
+  case transport::NetworkErrorCode::WebSocketHandshake:
     return "websocket-handshake";
-  case g4::NetworkErrorCode::WebSocketRead:
+  case transport::NetworkErrorCode::WebSocketRead:
     return "websocket-read";
-  case g4::NetworkErrorCode::HttpWrite:
+  case transport::NetworkErrorCode::HttpWrite:
     return "http-write";
-  case g4::NetworkErrorCode::HttpRead:
+  case transport::NetworkErrorCode::HttpRead:
     return "http-read";
-  case g4::NetworkErrorCode::HttpStatus:
+  case transport::NetworkErrorCode::HttpStatus:
     return "http-status";
-  case g4::NetworkErrorCode::Protocol:
+  case transport::NetworkErrorCode::Protocol:
     return "protocol";
-  case g4::NetworkErrorCode::RuntimeAdmission:
+  case transport::NetworkErrorCode::RuntimeAdmission:
     return "runtime-admission";
-  case g4::NetworkErrorCode::ServerShutdown:
+  case transport::NetworkErrorCode::ServerShutdown:
     return "server-shutdown";
-  case g4::NetworkErrorCode::Internal:
+  case transport::NetworkErrorCode::Internal:
     return "internal";
   }
   return "unknown";
 }
 
-[[nodiscard]] std::string_view diagnostic_name(g3::RuntimeState value) {
+[[nodiscard]] std::string_view diagnostic_name(runtime::RuntimeState value) {
   switch (value) {
-  case g3::RuntimeState::Constructed:
+  case runtime::RuntimeState::Constructed:
     return "constructed";
-  case g3::RuntimeState::Buffering:
+  case runtime::RuntimeState::Buffering:
     return "buffering";
-  case g3::RuntimeState::AwaitingBridge:
+  case runtime::RuntimeState::AwaitingBridge:
     return "awaiting-bridge";
-  case g3::RuntimeState::Live:
+  case runtime::RuntimeState::Live:
     return "live";
-  case g3::RuntimeState::NeedsResync:
+  case runtime::RuntimeState::NeedsResync:
     return "needs-resync";
-  case g3::RuntimeState::Faulted:
+  case runtime::RuntimeState::Faulted:
     return "faulted";
-  case g3::RuntimeState::Stopping:
+  case runtime::RuntimeState::Stopping:
     return "stopping";
-  case g3::RuntimeState::Stopped:
+  case runtime::RuntimeState::Stopped:
     return "stopped";
   }
   return "unknown";
 }
 
-[[nodiscard]] std::string_view diagnostic_name(g3::FaultReason value) {
+[[nodiscard]] std::string_view diagnostic_name(runtime::FaultReason value) {
   switch (value) {
-  case g3::FaultReason::IngressOverflow:
+  case runtime::FaultReason::IngressOverflow:
     return "ingress-overflow";
-  case g3::FaultReason::BootstrapBufferOverflow:
+  case runtime::FaultReason::BootstrapBufferOverflow:
     return "bootstrap-buffer-overflow";
-  case g3::FaultReason::AdapterError:
+  case runtime::FaultReason::AdapterError:
     return "adapter-error";
-  case g3::FaultReason::TransportFailure:
+  case runtime::FaultReason::TransportFailure:
     return "transport-failure";
-  case g3::FaultReason::SnapshotFailure:
+  case runtime::FaultReason::SnapshotFailure:
     return "snapshot-failure";
-  case g3::FaultReason::ProjectionRejected:
+  case runtime::FaultReason::ProjectionRejected:
     return "projection-rejected";
-  case g3::FaultReason::ClockError:
+  case runtime::FaultReason::ClockError:
     return "clock-error";
-  case g3::FaultReason::InternalError:
+  case runtime::FaultReason::InternalError:
     return "internal-error";
   }
   return "unknown";
@@ -325,12 +327,12 @@ void write_absent_string(std::ostream &output, std::string_view name) {
   output << ' ' << name << "=none " << name << "_truncated=no";
 }
 
-void write_failure(std::ostream &output, const g11::MarketKey &key,
+void write_failure(std::ostream &output, const runtime::MarketKey &key,
                    std::size_t index,
-                   const g5::RecoveryFailureDiagnostic &failure) {
+                   const recovery::RecoveryFailureDiagnostic &failure) {
   output << "gateway_recovery_failure venue="
-         << g11::common_wire::Venue_Name(key.venue)
-         << " market=" << g11::common_wire::Market_Name(key.market);
+         << runtime::common_wire::Venue_Name(key.venue)
+         << " market=" << runtime::common_wire::Market_Name(key.market);
   write_bounded_string(output, "symbol", key.symbol);
   output << " index=" << index
          << " generation=" << failure.connection_generation
@@ -410,8 +412,8 @@ void write_failure(std::ostream &output, const g11::MarketKey &key,
   output << '\n';
 }
 
-void write_product_failures(std::ostream &output, const g11::MarketKey &key,
-                            const g5::RecoveryObservation &recovery) {
+void write_product_failures(std::ostream &output, const runtime::MarketKey &key,
+                            const recovery::RecoveryObservation &recovery) {
   const auto size =
       std::min(recovery.failure_history_size, recovery.failure_history.size());
   for (std::size_t index = 0U; index < size; ++index) {
@@ -445,9 +447,10 @@ void write_recovery_failure_diagnostics(std::ostream &output,
   }
 }
 
-void write_product_identity(std::ostream &output, const g11::MarketKey &key) {
-  output << " venue=" << g11::common_wire::Venue_Name(key.venue)
-         << " market=" << g11::common_wire::Market_Name(key.market);
+void write_product_identity(std::ostream &output,
+                            const runtime::MarketKey &key) {
+  output << " venue=" << runtime::common_wire::Venue_Name(key.venue)
+         << " market=" << runtime::common_wire::Market_Name(key.market);
   write_bounded_string(output, "symbol", key.symbol);
 }
 
@@ -458,12 +461,16 @@ bool performance_baseline_preflight(const DaemonConfig &config,
   return true;
 }
 
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
 namespace {
 
 [[nodiscard]] bool export_performance_baseline(ProductionGateway &gateway,
                                                std::ostream &errors) {
-  const auto *path = std::getenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT");
+  const auto *path = std::getenv("BMDG_PERFORMANCE_BASELINE_OUTPUT");
+  if (path == nullptr || *path == '\0') {
+    // Transitional alias for existing measurement scripts.
+    path = std::getenv("BMD_GATEWAY_PERFORMANCE_BASELINE_OUTPUT");
+  }
   if (path == nullptr || *path == '\0') {
     errors << "performance_baseline_export=skipped reason=output-not-set\n";
     return true;
@@ -485,28 +492,29 @@ namespace {
 } // namespace
 #endif
 
-int run_production_service(const DaemonConfig &config,
-                           std::vector<g11::ProductRuntimeSpec> specifications,
-                           TerminationSignals &signals, std::ostream &output,
-                           std::ostream &errors, GatewayOptions options) {
+int run_production_service(
+    const DaemonConfig &config,
+    std::vector<composition::ProductRuntimeSpec> specifications,
+    TerminationSignals &signals, std::ostream &output, std::ostream &errors,
+    GatewayOptions options) {
   if (!performance_baseline_preflight(config, errors)) {
     return EXIT_FAILURE;
   }
-  const auto instance_id = g7::generate_gateway_instance_id();
+  const auto instance_id = rpc::generate_gateway_instance_id();
   const auto product_count = specifications.size();
   output << "gateway_state=starting stage=runtime products=" << product_count
          << " grpc_listen=" << config.grpc_listen << '\n'
          << std::flush;
 
-  ProductionGateway gateway{std::move(specifications), g4::sample_real_clock,
-                            instance_id, config.grpc_listen,
-                            std::move(options)};
+  ProductionGateway gateway{std::move(specifications),
+                            transport::sample_real_clock, instance_id,
+                            config.grpc_listen, std::move(options)};
   const auto started =
       gateway.start([&signals] { return signals.requested(); });
   if (started.code != StartCode::Serving) {
     const auto final = gateway.observe();
     const auto final_totals = totals(final);
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     const auto exported = export_performance_baseline(gateway, errors);
 #endif
     if (started.code == StartCode::StopRequested) {
@@ -518,7 +526,7 @@ int run_production_service(const DaemonConfig &config,
              << " owners_joined=" << (final_totals.owners_joined ? "yes" : "no")
              << '\n';
       return
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
           exported ? EXIT_SUCCESS : EXIT_FAILURE;
 #else
           EXIT_SUCCESS;
@@ -550,7 +558,7 @@ int run_production_service(const DaemonConfig &config,
   gateway.request_stop();
   gateway.stop();
 
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   const auto exported = export_performance_baseline(gateway, errors);
 #endif
 
@@ -564,7 +572,7 @@ int run_production_service(const DaemonConfig &config,
          << '\n'
          << std::flush;
   return received == -1
-#if defined(BMD_GATEWAY_PERFORMANCE_BASELINE_ENABLED)
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                  || !exported
 #endif
              ? EXIT_FAILURE
