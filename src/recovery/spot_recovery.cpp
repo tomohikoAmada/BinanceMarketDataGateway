@@ -171,10 +171,11 @@ detail::normal_backoff_delay(std::size_t recovery_attempt) {
       std::chrono::seconds{1},  std::chrono::seconds{2},
       std::chrono::seconds{4},  std::chrono::seconds{8},
       std::chrono::seconds{16}, std::chrono::seconds{30}};
-  if (recovery_attempt == 0U || recovery_attempt > delays.size()) {
-    throw std::out_of_range{"G5 recovery attempt is outside bounded policy"};
+  if (recovery_attempt == 0U) {
+    throw std::out_of_range{"G5 recovery attempt must start at one"};
   }
-  return delays[recovery_attempt - 1U];
+  const auto index = std::min(recovery_attempt, delays.size()) - 1U;
+  return delays[index];
 }
 
 class RecoveryCoordinator::Impl final {
@@ -679,19 +680,8 @@ private:
                 SourceGenerationCloseOutcome::GlobalShutdown);
             break;
           }
-          if (observation_.consecutive_recovery_attempts >=
-              detail::kMaximumRecoveryAttempts) {
-            close_source_generation(
-                SourceGenerationCloseOutcome::PermanentFailure);
-            observation_.last_recovery_cause = decision.cause;
-            observation_.state = RecoveryState::Exhausted;
-            observation_.terminal = true;
-            observation_.exhausted = true;
-            observation_.in_backoff = false;
-            observation_.terminal_error = transport_observation.terminal_error;
-            condition_.notify_all();
-            return;
-          }
+          // Recoverable failures keep retrying with a bounded 30 s backoff.
+          // The failure history remains a separate seven-entry diagnostic.
           close_source_generation(SourceGenerationCloseOutcome::Replacement);
           recovery_attempt = ++observation_.consecutive_recovery_attempts;
           observation_.last_recovery_cause = decision.cause;

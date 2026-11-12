@@ -135,6 +135,7 @@ enum class Action {
   BootstrapOverflow,
   AdapterFailure,
   Http429,
+  Http429Long,
   Http429Missing,
   Http429Malformed,
   Http418,
@@ -237,6 +238,8 @@ public:
       return transport::TransportStartResult::Failed;
     case Action::Http429:
       return http_failure(429U, std::string{"17"});
+    case Action::Http429Long:
+      return http_failure(429U, std::string{"1234"});
     case Action::Http429Missing:
       return http_failure(429U, std::nullopt);
     case Action::Http429Malformed:
@@ -357,8 +360,8 @@ make_script(std::initializer_list<Action> actions) {
 }
 
 void initial_live() {
-  static_assert(recovery::detail::kRecoveryFailureHistoryCapacity ==
-                recovery::detail::kMaximumRecoveryAttempts + 1U);
+  static_assert(recovery::detail::kRecoveryBackoffStages == 6U);
+  static_assert(recovery::detail::kRecoveryFailureHistoryCapacity == 7U);
   auto script = make_script({Action::Live});
   rt::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
   recovery::SpotRecovery recovery{runtime, fixed_clock(),
@@ -566,20 +569,21 @@ void ingress_overflow_recovery() {
   recovery.stop();
 }
 
-void backoff_and_exhaustion() {
+void persistent_recoverable_failures_recover_after_seven() {
   auto script = make_script({Action::TransportFailure, Action::TransportFailure,
                              Action::TransportFailure, Action::TransportFailure,
                              Action::TransportFailure, Action::TransportFailure,
-                             Action::TransportFailure});
+                             Action::TransportFailure, Action::Live});
   rt::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
   recovery::SpotRecovery recovery{runtime, fixed_clock(),
                                   script_options(script)};
   REQUIRE_EQ(recovery.start(), recovery::RecoveryStartResult::Started);
-  const auto exhausted = recovery.wait_until_terminal();
-  REQUIRE(exhausted.exhausted);
-  REQUIRE_EQ(exhausted.consecutive_recovery_attempts, 6U);
-  REQUIRE_EQ(exhausted.connection_generation, 7U);
-  REQUIRE_EQ(exhausted.failure_history_size,
+  const auto live = recovery.wait_for_generation_live(8U);
+  REQUIRE_EQ(live.state, recovery::RecoveryState::Live);
+  REQUIRE_EQ(live.connection_generation, 8U);
+  REQUIRE_EQ(live.total_recovery_count, 7U);
+  REQUIRE_EQ(live.consecutive_recovery_attempts, 0U);
+  REQUIRE_EQ(live.failure_history_size,
              recovery::detail::kRecoveryFailureHistoryCapacity);
   {
     std::lock_guard lock{script->mutex};
@@ -587,10 +591,73 @@ void backoff_and_exhaustion() {
                (std::vector<std::chrono::seconds>{
                    std::chrono::seconds{1}, std::chrono::seconds{2},
                    std::chrono::seconds{4}, std::chrono::seconds{8},
-                   std::chrono::seconds{16}, std::chrono::seconds{30}}));
-    REQUIRE_EQ(script->created_generations.size(), 7U);
+                   std::chrono::seconds{16}, std::chrono::seconds{30},
+                   std::chrono::seconds{30}}));
+    REQUIRE_EQ(script->created_generations,
+               (std::vector<std::uint64_t>{1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U}));
+    REQUIRE_EQ(script->stopped_generations,
+               (std::vector<std::uint64_t>{1U, 2U, 3U, 4U, 5U, 6U, 7U}));
+    REQUIRE_EQ(script->max_active, 1U);
+  }
+  REQUIRE_EQ(recovery::detail::normal_backoff_delay(7U),
+             std::chrono::seconds{30});
+  REQUIRE_EQ(recovery::detail::normal_backoff_delay(100U),
+             std::chrono::seconds{30});
+  recovery.stop();
+}
+
+void stop_during_long_retry_after_backoff() {
+  auto script = make_script({Action::TransportFailure, Action::TransportFailure,
+                             Action::TransportFailure, Action::TransportFailure,
+                             Action::TransportFailure, Action::TransportFailure,
+                             Action::TransportFailure, Action::Http429Long,
+                             Action::Live});
+  std::mutex wait_mutex;
+  std::condition_variable_any wait_condition;
+  std::vector<std::chrono::seconds> delays;
+  bool entered_long_wait = false;
+  auto options = script_options(script);
+  options.backoff_waiter = [&](std::chrono::seconds delay,
+                               std::stop_token stop_token) {
+    {
+      std::lock_guard lock{wait_mutex};
+      delays.push_back(delay);
+      if (delay < std::chrono::seconds{1234}) {
+        return !stop_token.stop_requested();
+      }
+      entered_long_wait = true;
+    }
+    wait_condition.notify_all();
+    std::unique_lock lock{wait_mutex};
+    if (!stop_token.stop_requested()) {
+      static_cast<void>(
+          wait_condition.wait(lock, stop_token, [] { return false; }));
+    }
+    return false;
+  };
+  rt::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  recovery::SpotRecovery recovery{runtime, fixed_clock(), std::move(options)};
+  REQUIRE_EQ(recovery.start(), recovery::RecoveryStartResult::Started);
+  {
+    std::unique_lock lock{wait_mutex};
+    wait_condition.wait(lock, [&] { return entered_long_wait; });
   }
   recovery.stop();
+  REQUIRE_EQ(recovery.observe().state, recovery::RecoveryState::Stopped);
+  {
+    std::lock_guard lock{wait_mutex};
+    REQUIRE_EQ(delays,
+               (std::vector<std::chrono::seconds>{
+                   std::chrono::seconds{1}, std::chrono::seconds{2},
+                   std::chrono::seconds{4}, std::chrono::seconds{8},
+                   std::chrono::seconds{16}, std::chrono::seconds{30},
+                   std::chrono::seconds{30}, std::chrono::seconds{1234}}));
+  }
+  {
+    std::lock_guard lock{script->mutex};
+    REQUIRE_EQ(script->created_generations,
+               (std::vector<std::uint64_t>{1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U}));
+  }
 }
 
 void success_resets_incident_counter() {
@@ -978,7 +1045,10 @@ int main() {
       {"PROJECTION_NEEDS_RESYNC_DIRECT_RECOVERY", needs_resync_direct_recovery},
       {"RECOVERABLE_FAILURE_MATRIX", recoverable_failure_matrix},
       {"INGRESS_OVERFLOW_RECOVERY", ingress_overflow_recovery},
-      {"NORMAL_BACKOFF_AND_MAX_ATTEMPT_EXHAUSTION", backoff_and_exhaustion},
+      {"PERSISTENT_RECOVERABLE_FAILURES_RECOVER_AFTER_SEVEN",
+       persistent_recoverable_failures_recover_after_seven},
+      {"STOP_DURING_LONG_RETRY_AFTER_BACKOFF",
+       stop_during_long_retry_after_backoff},
       {"SUCCESS_RESETS_INCIDENT_COUNTER", success_resets_incident_counter},
       {"STALE_LIVE_DOES_NOT_RESET_INCIDENT_COUNTER",
        stale_live_does_not_reset_incident_counter},

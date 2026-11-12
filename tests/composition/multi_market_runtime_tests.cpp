@@ -218,6 +218,47 @@ private:
   transport::TransportObservation observation_;
 };
 
+class RecoverableFailureAttempt final
+    : public recovery::detail::RecoveryAttempt {
+public:
+  RecoverableFailureAttempt(rt::MarketRuntime &runtime, rt::MarketKey key,
+                            std::uint64_t generation)
+      : runtime_{runtime}, key_{std::move(key)} {
+    observation_.connection_generation = generation;
+    observation_.connection_id =
+        std::string{key_.market == common_wire::MARKET_SPOT
+                        ? "spot-recovery-g"
+                        : "usdm-recovery-g"} +
+        key_.symbol + "-" + std::to_string(generation);
+    observation_.terminal_error = transport::NetworkError{
+        transport::NetworkErrorCode::WebSocketRead, "recovery-isolation",
+        "recoverable market failure", std::nullopt, std::nullopt};
+  }
+
+  [[nodiscard]] transport::TransportStartResult start() override {
+    static_cast<void>(runtime_.submit_transport_failure());
+    std::lock_guard lock{mutex_};
+    observation_.started = true;
+    return transport::TransportStartResult::Failed;
+  }
+
+  void stop() noexcept override {
+    std::lock_guard lock{mutex_};
+    observation_.stopped = true;
+  }
+
+  [[nodiscard]] transport::TransportObservation observe() const override {
+    std::lock_guard lock{mutex_};
+    return observation_;
+  }
+
+private:
+  rt::MarketRuntime &runtime_;
+  const rt::MarketKey key_;
+  mutable std::mutex mutex_;
+  transport::TransportObservation observation_;
+};
+
 class RotationGate final {
 public:
   [[nodiscard]] rt::TimedRecoveryWaitResult wait(rt::MarketRuntime &,
@@ -281,6 +322,26 @@ live_test_options(common_wire::Market market) {
   options.spot.recovery_test = live_test_options(common_wire::MARKET_SPOT);
   options.usdm.recovery_test =
       live_test_options(common_wire::MARKET_USD_M_PERPETUAL);
+  return options;
+}
+
+[[nodiscard]] recovery::detail::RecoveryTestOptions
+persistent_recovery_test_options(rt::MarketKey key) {
+  recovery::detail::RecoveryTestOptions options;
+  options.attempt_factory = [key = std::move(key)](rt::MarketRuntime &runtime,
+                                                   const rt::RuntimeClock &,
+                                                   std::uint64_t generation)
+      -> std::unique_ptr<recovery::detail::RecoveryAttempt> {
+    if (generation < 8U) {
+      return std::make_unique<RecoverableFailureAttempt>(runtime, key,
+                                                         generation);
+    }
+    return std::make_unique<SyntheticLiveAttempt>(runtime, key, generation);
+  };
+  options.backoff_waiter = [](std::chrono::seconds,
+                              std::stop_token stop_token) {
+    return !stop_token.stop_requested();
+  };
   return options;
 }
 
@@ -546,6 +607,56 @@ void one_market_terminal_failure_does_not_stop_other() {
   products.stop();
 }
 
+void one_market_persistent_recoverable_failure_does_not_stop_other() {
+  for (const auto failing_market :
+       {common_wire::MARKET_SPOT, common_wire::MARKET_USD_M_PERPETUAL}) {
+    auto options = live_two_product_options();
+    if (failing_market == common_wire::MARKET_SPOT) {
+      options.spot.recovery_test = persistent_recovery_test_options(
+          fixed_key_for(common_wire::MARKET_SPOT));
+    } else {
+      options.usdm.recovery_test = persistent_recovery_test_options(
+          fixed_key_for(common_wire::MARKET_USD_M_PERPETUAL));
+    }
+    composition::TwoProductRuntime products{
+        numeric_spec(), numeric_spec(), fixed_clock(), "gw-recovery-isolation",
+        std::move(options)};
+    const auto started = products.start();
+    REQUIRE(started.spot == recovery::RecoveryStartResult::Started);
+    REQUIRE(started.usdm == recovery::RecoveryStartResult::Started);
+    auto &failing = failing_market == common_wire::MARKET_SPOT
+                        ? products.spot()
+                        : products.usdm();
+    auto &healthy = failing_market == common_wire::MARKET_SPOT
+                        ? products.usdm()
+                        : products.spot();
+    const auto healthy_live = healthy.recovery().wait_for_generation_live(1U);
+    REQUIRE(healthy_live.state == recovery::RecoveryState::Live);
+    const auto healthy_runtime_before = healthy.runtime().observe();
+    const auto failing_live = failing.recovery().wait_for_generation_live(8U);
+    const auto healthy_after = healthy.recovery().observe();
+    const auto healthy_runtime_after = healthy.runtime().observe();
+
+    REQUIRE(failing_live.state == recovery::RecoveryState::Live);
+    REQUIRE_EQ(failing_live.connection_generation, 8U);
+    REQUIRE_EQ(failing_live.total_recovery_count, 7U);
+    REQUIRE_EQ(failing_live.consecutive_recovery_attempts, 0U);
+    REQUIRE_EQ(failing_live.failure_history_size, 7U);
+    REQUIRE(healthy_after.state == recovery::RecoveryState::Live);
+    REQUIRE_EQ(healthy_after.connection_generation, 1U);
+    REQUIRE_EQ(healthy_after.active_transport_count, 1U);
+    REQUIRE_EQ(healthy_after.failure_history_size, 0U);
+    REQUIRE(healthy_runtime_after.state == rt::RuntimeState::Live);
+    REQUIRE_EQ(healthy_runtime_after.reset_count,
+               healthy_runtime_before.reset_count);
+    REQUIRE_EQ(healthy_runtime_after.owner_thread_id,
+               healthy_runtime_before.owner_thread_id);
+    REQUIRE_EQ(healthy_runtime_after.last_update_id,
+               healthy_runtime_before.last_update_id);
+    products.stop();
+  }
+}
+
 void product_runtime_uses_exact_market_key_identity() {
   const rt::MarketKey spot_eth{common_wire::VENUE_BINANCE,
                                common_wire::MARKET_SPOT, "ETHUSDT"};
@@ -611,6 +722,8 @@ int main() {
       {"PLANNED_ROTATION_IS_PRODUCT_LOCAL", planned_rotation_is_product_local},
       {"ONE_MARKET_TERMINAL_FAILURE_DOES_NOT_STOP_OTHER",
        one_market_terminal_failure_does_not_stop_other},
+      {"ONE_MARKET_PERSISTENT_RECOVERABLE_FAILURE_DOES_NOT_STOP_OTHER",
+       one_market_persistent_recoverable_failure_does_not_stop_other},
       {"PRODUCT_RUNTIME_USES_EXACT_MARKET_KEY_IDENTITY",
        product_runtime_uses_exact_market_key_identity},
       {"CONFIGURED_SET_CARDINALITY_DUPLICATES_ORDER_AND_STABILITY",
