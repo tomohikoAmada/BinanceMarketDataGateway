@@ -431,7 +431,7 @@ class StreamState:
                 self.current_valid = False
                 self.snapshot_seen = False
                 self.bids.clear()
-            self.asks.clear()
+                self.asks.clear()
             self.last_session_sequence = delivery.session_sequence
             self.last_payload = payload
             return (

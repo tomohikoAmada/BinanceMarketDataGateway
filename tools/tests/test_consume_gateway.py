@@ -530,6 +530,34 @@ def test_stream_state_eof_clears_book_and_validity() -> None:
     assert state.eof_count == 1
 
 
+def test_live_stream_status_does_not_clear_ask_side() -> None:
+    state = consumer_module.StreamState(
+        consumer_module.StreamSpec(
+            enums_pb2.VENUE_BINANCE, SPOT, "BTCUSDT", "order_book"
+        )
+    )
+    state.subscription_id = "ev-test"
+    state.gateway_instance_id = GATEWAY_INSTANCE_ID
+    state.session_accepted = True
+    state.current_valid = True
+    state.last_session_sequence = 1
+    state.bids["100.00"] = "1.000"
+    state.asks["101.00"] = "2.000"
+
+    live = gateway_messages_pb2.GatewayEventEnvelope()
+    _delivery(live, "ev-test", 2)
+    live.stream_status.state = enums_pb2.STREAM_LIFECYCLE_STATE_LIVE
+    assert state.consume(live) == "continue"
+    assert state.asks == {"101.00": "2.000"}
+
+    closed = gateway_messages_pb2.GatewayEventEnvelope()
+    _delivery(closed, "ev-test", 3)
+    closed.stream_status.state = enums_pb2.STREAM_LIFECYCLE_STATE_CLOSED
+    assert state.consume(closed) == "resubscribe"
+    assert state.bids == {}
+    assert state.asks == {}
+
+
 def test_bid_and_ask_sides_do_not_delete_each_other() -> None:
     state = consumer_module.StreamState(
         consumer_module.StreamSpec(
