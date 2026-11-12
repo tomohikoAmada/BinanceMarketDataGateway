@@ -84,7 +84,37 @@ Actions `ubuntu-24.04`, GCC 13, C++20, Release.
   Archived tar SHA-256
   `75e000c1632ad10785a2fc8b3f6ace06b93330cb8862cb42686aba07abe6b4ad`.
 - Scope: Linux build/package evidence only. No VPS install or service change.
-  Plan G2/G3/G4 remain open.
+  Plan G2 was subsequently completed (see below); Plan G3/G4 remain open.
+
+## Plan G2 — persistent recoverable recovery
+
+Gateway candidate `6fdeb47682c51463c13a04cb9a23efc5972b841b`.
+
+- Recoverable failures no longer become terminal after six attempts. The
+  coordinator keeps retrying with a 30 s capped backoff; the consecutive count
+  remains observational and resets on Live.
+- `kRecoveryBackoffStages=6` (`1,2,4,8,16,30`) is decoupled from
+  `kRecoveryFailureHistoryCapacity=7`; the failure history stays bounded.
+- The wait remains `max(normal backoff, Retry-After)` and uses the existing
+  stop-token/condition-variable path. Nonrecoverable internal, adapter and
+  terminal HTTP 4xx failures remain terminal.
+- Tests cover seven consecutive recoverable failures with recovery on the
+  eighth generation, the 30 s backoff cap, a long `Retry-After` interrupted by
+  stop, and a single Spot or USD-M product failing persistently while the other
+  product stays Live with generation, owner and update state unchanged.
+- Local Release CTest **27/27**; ASan+UBSan and TSan recovery/composition tests
+  pass.
+- Linux GitHub Actions run
+  [43152507325](https://github.com/tomohikoAmada/BinanceMarketDataGateway/actions/runs/43152507325):
+  production CTest **27/27** (6.86 s) with the same Projection pin
+  (`00e889f3…`, package ID `65e04c2c…`, PREV `21e94d37…`).
+- `bmdg` SHA-256
+  `094968f76874fdb63de287f565538b8a8abe7fe23d23e83531f1e845b694e516`;
+  artifact `bmdg-linux-x86_64-6fdeb47682c51463c13a04cb9a23efc5972b841b`;
+  archived tar SHA-256
+  `f77cb52c08a9d7318838d8735d3ca40266a5f39bb38c2ce0d466faf5041ab795`.
+- Scope: off-VPS implementation and Linux build/package evidence only. Plan
+  G3/G4 remain open.
 
 ## G3-a — 20-key offline lifecycle
 
@@ -159,8 +189,6 @@ Archived for traceability only:
 
 ## Still unproven
 
-- Plan G2: recoverable failures still exhaust after six attempts; long-failure
-  recovery, cancellation and product isolation tests are pending.
 - Plan G3: low-frequency runtime diagnostics and the attach-only 20-key /
   40-stream consumer are not implemented.
 - Plan G4: no VPS installation, systemd/CA validation or 2h co-load run.

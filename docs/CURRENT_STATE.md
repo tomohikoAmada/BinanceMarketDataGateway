@@ -2,8 +2,9 @@
 
 Updated: 2026-11-12. Source tree reorganized by domain and renamed BMDG;
 historical G0-G11 / G12-A/B/C records archived. v0.4 G3-a, G3-b and M-G1.A are
-complete; plan G1 (Projection M-P2 production pin) now has a Linux Release
-artifact; plan G2/G3/G4 and G3-c remain open.
+complete; plan G1 (Projection M-P2 production pin) and plan G2 (persistent
+recoverable recovery) now have Linux Release artifacts; plan G3/G4 and G3-c
+remain open.
 
 ```text
 HISTORICAL_G0_G11=COMPLETE_ARCHIVED
@@ -29,7 +30,7 @@ PERFORMANCE_AND_RESOURCE_BUDGETS=NOT_ESTABLISHED
 MULTI_PRODUCT_PRODUCTION_CAPACITY=NOT_ESTABLISHED
 PROJECTION_M_P2_A_B_C=COMPLETE
 PLAN_G1_PROJECTION_PIN=COMPLETE_LINUX_RELEASE_27/27
-PLAN_G2=OPEN
+PLAN_G2=PERSISTENT_RECOVERY_LINUX_RELEASE_27/27
 PLAN_G3=OPEN
 PLAN_G4=OPEN
 DATA_PARITY_SPOT=ALIGNED
@@ -86,6 +87,11 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
   inputs and binary SHA are recorded in [EVIDENCE](EVIDENCE.md). Projection's
   same-commit Ubuntu GCC suite has one inherited M5 allocation-instrumentation
   test failure (513/514); all M-P2 and production Core/Adapter tests pass.
+- Plan G2: recoverable failures continue after the sixth attempt with a 30 s
+  backoff cap; history remains seven entries. Seven-failure recovery, long
+  `Retry-After` cancellation and Spot/USD-M product-isolation tests pass.
+  Linux Release CTest 27/27; `bmdg` SHA-256
+  `094968f76874fdb63de287f565538b8a8abe7fe23d23e83531f1e845b694e516`.
 - P1 (pre-optimization): 20-key normal/deep/batch CPU means 0.115 / 1.192 /
   1.242 cores on the local M3, including fixtures/clients; checked apply was
   the dominant owner cost. Projection M-P2.A/B/C now replace the full-book copy
@@ -94,8 +100,6 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
 
 ## Open
 
-- **Plan G2**: recoverable failures still exhaust after six attempts; bounded
-  long-failure recovery, cancellation and product-isolation tests are pending.
 - **Plan G3**: low-frequency runtime diagnostics and the attach-only 20-key /
   40-stream consumer are not implemented.
 - **Plan G4**: no VPS installation, systemd/CA validation or 2h co-load run.
