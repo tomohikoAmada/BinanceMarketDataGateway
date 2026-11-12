@@ -49,6 +49,28 @@ namespace core = projection::v1;
   return "unknown";
 }
 
+[[nodiscard]] std::string_view diagnostic_name(recovery::RecoveryState value) {
+  switch (value) {
+  case recovery::RecoveryState::Starting:
+    return "starting";
+  case recovery::RecoveryState::Live:
+    return "live";
+  case recovery::RecoveryState::Rotating:
+    return "rotating";
+  case recovery::RecoveryState::Backoff:
+    return "backoff";
+  case recovery::RecoveryState::Recovering:
+    return "recovering";
+  case recovery::RecoveryState::Exhausted:
+    return "exhausted";
+  case recovery::RecoveryState::Stopping:
+    return "stopping";
+  case recovery::RecoveryState::Stopped:
+    return "stopped";
+  }
+  return "unknown";
+}
+
 [[nodiscard]] std::string_view
 diagnostic_name(transport::NetworkErrorCode value) {
   switch (value) {
@@ -438,7 +460,176 @@ struct GatewayTotals final {
   return result;
 }
 
+[[nodiscard]] bool product_is_live(const ProductObservation &product) {
+  return product.recovery.state == recovery::RecoveryState::Live &&
+         product.runtime.state == runtime::RuntimeState::Live;
+}
+
+void write_runtime_summary(std::ostream &output,
+                           const GatewayObservation &observation) {
+  std::size_t live = 0U;
+  std::size_t subscriptions = 0U;
+  std::size_t transports = 0U;
+  std::uint64_t recoveries = 0U;
+  bool owners_joined = true;
+  for (const auto &product : observation.products) {
+    if (product_is_live(product)) {
+      ++live;
+    }
+    subscriptions += product.runtime.resident_subscription_count +
+                     product.events.active_subscriptions;
+    transports += product.recovery.active_transport_count;
+    recoveries += product.recovery.total_recovery_count;
+    owners_joined = owners_joined && product.runtime.owner_joined;
+  }
+  output << "gateway_runtime_summary products=" << observation.products.size()
+         << " live=" << live << " subscriptions=" << subscriptions
+         << " recoveries=" << recoveries << " transports=" << transports
+         << " owners_joined=" << (owners_joined ? "yes" : "no")
+         << " contexts=" << observation.tracked_contexts
+         << " context_limit=" << observation.context_limit
+         << " gateway_state=" << to_string(observation.state) << '\n';
+}
+
+void write_product_runtime_diagnostic(std::ostream &output,
+                                      const ProductObservation &product) {
+  output << "gateway_runtime_product venue="
+         << runtime::common_wire::Venue_Name(product.key.venue)
+         << " market=" << runtime::common_wire::Market_Name(product.key.market);
+  write_bounded_string(output, "symbol", product.key.symbol);
+  output << " generation=" << product.recovery.connection_generation
+         << " recovery_state=" << diagnostic_name(product.recovery.state)
+         << " runtime_state=" << diagnostic_name(product.runtime.state)
+         << " projection_status="
+         << diagnostic_name(product.runtime.projection_status)
+         << " recovery_attempts="
+         << product.recovery.consecutive_recovery_attempts
+         << " total_recoveries=" << product.recovery.total_recovery_count
+         << " last_cause=";
+  if (product.recovery.last_recovery_cause.has_value()) {
+    output << diagnostic_name(*product.recovery.last_recovery_cause);
+  } else {
+    output << "none";
+  }
+  output << " fault_reason=";
+  if (product.runtime.fault_reason.has_value()) {
+    output << diagnostic_name(*product.runtime.fault_reason);
+  } else {
+    output << "none";
+  }
+  output << " gap_reason=";
+  if (product.runtime.last_gap.has_value()) {
+    output << diagnostic_name(product.runtime.last_gap->reason);
+  } else {
+    output << "none";
+  }
+  output << " adapter_error=";
+  if (product.runtime.adapter_error.has_value()) {
+    output << diagnostic_name(product.runtime.adapter_error->code);
+  } else {
+    output << "none";
+  }
+  output << " terminal=" << (product.recovery.terminal ? "yes" : "no")
+         << " exhausted=" << (product.recovery.exhausted ? "yes" : "no")
+         << " subscriptions="
+         << product.runtime.resident_subscription_count +
+                product.events.active_subscriptions
+         << '\n';
+}
+
+[[nodiscard]] bool diagnostic_changed(const ProductDiagnosticState &state,
+                                      const ProductObservation &product) {
+  return state.generation != product.recovery.connection_generation ||
+         state.recovery_state != product.recovery.state ||
+         state.runtime_state != product.runtime.state ||
+         state.projection_status != product.runtime.projection_status ||
+         state.total_recovery_count != product.recovery.total_recovery_count ||
+         state.terminal != product.recovery.terminal ||
+         state.exhausted != product.recovery.exhausted ||
+         state.last_cause != product.recovery.last_recovery_cause ||
+         state.fault_reason != product.runtime.fault_reason;
+}
+
+void write_new_failures(std::ostream &errors, const ProductObservation &product,
+                        ProductDiagnosticState &state) {
+  const auto size = std::min(product.recovery.failure_history_size,
+                             product.recovery.failure_history.size());
+  for (std::size_t index = 0U; index < size; ++index) {
+    const auto &failure = product.recovery.failure_history[index];
+    if (failure.connection_generation <= state.last_failure_generation) {
+      continue;
+    }
+    write_failure(errors, product.key, index, failure);
+    state.last_failure_generation =
+        std::max(state.last_failure_generation, failure.connection_generation);
+  }
+}
+
 } // namespace
+
+bool RuntimeDiagnostics::prepare(const GatewayObservation &observation) {
+  if (!initialized_ || products_.size() != observation.products.size()) {
+    products_.assign(observation.products.size(), {});
+    initialized_ = true;
+    return true;
+  }
+  return false;
+}
+
+void RuntimeDiagnostics::observe(std::ostream &output, std::ostream &errors,
+                                 const GatewayObservation &observation) {
+  static_cast<void>(prepare(observation));
+  write_runtime_summary(output, observation);
+  for (std::size_t index = 0U; index < observation.products.size(); ++index) {
+    const auto &product = observation.products[index];
+    auto &state = products_[index];
+    const bool first = !state.initialized || state.key != product.key;
+    if (first) {
+      state = {};
+      state.key = product.key;
+      state.initialized = true;
+    }
+    const bool changed = first ? (!product_is_live(product) ||
+                                  product.recovery.failure_history_size > 0U)
+                               : diagnostic_changed(state, product);
+    if (changed) {
+      write_product_runtime_diagnostic(output, product);
+    }
+    write_new_failures(errors, product, state);
+    state.generation = product.recovery.connection_generation;
+    state.recovery_state = product.recovery.state;
+    state.runtime_state = product.runtime.state;
+    state.projection_status = product.runtime.projection_status;
+    state.total_recovery_count = product.recovery.total_recovery_count;
+    state.terminal = product.recovery.terminal;
+    state.exhausted = product.recovery.exhausted;
+    state.last_cause = product.recovery.last_recovery_cause;
+    state.fault_reason = product.runtime.fault_reason;
+  }
+  output << std::flush;
+  errors << std::flush;
+}
+
+void RuntimeDiagnostics::process_failures(
+    std::ostream &errors, const GatewayObservation &observation) {
+  static_cast<void>(prepare(observation));
+  for (std::size_t index = 0U; index < observation.products.size(); ++index) {
+    const auto &product = observation.products[index];
+    auto &state = products_[index];
+    if (!state.initialized || state.key != product.key) {
+      state = {};
+      state.key = product.key;
+      state.initialized = true;
+    }
+    write_new_failures(errors, product, state);
+  }
+  errors << std::flush;
+}
+
+void RuntimeDiagnostics::write_pending_failures(
+    std::ostream &errors, const GatewayObservation &observation) {
+  process_failures(errors, observation);
+}
 
 void write_recovery_failure_diagnostics(std::ostream &output,
                                         const GatewayObservation &observation) {
@@ -548,11 +739,33 @@ int run_production_service(
          << " gateway_instance_id=" << gateway.gateway_instance_id() << '\n'
          << std::flush;
 
-  const auto received = signals.wait();
+  RuntimeDiagnostics diagnostics;
+  try {
+    diagnostics.observe(output, errors, serving);
+  } catch (const std::exception &error) {
+    errors << "gateway_observation=unavailable reason=" << error.what() << '\n'
+           << std::flush;
+  }
+
+  std::optional<int> received;
+  while (!received.has_value()) {
+    received = signals.wait_for(kRuntimeObservationInterval);
+    if (received.has_value()) {
+      break;
+    }
+    try {
+      diagnostics.observe(output, errors, gateway.observe());
+    } catch (const std::exception &error) {
+      errors << "gateway_observation=unavailable reason=" << error.what()
+             << '\n'
+             << std::flush;
+    }
+  }
+
   output << "gateway_state=stopping signal="
-         << (received == SIGINT    ? "SIGINT"
-             : received == SIGTERM ? "SIGTERM"
-                                   : "signal-wait-error")
+         << (*received == SIGINT    ? "SIGINT"
+             : *received == SIGTERM ? "SIGTERM"
+                                    : "signal-wait-error")
          << '\n'
          << std::flush;
   gateway.request_stop();
@@ -564,14 +777,14 @@ int run_production_service(
 
   const auto final = gateway.observe();
   const auto final_totals = totals(final);
-  write_recovery_failure_diagnostics(errors, final);
+  diagnostics.write_pending_failures(errors, final);
   output << "gateway_state=stopped contexts=" << final.tracked_contexts
          << " transports=" << final_totals.transports
          << " subscriptions=" << final_totals.subscriptions
          << " owners_joined=" << (final_totals.owners_joined ? "yes" : "no")
          << '\n'
          << std::flush;
-  return received == -1
+  return *received == -1
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                  || !exported
 #endif

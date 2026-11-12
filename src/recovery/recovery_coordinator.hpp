@@ -73,9 +73,10 @@ enum class RecoveryStartResult : std::uint8_t {
 
 namespace detail {
 
-inline constexpr std::size_t kMaximumRecoveryAttempts = 6U;
-inline constexpr std::size_t kRecoveryFailureHistoryCapacity =
-    kMaximumRecoveryAttempts + 1U;
+// Recoverable failures keep retrying. The backoff stages are capped at the
+// last value; the failure-history capacity is an independent diagnostic bound.
+inline constexpr std::size_t kRecoveryBackoffStages = 6U;
+inline constexpr std::size_t kRecoveryFailureHistoryCapacity = 7U;
 
 } // namespace detail
 

@@ -852,6 +852,118 @@ void recovery_diagnostic_formatter_supports_both_products() {
   REQUIRE(clean.str().empty());
 }
 
+void runtime_diagnostics_emit_changes_and_deduplicate() {
+  production::GatewayObservation observation;
+  observation.state = production::GatewayState::Serving;
+  observation.tracked_contexts = 2U;
+  observation.products.resize(2U);
+  auto &spot = observation.products[0];
+  spot.key = rt::spot_btcusdt_key();
+  spot.recovery.state = recovery::RecoveryState::Live;
+  spot.recovery.connection_generation = 1U;
+  spot.runtime.state = rt::RuntimeState::Live;
+  spot.runtime.projection_status = projection::ProjectionStatus::Synchronized;
+  spot.runtime.resident_subscription_count = 2U;
+  spot.runtime.owner_joined = true;
+  spot.recovery.active_transport_count = 1U;
+  auto &usdm = observation.products[1];
+  usdm.key = {common::VENUE_BINANCE, common::MARKET_USD_M_PERPETUAL, "BTCUSDT"};
+  usdm.recovery.state = recovery::RecoveryState::Backoff;
+  usdm.recovery.connection_generation = 2U;
+  usdm.recovery.total_recovery_count = 1U;
+  usdm.recovery.consecutive_recovery_attempts = 1U;
+  usdm.recovery.last_recovery_cause = recovery::RecoveryCause::TransportFailure;
+  usdm.recovery.failure_history_size = 1U;
+  usdm.recovery.failure_history[0].connection_generation = 1U;
+  usdm.recovery.failure_history[0].cause =
+      recovery::RecoveryCause::TransportFailure;
+  usdm.runtime.state = rt::RuntimeState::Faulted;
+  usdm.runtime.projection_status = projection::ProjectionStatus::NeedsResync;
+  usdm.runtime.resident_subscription_count = 1U;
+  usdm.runtime.owner_joined = true;
+  usdm.recovery.active_transport_count = 1U;
+
+  production::RuntimeDiagnostics diagnostics;
+  std::ostringstream output;
+  std::ostringstream errors;
+  diagnostics.observe(output, errors, observation);
+  const auto first_output = output.str();
+  const auto first_errors = errors.str();
+  REQUIRE(first_output.find("gateway_runtime_summary products=2 live=1 "
+                            "subscriptions=3 recoveries=1") !=
+          std::string::npos);
+  REQUIRE(first_output.find("gateway_runtime_product venue=VENUE_BINANCE "
+                            "market=MARKET_USD_M_PERPETUAL "
+                            "symbol=\"BTCUSDT\"") != std::string::npos);
+  REQUIRE(first_output.find("recovery_state=backoff") != std::string::npos);
+  REQUIRE(first_output.find("runtime_state=faulted") != std::string::npos);
+  REQUIRE(first_output.find("gateway_runtime_product venue=VENUE_BINANCE "
+                            "market=MARKET_SPOT") == std::string::npos);
+  REQUIRE(first_errors.find("gateway_recovery_failure venue=VENUE_BINANCE "
+                            "market=MARKET_USD_M_PERPETUAL") !=
+          std::string::npos);
+  REQUIRE(first_errors.find("generation=1 cause=transport-failure") !=
+          std::string::npos);
+
+  output.str({});
+  output.clear();
+  errors.str({});
+  errors.clear();
+  diagnostics.observe(output, errors, observation);
+  REQUIRE(output.str().find("gateway_runtime_summary") != std::string::npos);
+  REQUIRE(output.str().find("gateway_runtime_product") == std::string::npos);
+  REQUIRE(errors.str().find("gateway_recovery_failure") == std::string::npos);
+
+  usdm.recovery.state = recovery::RecoveryState::Live;
+  usdm.recovery.connection_generation = 3U;
+  usdm.runtime.state = rt::RuntimeState::Live;
+  usdm.runtime.projection_status = projection::ProjectionStatus::Synchronized;
+  output.str({});
+  output.clear();
+  diagnostics.observe(output, errors, observation);
+  REQUIRE(output.str().find("gateway_runtime_product venue=VENUE_BINANCE "
+                            "market=MARKET_USD_M_PERPETUAL") !=
+          std::string::npos);
+  REQUIRE(output.str().find("generation=3 recovery_state=live") !=
+          std::string::npos);
+  REQUIRE(errors.str().find("gateway_recovery_failure") == std::string::npos);
+
+  usdm.recovery.failure_history_size = 2U;
+  usdm.recovery.failure_history[1].connection_generation = 2U;
+  usdm.recovery.failure_history[1].cause = recovery::RecoveryCause::NeedsResync;
+  output.str({});
+  output.clear();
+  errors.str({});
+  errors.clear();
+  diagnostics.observe(output, errors, observation);
+  REQUIRE(output.str().find("gateway_runtime_product") == std::string::npos);
+  REQUIRE(errors.str().find("generation=2 cause=needs-resync") !=
+          std::string::npos);
+
+  errors.str({});
+  errors.clear();
+  diagnostics.write_pending_failures(errors, observation);
+  REQUIRE(errors.str().empty());
+
+  usdm.recovery.failure_history_size = 3U;
+  usdm.recovery.failure_history[2].connection_generation = 3U;
+  usdm.recovery.failure_history[2].cause =
+      recovery::RecoveryCause::TransportFailure;
+  diagnostics.write_pending_failures(errors, observation);
+  REQUIRE(errors.str().find("generation=3 cause=transport-failure") !=
+          std::string::npos);
+}
+
+void termination_signal_timed_wait_times_out() {
+  production::TerminationSignals signals;
+  const auto started = std::chrono::steady_clock::now();
+  const auto received = signals.wait_for(std::chrono::milliseconds{10});
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  REQUIRE(!received.has_value());
+  REQUIRE(!signals.requested());
+  REQUIRE(elapsed >= std::chrono::milliseconds{5});
+}
+
 void metadata_failures_are_ordered() {
   bool usdm_called = false;
   production::MetadataSources spot_failure;
@@ -1028,6 +1140,10 @@ int main() {
        dynamic_gateway_observation_is_canonical},
       {"RECOVERY_DIAGNOSTIC_FORMATTER_SUPPORTS_BOTH_PRODUCTS",
        recovery_diagnostic_formatter_supports_both_products},
+      {"RUNTIME_DIAGNOSTICS_EMIT_CHANGES_AND_DEDUPLICATE",
+       runtime_diagnostics_emit_changes_and_deduplicate},
+      {"TERMINATION_SIGNAL_TIMED_WAIT_TIMES_OUT",
+       termination_signal_timed_wait_times_out},
       {"METADATA_FAILURES_ORDERED", metadata_failures_are_ordered},
       {"CONFIG_CLI_FAILS_CLOSED", cli_is_fixed_and_fail_closed},
   };

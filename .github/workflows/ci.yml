@@ -91,6 +91,28 @@ jobs:
       - name: clang-format
         run: scripts/format-check.sh
 
+  consumer-tests:
+    name: BMDG consumer probe tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned client dependencies
+        run: python -m pip install 'grpcio==1.81.1' 'protobuf==6.33.5' 'pytest==8.4.2'
+      - name: Fetch pinned Contracts generated Python
+        run: |
+          mkdir -p build/contracts-src/src
+          curl -fsSL "https://github.com/tomohikoAmada/BinanceMarketDataContracts/archive/518880bdfa60948c3b65b6b3525d024526995166.tar.gz" -o build/contracts-src.tar.gz
+          tar -xzf build/contracts-src.tar.gz -C build
+          cp -R build/BinanceMarketDataContracts-*/src/binance_market_data build/contracts-src/src/
+      - name: Run consumer probe tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/tools:${{ github.workspace }}/build/contracts-src/src
+        run: python -m pytest tools/tests -q
+
   production-dependencies:
     name: Prepare BMDG production binaries (manual)
     if: github.event_name == 'workflow_dispatch' && inputs.prepare_dependencies
@@ -186,4 +208,92 @@ jobs:
       - name: Build real daemon and offline tests
         run: cmake --build build/production --parallel 4
       - name: Production offline regression
-        run: ctest --test-dir build/production --output-on-failure
+        run: |
+          set -o pipefail
+          ctest --test-dir build/production --output-on-failure 2>&1 | tee build/production-ctest.log
+      - name: Install release package
+        run: |
+          cmake --install build/production --prefix build/production-package
+          test -x build/production-package/bin/bmdg
+          install -D -m 0755 tools/consume_gateway.py build/production-package/tools/consume_gateway.py
+          install -D -m 0644 tools/requirements-client.txt build/production-package/tools/requirements-client.txt
+          install -D -m 0644 tools/README.md build/production-package/tools/README.md
+          install -D -m 0644 deployment/bmdg-consumer.service build/production-package/deployment/bmdg-consumer.service
+          mkdir -p build/production-package/contracts-src/src
+          curl -fsSL "https://github.com/tomohikoAmada/BinanceMarketDataContracts/archive/518880bdfa60948c3b65b6b3525d024526995166.tar.gz" -o build/contracts-src.tar.gz
+          tar -xzf build/contracts-src.tar.gz -C build
+          cp -R build/BinanceMarketDataContracts-*/src/binance_market_data build/production-package/contracts-src/src/
+          test -f build/production-package/tools/consume_gateway.py
+          test -f build/production-package/contracts-src/src/binance_market_data/gateway/v1/gateway_service_pb2_grpc.py
+          file build/production-package/bin/bmdg
+          ldd build/production-package/bin/bmdg | tee build/production-package/ldd.txt
+          if grep -q 'not found' build/production-package/ldd.txt; then
+            echo "unresolved shared library in bmdg" >&2
+            exit 1
+          fi
+          if grep -q 'production-conan' build/production-package/ldd.txt; then
+            echo "bmdg links a build-machine Conan cache path" >&2
+            exit 1
+          fi
+          sha256sum build/production-package/bin/bmdg | tee build/production-package/bmdg.sha256
+          cp build/production-ctest.log build/production-package/
+      - name: Record Projection dependency identity
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          graph = json.loads(Path("build/production-deps-graph.json").read_text())
+          nodes = graph["graph"]["nodes"].values()
+          selected = [n for n in nodes
+                      if (n.get("ref") or "").startswith("binance-market-data-projection/")]
+          if len(selected) != 1:
+              raise SystemExit(f"expected exactly one Projection node, got {len(selected)}")
+          node = selected[0]
+          lines = [
+              f"commit={os.environ.get('GITHUB_SHA')}",
+              f"projection_ref={node.get('ref')}",
+              f"projection_package_id={node.get('package_id')}",
+              f"projection_prev={node.get('prev')}",
+              f"projection_binary={node.get('binary')}",
+              "contracts_python_revision=518880bdfa60948c3b65b6b3525d024526995166",
+              "client_grpcio=1.81.1",
+              "client_protobuf=6.33.5",
+          ]
+          text = "\n".join(lines) + "\n"
+          Path("build/production-package/dependency-identity.txt").write_text(text)
+          print(text)
+          PY
+          cat build/production-package/dependency-identity.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Record Projection link inputs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          link = Path("build/production/CMakeFiles/bmdg.dir/link.txt")
+          text = link.read_text()
+          tokens = [t for t in text.split()
+                    if "binance-market-data-projection" in t or "bmd_projection" in t]
+          if not tokens:
+              raise SystemExit("no Projection link inputs found in bmdg link.txt")
+          Path("build/production-package/bmdg-link.txt").write_text(text)
+          Path("build/production-package/projection-link-inputs.txt").write_text(
+              "\n".join(tokens) + "\n")
+          print("\n".join(tokens))
+          PY
+          cat build/production-package/projection-link-inputs.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Create release archive
+        run: |
+          cp build/production-deps-graph.json build/production-package/
+          tar -C build/production-package -czf "build/bmdg-linux-x86_64-${GITHUB_SHA}.tar.gz" .
+          sha256sum "build/bmdg-linux-x86_64-${GITHUB_SHA}.tar.gz" > "build/bmdg-linux-x86_64-${GITHUB_SHA}.tar.gz.sha256"
+      - name: Upload Linux release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: bmdg-linux-x86_64-${{ github.sha }}
+          path: |
+            build/bmdg-linux-x86_64-${{ github.sha }}.tar.gz
+            build/bmdg-linux-x86_64-${{ github.sha }}.tar.gz.sha256
+          retention-days: 14
+          if-no-files-found: error
