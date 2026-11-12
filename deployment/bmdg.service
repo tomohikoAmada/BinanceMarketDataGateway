@@ -10,7 +10,8 @@ Type=simple
 #   useradd --system --home /nonexistent --shell /usr/sbin/nologin bmdg
 User=bmdg
 Group=bmdg
-ExecStart=/usr/local/bin/bmdg --config /etc/bmdg/gateway.json
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ExecStart=/opt/bmdg/current/bin/bmdg --config /etc/bmdg/gateway.json
 Restart=on-failure
 # Shared-IP API budget is in-memory while Binance counters persist. Keep a full
 # quiet window before restarting after a crash or replacement.
