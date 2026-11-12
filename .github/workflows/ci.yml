@@ -204,6 +204,7 @@ jobs:
             exit 1
           fi
           sha256sum build/production-package/bin/bmdg | tee build/production-package/bmdg.sha256
+          cp build/production-ctest.log build/production-package/
       - name: Record Projection dependency identity
         run: |
           python - <<'PY'
@@ -230,6 +231,23 @@ jobs:
           print(text)
           PY
           cat build/production-package/dependency-identity.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Record Projection link inputs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          link = Path("build/production/CMakeFiles/bmdg.dir/link.txt")
+          text = link.read_text()
+          tokens = [t for t in text.split()
+                    if "binance-market-data-projection" in t or "bmd_projection" in t]
+          if not tokens:
+              raise SystemExit("no Projection link inputs found in bmdg link.txt")
+          Path("build/production-package/bmdg-link.txt").write_text(text)
+          Path("build/production-package/projection-link-inputs.txt").write_text(
+              "\n".join(tokens) + "\n")
+          print("\n".join(tokens))
+          PY
+          cat build/production-package/projection-link-inputs.txt >> "$GITHUB_STEP_SUMMARY"
       - name: Create release archive
         run: |
           cp build/production-deps-graph.json build/production-package/
