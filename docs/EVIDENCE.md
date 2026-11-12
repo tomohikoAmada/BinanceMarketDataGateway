@@ -59,6 +59,18 @@ Actions `ubuntu-24.04`, GCC 13, C++20, Release.
 - Production daemon ON, tests ON, upstream link smoke OFF. CTest **27/27
   passed** (6.26 s), including four/twenty-product, RPC, recovery/rotation and
   production/daemon tests.
+- Projection same-commit CI was rerun after Contracts became public (run
+  [42979315668](https://github.com/tomohikoAmada/BinanceMarketDataProjection/actions/runs/42979315668)).
+  Ubuntu Clang Release, macOS Release, ASan/UBSan, canonical Quality, M4
+  static/shared macOS and the Conan package regression pass. Ubuntu GCC Release
+  and M4 shared Ubuntu GCC are **513/514**: the only failure is the M5
+  allocation-instrumentation test
+  `AllocationInstrumentationAdversarial.PointerReuseObservesFreshProvenance`
+  (`allocation_instrumentation_test.cpp:361`, pointer-reuse assertion). The
+  M-P2 tests (`M3AcceptedApplyMutatesInPlace`,
+  `M3EmptyAcceptedBatchDoesNoBookWork`) and production Core/Adapter tests pass.
+  This GCC-only test issue is inherited from `2de9b680`, not introduced by the
+  Gateway pin; it is not part of the Gateway production graph.
 - The final `bmdg` link line references `libbmd_projection_core.a` and
   `libbmd_projection_proto_adapter.a` from the new package; see the artifact's
   `projection-link-inputs.txt` and `bmdg-link.txt`.

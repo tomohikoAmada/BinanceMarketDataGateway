@@ -83,7 +83,9 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
   Projection `2de9b680` (RREV `00e889f34095258672fd46db83f0826a`, package ID
   `65e04c2c5034ee79c36b29706a827245e945a52a`, PREV
   `21e94d3728186f19e779d5ccce6e408c`); CTest 27/27. The final `bmdg` link
-  inputs and binary SHA are recorded in [EVIDENCE](EVIDENCE.md).
+  inputs and binary SHA are recorded in [EVIDENCE](EVIDENCE.md). Projection's
+  same-commit Ubuntu GCC suite has one inherited M5 allocation-instrumentation
+  test failure (513/514); all M-P2 and production Core/Adapter tests pass.
 - P1 (pre-optimization): 20-key normal/deep/batch CPU means 0.115 / 1.192 /
   1.242 cores on the local M3, including fixtures/clients; checked apply was
   the dominant owner cost. Projection M-P2.A/B/C now replace the full-book copy
