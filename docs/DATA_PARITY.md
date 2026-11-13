@@ -113,8 +113,23 @@ funding and OI require exchange data, not book derivation.
 
 ## Parity test
 
+Deterministic C++ decode entrypoints for cross-repo `R4 vs G7` same-input
+fixture comparison:
+
+- Spot WS: `protocol::parse_spot_depth_frame`, `protocol::parse_spot_combined_frame`
+  (`src/protocol/spot_protocol.hpp`)
+- USD-M WS: `protocol::parse_usdm_depth_frame`, `protocol::parse_usdm_public_frame`,
+  `protocol::parse_usdm_market_frame`, `protocol::parse_usdm_depth_snapshot`
+  (`src/protocol/usdm_protocol.hpp`)
+- USD-M Reference REST: `transport::parse_usdm_reference_payload`,
+  `transport::parse_usdm_instrument_definitions_batch`,
+  `transport::parse_usdm_instrument_definition` (`src/transport/usdm_reference.hpp`)
+
+Full parity steps:
+
 1. Record a window with BMDR/S-BMDR.
-2. Replay it through the offline normalizer.
+2. Replay it through the offline normalizer (and compare normalized fields on
+   identical WS/REST fixtures using the deterministic entrypoints above).
 3. Run BMDG against the same symbols/window and record gRPC output.
 4. Align by `(market, symbol, stream, U/u/pu)` or `lastUpdateId`.
 5. Compare event counts/order, timestamps, book hash at the same update ID,

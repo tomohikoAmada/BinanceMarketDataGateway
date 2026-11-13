@@ -1,14 +1,12 @@
 #include "protocol/usdm_protocol.hpp"
 
-#include <binance_market_data/common/v1/enums.pb.h>
+#include "protocol/json_helpers.hpp"
 
-#include <nlohmann/json.hpp>
+#include <binance_market_data/common/v1/enums.pb.h>
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <exception>
-#include <initializer_list>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -19,115 +17,15 @@ namespace binance_market_data::gateway::protocol {
 namespace {
 
 namespace common_wire = ::binance_market_data::common::v1;
-using Json = nlohmann::json;
-
-[[nodiscard]] protocol::ProtocolError error(protocol::ProtocolErrorCode code,
-                                            std::string field,
-                                            std::string message) {
-  return {code, std::move(field), std::move(message)};
-}
-
-[[nodiscard]] std::variant<Json, protocol::ProtocolError>
-parse_json(std::string_view payload) {
-  try {
-    auto parsed = Json::parse(payload.begin(), payload.end(), nullptr, false);
-    if (parsed.is_discarded()) {
-      return error(protocol::ProtocolErrorCode::InvalidJson, "payload",
-                   "payload is not valid JSON");
-    }
-    return parsed;
-  } catch (const std::exception &) {
-    return error(protocol::ProtocolErrorCode::InvalidJson, "payload",
-                 "payload could not be decoded");
-  }
-}
-
-[[nodiscard]] std::optional<std::uint64_t>
-unsigned_field(const Json &object, std::string_view name) {
-  const auto iterator = object.find(std::string{name});
-  if (iterator == object.end() || !iterator->is_number_unsigned()) {
-    return std::nullopt;
-  }
-  return iterator->get<std::uint64_t>();
-}
-
-[[nodiscard]] std::optional<std::string_view>
-string_field(const Json &object, std::string_view name) {
-  const auto iterator = object.find(std::string{name});
-  if (iterator == object.end() || !iterator->is_string()) {
-    return std::nullopt;
-  }
-  return iterator->get_ref<const std::string &>();
-}
-
-[[nodiscard]] bool
-has_required_keys(const Json &value,
-                  std::initializer_list<std::string_view> required) {
-  if (!value.is_object()) {
-    return false;
-  }
-  return std::all_of(required.begin(), required.end(), [&value](auto key) {
-    return value.contains(std::string{key});
-  });
-}
-
-template <typename RepeatedLevels>
-[[nodiscard]] std::optional<protocol::ProtocolError>
-append_levels(const Json &levels, RepeatedLevels *output,
-              std::string_view field_name) {
-  if (!levels.is_array()) {
-    return error(protocol::ProtocolErrorCode::InvalidField,
-                 std::string{field_name}, "depth side must be an array");
-  }
-  for (const auto &level : levels) {
-    if (!level.is_array() || level.size() != 2U || !level.at(0).is_string() ||
-        !level.at(1).is_string()) {
-      return error(protocol::ProtocolErrorCode::InvalidField,
-                   std::string{field_name},
-                   "each depth level must be exactly two strings");
-    }
-    auto *wire_level = output->Add();
-    wire_level->set_price(level.at(0).get_ref<const std::string &>());
-    wire_level->set_quantity(level.at(1).get_ref<const std::string &>());
-  }
-  return std::nullopt;
-}
-
-[[nodiscard]] bool plain_decimal(std::string_view value,
-                                 bool allow_zero) noexcept {
-  if (value.empty() || value.front() == '+' || value.front() == '-') {
-    return false;
-  }
-  const auto decimal = value.find('.');
-  if (decimal != std::string_view::npos &&
-      value.find('.', decimal + 1U) != std::string_view::npos) {
-    return false;
-  }
-  const auto whole = value.substr(0U, decimal);
-  const auto fraction = decimal == std::string_view::npos
-                            ? std::string_view{}
-                            : value.substr(decimal + 1U);
-  const auto digits = [](std::string_view text) {
-    return std::all_of(text.begin(), text.end(),
-                       [](char digit) { return digit >= '0' && digit <= '9'; });
-  };
-  if (whole.empty() || !digits(whole) ||
-      (decimal != std::string_view::npos && fraction.empty()) ||
-      !digits(fraction)) {
-    return false;
-  }
-  const auto nonzero = [](char digit) { return digit >= '1' && digit <= '9'; };
-  return allow_zero || std::any_of(value.begin(), value.end(), nonzero);
-}
-
-[[nodiscard]] std::optional<bool> boolean_field(const Json &object,
-                                                std::string_view name) {
-  const auto iterator = object.find(std::string{name});
-  if (iterator == object.end() || !iterator->is_boolean()) {
-    return std::nullopt;
-  }
-  return iterator->get<bool>();
-}
+using detail::append_levels;
+using detail::boolean_field;
+using detail::error;
+using detail::has_required_keys;
+using detail::Json;
+using detail::parse_json;
+using detail::plain_decimal;
+using detail::string_field;
+using detail::unsigned_field;
 
 template <typename Event>
 void populate_metadata(Event &event, common_wire::Stream stream,

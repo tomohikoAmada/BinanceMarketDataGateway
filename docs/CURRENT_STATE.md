@@ -35,13 +35,13 @@ PLAN_G2=PERSISTENT_RECOVERY_LINUX_RELEASE_27/27
 PLAN_G3=DIAGNOSTICS_CONSUMER_LINUX_RELEASE_27/27
 PLAN_G4=COMPLETE_VPS_2H_PASS_WITH_OBSERVATIONS
 M4_24H=STOPPED_EARLY_2026-11-12T14:13Z_NOT_PASSED
-C2_G5_G6=CANDIDATE_LOCAL_28/28_LINUX_AND_24H_PENDING
+C2_G5_G6=IMPLEMENTED_LOCAL_RELEASE_28/28_G5_G6_G7_G8ABD
 DEPLOYED_GATEWAY_RELEASE=5e47c59c0769de8b16b67f1aabdb095c3bacdf78
 DEPLOYED_GATEWAY_BINARY_SHA256=f57c1a13670f18a59f34c882c98532934f242d596e9e138852a35a78599c105f
 PLAN_G3C=OPEN_RESOURCE_LATENCY_BUDGET
 DATA_PARITY_SPOT=ALIGNED
-DATA_PARITY_USDM=IMPLEMENTED_C2_G5_G6_PENDING_R4
-DATA_PARITY_REST_SIDE_DATA=IMPLEMENTED_TYPED_REFERENCE_DATA_PENDING_R4
+DATA_PARITY_USDM=IMPLEMENTED_PENDING_R4_FIXTURE_PARITY
+DATA_PARITY_REST_SIDE_DATA=IMPLEMENTED_PENDING_R4_FIXTURE_PARITY
 ```
 
 ## Implemented
@@ -95,12 +95,19 @@ DATA_PARITY_REST_SIDE_DATA=IMPLEMENTED_TYPED_REFERENCE_DATA_PENDING_R4
   inputs and binary SHA are recorded in [EVIDENCE](EVIDENCE.md). Projection's
   same-commit Ubuntu GCC suite has one inherited M5 allocation-instrumentation
   test failure (513/514); all M-P2 and production Core/Adapter tests pass.
-- C2/G5/G6 local candidate: Contracts message RREV
-  `e79d88e75cb72b2bb7dae75e6d0b5646`, gRPC RREV
-  `0237321d3ab670daa101c3214f0778bd`, Projection P2 RREV
-  `ef04bfbc02bc79f6b31cb6e30588da76`; USD-M dual WS and typed
-  `REFERENCE_DATA` implemented; local Release CTest **28/28**. Linux package
-  IDs/PREVs and the joint 45-stream run remain G7 evidence.
+- G5/G6/G7 + G8-a/b/d local verification: Contracts pinned to
+  `24a209b1a415c4f4dd56d864eee9132135bc7237` (C++ RREV
+  `9739b82137e9d6437ef66bbbf81a9ddd`, gRPC RREV
+  `40c3986aa8e13d2f8ebb137adfea931d`) and Projection pinned to
+  `ebe86957e04dfed3bdda9ec58988d999419e4342` (RREV
+  `04cc16f91ddd2d214a1dd0efccac0eb3`, `proto_adapter=True`). Added per-product
+  `NumericSpec`/trading-status/missing-symbol quarantine, single-parse batch
+  `exchangeInfo` decoding (`parse_usdm_instrument_definitions_batch`), shared
+  `src/protocol/json_helpers.hpp`, strict 7-source coverage/staleness checks in
+  `consume_gateway.py` + `acceptance_monitor.py`, and 11-shard `--supervisor`
+  topology (`reference_data` co-located in `usdm-events-{symbol}`). Local
+  macOS Release CTest **28/28**, Python pytest **26/26**, and `format-check.sh`
+  pass; Linux CI packages and joint R4/24h deployment remain pending.
 - Plan G2: recoverable failures continue after the sixth attempt with a 30 s
   backoff cap; history remains seven entries. Seven-failure recovery, long
   `Retry-After` cancellation and Spot/USD-M product-isolation tests pass.

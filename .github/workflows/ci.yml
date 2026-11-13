@@ -105,7 +105,7 @@ jobs:
       - name: Fetch pinned Contracts generated Python
         run: |
           mkdir -p build/contracts-src/src
-          curl -fsSL "https://github.com/tomohikoAmada/BinanceMarketDataContracts/archive/0ecd024833c8b93ff95287e5fd7593060784b173.tar.gz" -o build/contracts-src.tar.gz
+          curl -fsSL "https://github.com/tomohikoAmada/BinanceMarketDataContracts/archive/24a209b1a415c4f4dd56d864eee9132135bc7237.tar.gz" -o build/contracts-src.tar.gz
           tar -xzf build/contracts-src.tar.gz -C build
           cp -R build/BinanceMarketDataContracts-*/src/binance_market_data build/contracts-src/src/
       - name: Run consumer probe tests
@@ -220,7 +220,7 @@ jobs:
           install -D -m 0644 tools/README.md build/production-package/tools/README.md
           install -D -m 0644 deployment/bmdg-consumer.service build/production-package/deployment/bmdg-consumer.service
           mkdir -p build/production-package/contracts-src/src
-          curl -fsSL "https://github.com/tomohikoAmada/BinanceMarketDataContracts/archive/0ecd024833c8b93ff95287e5fd7593060784b173.tar.gz" -o build/contracts-src.tar.gz
+          curl -fsSL "https://github.com/tomohikoAmada/BinanceMarketDataContracts/archive/24a209b1a415c4f4dd56d864eee9132135bc7237.tar.gz" -o build/contracts-src.tar.gz
           tar -xzf build/contracts-src.tar.gz -C build
           cp -R build/BinanceMarketDataContracts-*/src/binance_market_data build/production-package/contracts-src/src/
           test -f build/production-package/tools/consume_gateway.py
@@ -257,7 +257,7 @@ jobs:
               f"projection_package_id={node.get('package_id')}",
               f"projection_prev={node.get('prev')}",
               f"projection_binary={node.get('binary')}",
-              "contracts_python_revision=0ecd024833c8b93ff95287e5fd7593060784b173",
+              "contracts_python_revision=24a209b1a415c4f4dd56d864eee9132135bc7237",
               "client_grpcio=1.81.1",
               "client_protobuf=6.33.5",
           ]

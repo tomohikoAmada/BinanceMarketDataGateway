@@ -517,7 +517,12 @@ EventPublishResult EventPublication::publish(
     if (!slot.has_value()) {
       return EventPublishResult::InvariantFailure;
     }
-    reference_cache_[*slot] = event;
+    // An ERROR observation is delivered to current subscribers but must not
+    // replace the last usable VALID/EMPTY payload for new subscribers.
+    if (reference->status() !=
+        common_wire::REFERENCE_OBSERVATION_STATUS_ERROR) {
+      reference_cache_[*slot] = event;
+    }
   }
   for (const auto &channel : channels_) {
     if (channel == nullptr || channel->stream() != stream ||

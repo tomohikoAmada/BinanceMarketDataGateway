@@ -275,6 +275,14 @@ void service_publishes_explicit_error_and_empty_states() {
                                             advancing_clock()};
   REQUIRE(publication.open_generation(1U));
 
+  auto live_admitted =
+      publication.admit({"ref-errors-live", common::STREAM_REFERENCE_DATA,
+                         publication::kReferenceObservationSchema});
+  REQUIRE(std::holds_alternative<publication::AcceptedEventSubscription>(
+      live_admitted));
+  const auto live_channel =
+      std::get<publication::AcceptedEventSubscription>(live_admitted).channel;
+
   transport::UsdMReferenceSources sources;
   sources.fetch = [](std::string_view target) {
     if (target.find("openInterest") != std::string_view::npos) {
@@ -297,43 +305,285 @@ void service_publishes_explicit_error_and_empty_states() {
       {{key, &publication}}, {}, advancing_clock(), {}, std::move(sources)};
   service.poll_once_for_testing();
 
-  auto admitted =
-      publication.admit({"ref-errors", common::STREAM_REFERENCE_DATA,
+  {
+    auto accepted = live_channel->peek();
+    REQUIRE(accepted.has_value());
+    REQUIRE(std::holds_alternative<gateway_wire::SubscriptionAccepted>(
+        accepted.ordinary->payload));
+    REQUIRE_EQ(live_channel->acknowledge(accepted),
+               publication::EventAcknowledgeResult::Acknowledged);
+
+    auto first = live_channel->peek();
+    REQUIRE(first.has_value());
+    const auto &error_event =
+        std::get<std::shared_ptr<const protocol::NormalizedMarketEvent>>(
+            first.ordinary->payload);
+    REQUIRE(std::holds_alternative<market::ReferenceObservation>(*error_event));
+    const auto &error = std::get<market::ReferenceObservation>(*error_event);
+    REQUIRE_EQ(error.status(), common::REFERENCE_OBSERVATION_STATUS_ERROR);
+    REQUIRE_EQ(error.error_code(), "depth-http-status-429");
+    REQUIRE(!error.has_open_interest());
+    REQUIRE_EQ(live_channel->acknowledge(first),
+               publication::EventAcknowledgeResult::Acknowledged);
+
+    auto second = live_channel->peek();
+    REQUIRE(second.has_value());
+    const auto &empty_event =
+        std::get<std::shared_ptr<const protocol::NormalizedMarketEvent>>(
+            second.ordinary->payload);
+    REQUIRE_EQ(std::get<market::ReferenceObservation>(*empty_event).status(),
+               common::REFERENCE_OBSERVATION_STATUS_EMPTY);
+    REQUIRE(!std::get<market::ReferenceObservation>(*empty_event)
+                 .has_global_long_short_account_ratio());
+  }
+
+  // ERROR-only source is never cached as initial value for late subscribers.
+  auto late_admitted =
+      publication.admit({"ref-errors-late", common::STREAM_REFERENCE_DATA,
                          publication::kReferenceObservationSchema});
-  REQUIRE(
-      std::holds_alternative<publication::AcceptedEventSubscription>(admitted));
-  const auto channel =
-      std::get<publication::AcceptedEventSubscription>(admitted).channel;
-
-  auto accepted = channel->peek();
+  REQUIRE(std::holds_alternative<publication::AcceptedEventSubscription>(
+      late_admitted));
+  const auto late_channel =
+      std::get<publication::AcceptedEventSubscription>(late_admitted).channel;
+  auto accepted = late_channel->peek();
   REQUIRE(accepted.has_value());
-  REQUIRE(std::holds_alternative<gateway_wire::SubscriptionAccepted>(
-      accepted.ordinary->payload));
-  REQUIRE_EQ(channel->acknowledge(accepted),
+  REQUIRE_EQ(late_channel->acknowledge(accepted),
              publication::EventAcknowledgeResult::Acknowledged);
 
-  auto first = channel->peek();
-  REQUIRE(first.has_value());
-  const auto &error_event =
-      std::get<std::shared_ptr<const protocol::NormalizedMarketEvent>>(
-          first.ordinary->payload);
-  REQUIRE(std::holds_alternative<market::ReferenceObservation>(*error_event));
-  const auto &error = std::get<market::ReferenceObservation>(*error_event);
-  REQUIRE_EQ(error.status(), common::REFERENCE_OBSERVATION_STATUS_ERROR);
-  REQUIRE_EQ(error.error_code(), "depth-http-status-429");
-  REQUIRE(!error.has_open_interest());
-  REQUIRE_EQ(channel->acknowledge(first),
+  std::vector<common::ReferenceSourceKind> late_kinds;
+  for (;;) {
+    auto record = late_channel->peek();
+    if (!record.has_value()) {
+      break;
+    }
+    const auto &event =
+        std::get<std::shared_ptr<const protocol::NormalizedMarketEvent>>(
+            record.ordinary->payload);
+    const auto &obs = std::get<market::ReferenceObservation>(*event);
+    REQUIRE_EQ(obs.status(), common::REFERENCE_OBSERVATION_STATUS_EMPTY);
+    late_kinds.push_back(obs.source_kind());
+    REQUIRE_EQ(late_channel->acknowledge(record),
+               publication::EventAcknowledgeResult::Acknowledged);
+  }
+  REQUIRE_EQ(late_kinds.size(), 4U);
+  for (const auto kind : late_kinds) {
+    REQUIRE(kind != common::REFERENCE_SOURCE_KIND_OPEN_INTEREST);
+  }
+}
+
+void valid_then_error_preserves_cached_valid_for_new_subscriber() {
+  const rt::MarketKey key{common::VENUE_BINANCE, common::MARKET_USD_M_PERPETUAL,
+                          "BTCUSDT"};
+  publication::EventPublication publication{"gw-ref-preserve",
+                                            advancing_clock()};
+  REQUIRE(publication.open_generation(1U));
+
+  bool fail_open_interest = false;
+  transport::UsdMReferenceSources sources;
+  sources.fetch = [&fail_open_interest](std::string_view target) {
+    const auto received = rt::ClockSample{9000U, 9100U};
+    if (target.find("openInterest") != std::string_view::npos) {
+      if (fail_open_interest) {
+        return transport::HttpsJsonResult{
+            transport::NetworkError{transport::NetworkErrorCode::HttpStatus,
+                                    "oi-http",
+                                    "failed",
+                                    429U,
+                                    {}}};
+      }
+      return transport::HttpsJsonResult{transport::HttpsJsonResponse{
+          R"json({"openInterest":"42.5","time":8000})json", received, true}};
+    }
+    return transport::HttpsJsonResult{
+        transport::HttpsJsonResponse{"[]", received, true}};
+  };
+  sources.exchange_info_fetch = [] {
+    return transport::ExchangeInfoResult{transport::ExchangeInfoResponse{
+        exchange_info(), true, rt::ClockSample{9000U, 9100U}}};
+  };
+
+  transport::UsdMReferenceService service{
+      {{key, &publication}}, {}, advancing_clock(), {}, std::move(sources)};
+  service.poll_once_for_testing();
+  fail_open_interest = true;
+  service.poll_once_for_testing();
+
+  auto late_admitted =
+      publication.admit({"ref-late-valid", common::STREAM_REFERENCE_DATA,
+                         publication::kReferenceObservationSchema});
+  REQUIRE(std::holds_alternative<publication::AcceptedEventSubscription>(
+      late_admitted));
+  const auto late_channel =
+      std::get<publication::AcceptedEventSubscription>(late_admitted).channel;
+  auto accepted = late_channel->peek();
+  REQUIRE(accepted.has_value());
+  REQUIRE_EQ(late_channel->acknowledge(accepted),
              publication::EventAcknowledgeResult::Acknowledged);
 
-  auto second = channel->peek();
-  REQUIRE(second.has_value());
-  const auto &empty_event =
-      std::get<std::shared_ptr<const protocol::NormalizedMarketEvent>>(
-          second.ordinary->payload);
-  REQUIRE_EQ(std::get<market::ReferenceObservation>(*empty_event).status(),
-             common::REFERENCE_OBSERVATION_STATUS_EMPTY);
-  REQUIRE(!std::get<market::ReferenceObservation>(*empty_event)
-               .has_global_long_short_account_ratio());
+  bool saw_cached_valid_oi = false;
+  for (;;) {
+    auto record = late_channel->peek();
+    if (!record.has_value()) {
+      break;
+    }
+    const auto &event =
+        std::get<std::shared_ptr<const protocol::NormalizedMarketEvent>>(
+            record.ordinary->payload);
+    const auto &obs = std::get<market::ReferenceObservation>(*event);
+    if (obs.source_kind() == common::REFERENCE_SOURCE_KIND_OPEN_INTEREST) {
+      REQUIRE_EQ(obs.status(), common::REFERENCE_OBSERVATION_STATUS_VALID);
+      REQUIRE_EQ(obs.open_interest().open_interest(), "42.5");
+      saw_cached_valid_oi = true;
+    }
+    REQUIRE_EQ(late_channel->acknowledge(record),
+               publication::EventAcknowledgeResult::Acknowledged);
+  }
+  REQUIRE(saw_cached_valid_oi);
+}
+
+void parses_full_instrument_filter_fields() {
+  const std::string payload = R"json({
+    "serverTime": 1700000000000,
+    "symbols": [{
+      "symbol":"BTCUSDT",
+      "contractType":"PERPETUAL",
+      "status":"TRADING",
+      "baseAsset":"BTC",
+      "quoteAsset":"USDT",
+      "marginAsset":"USDT",
+      "pricePrecision":2,
+      "quantityPrecision":3,
+      "filters":[
+        {"filterType":"PRICE_FILTER","minPrice":"556.80","maxPrice":"4529764","tickSize":"0.10"},
+        {"filterType":"LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
+        {"filterType":"PERCENT_PRICE","multiplierUp":"1.1500","multiplierDown":"0.8500","multiplierDecimal":"4"},
+        {"filterType":"POSITION_RISK_CONTROL","positionControlSide":"NONE"}
+      ]
+    }]
+  })json";
+  const auto parsed = transport::parse_usdm_instrument_definition(
+      payload, rt::ClockSample{600U, 700U}, "full-filters", "BTCUSDT");
+  REQUIRE(std::holds_alternative<market::ReferenceObservation>(parsed));
+  const auto &inst =
+      std::get<market::ReferenceObservation>(parsed).instrument();
+  REQUIRE_EQ(inst.filters_size(), 4);
+  REQUIRE_EQ(inst.filters(0).tick_size(), "0.10");
+  REQUIRE_EQ(inst.filters(0).min_price(), "556.80");
+  REQUIRE_EQ(inst.filters(0).max_price(), "4529764");
+  REQUIRE_EQ(inst.filters(1).step_size(), "0.001");
+  REQUIRE_EQ(inst.filters(1).min_quantity(), "0.001");
+  REQUIRE_EQ(inst.filters(1).max_quantity(), "1000");
+  REQUIRE_EQ(inst.filters(2).multiplier_up(), "1.1500");
+  REQUIRE_EQ(inst.filters(2).multiplier_down(), "0.8500");
+  REQUIRE_EQ(inst.filters(2).multiplier_decimal(), "4");
+  REQUIRE_EQ(inst.filters(3).position_control_side(), "NONE");
+}
+
+void batch_parses_five_symbols_with_selected_precision_and_missing_error() {
+  // Deliberately include top-level pricePrecision/quantityPrecision that differ
+  // from per-symbol values to prove batch parse strictly uses *selected.
+  const std::string payload = R"json({
+    "serverTime": 1700000000000,
+    "pricePrecision": 99,
+    "quantityPrecision": 99,
+    "symbols": [
+      {"symbol":"BTCUSDT","contractType":"PERPETUAL","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT","marginAsset":"USDT","pricePrecision":2,"quantityPrecision":3,"filters":[]},
+      {"symbol":"ETHUSDT","contractType":"PERPETUAL","status":"TRADING","baseAsset":"ETH","quoteAsset":"USDT","marginAsset":"USDT","pricePrecision":2,"quantityPrecision":3,"filters":[]},
+      {"symbol":"BNBUSDT","contractType":"PERPETUAL","status":"TRADING","baseAsset":"BNB","quoteAsset":"USDT","marginAsset":"USDT","pricePrecision":2,"quantityPrecision":2,"filters":[]},
+      {"symbol":"XRPUSDT","contractType":"PERPETUAL","status":"TRADING","baseAsset":"XRP","quoteAsset":"USDT","marginAsset":"USDT","pricePrecision":4,"quantityPrecision":1,"filters":[]},
+      {"symbol":"ADAUSDT","contractType":"PERPETUAL","status":"TRADING","baseAsset":"ADA","quoteAsset":"USDT","marginAsset":"USDT","pricePrecision":5,"quantityPrecision":0,"filters":[]}
+    ]
+  })json";
+  const std::array<transport::UsdMInstrumentBatchRequest, 6> requests{{
+      {"BTCUSDT", "req-0"},
+      {"ETHUSDT", "req-1"},
+      {"BNBUSDT", "req-2"},
+      {"XRPUSDT", "req-3"},
+      {"ADAUSDT", "req-4"},
+      {"SOLUSDT", "req-5"},
+  }};
+  const auto batch_result = transport::parse_usdm_instrument_definitions_batch(
+      payload, rt::ClockSample{600U, 700U}, requests);
+  REQUIRE(std::holds_alternative<transport::UsdMInstrumentBatch>(batch_result));
+  const auto &batch = std::get<transport::UsdMInstrumentBatch>(batch_result);
+  REQUIRE_EQ(batch.symbols.size(), 6U);
+  const std::array<std::pair<int, int>, 5> expected_precisions{
+      {{2, 3}, {2, 3}, {2, 2}, {4, 1}, {5, 0}}};
+  for (std::size_t i = 0; i < 5U; ++i) {
+    REQUIRE(
+        std::holds_alternative<market::ReferenceObservation>(batch.symbols[i]));
+    const auto &obs = std::get<market::ReferenceObservation>(batch.symbols[i]);
+    REQUIRE_EQ(obs.symbol(), requests[i].symbol);
+    REQUIRE_EQ(obs.request_id(), requests[i].request_id);
+    REQUIRE_EQ(obs.instrument().price_precision(),
+               expected_precisions[i].first);
+    REQUIRE_EQ(obs.instrument().quantity_precision(),
+               expected_precisions[i].second);
+  }
+  REQUIRE(std::holds_alternative<transport::UsdMReferenceParseError>(
+      batch.symbols[5]));
+  REQUIRE_EQ(
+      std::get<transport::UsdMReferenceParseError>(batch.symbols[5]).field,
+      "symbol");
+}
+
+void quarantines_only_incompatible_usdm_product() {
+  const rt::MarketKey btc_key{common::VENUE_BINANCE,
+                              common::MARKET_USD_M_PERPETUAL, "BTCUSDT"};
+  const rt::MarketKey eth_key{common::VENUE_BINANCE,
+                              common::MARKET_USD_M_PERPETUAL, "ETHUSDT"};
+  publication::EventPublication btc_pub{"gw-q-btc", advancing_clock()};
+  publication::EventPublication eth_pub{"gw-q-eth", advancing_clock()};
+  REQUIRE(btc_pub.open_generation(1U));
+  REQUIRE(eth_pub.open_generation(1U));
+
+  const auto price_scale =
+      binance_market_data::projection::v1::DecimalScale::create(1U);
+  const auto qty_scale =
+      binance_market_data::projection::v1::DecimalScale::create(3U);
+  REQUIRE(price_scale.has_value() && qty_scale.has_value());
+  const binance_market_data::projection::v1::NumericSpec baseline_spec{
+      *price_scale, *qty_scale};
+
+  std::string btc_reason;
+  std::string eth_reason;
+  int phase = 0;
+  transport::UsdMReferenceSources sources;
+  sources.fetch = [](std::string_view) {
+    return transport::HttpsJsonResult{transport::HttpsJsonResponse{
+        "[]", rt::ClockSample{9000U, 9100U}, true}};
+  };
+  sources.exchange_info_fetch = [&phase] {
+    const std::string btc_tick = phase == 0 ? "0.10" : "0.01";
+    const std::string body =
+        R"json({"serverTime":1700000001000,"symbols":[
+          {"symbol":"BTCUSDT","contractType":"PERPETUAL","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT","marginAsset":"USDT","pricePrecision":2,"quantityPrecision":3,"filters":[{"filterType":"PRICE_FILTER","tickSize":")json" +
+        btc_tick +
+        R"json("},{"filterType":"LOT_SIZE","stepSize":"0.001"}]},
+          {"symbol":"ETHUSDT","contractType":"PERPETUAL","status":"TRADING","baseAsset":"ETH","quoteAsset":"USDT","marginAsset":"USDT","pricePrecision":2,"quantityPrecision":3,"filters":[{"filterType":"PRICE_FILTER","tickSize":"0.10"},{"filterType":"LOT_SIZE","stepSize":"0.001"}]}
+        ]})json";
+    return transport::ExchangeInfoResult{transport::ExchangeInfoResponse{
+        body, true, rt::ClockSample{9500U, 9600U}}};
+  };
+
+  transport::UsdMReferenceService service{
+      {{btc_key, &btc_pub, baseline_spec,
+        [&btc_reason](std::string_view r) { btc_reason = std::string{r}; }},
+       {eth_key, &eth_pub, baseline_spec,
+        [&eth_reason](std::string_view r) { eth_reason = std::string{r}; }}},
+      {},
+      advancing_clock(),
+      {},
+      std::move(sources)};
+
+  service.poll_once_for_testing();
+  REQUIRE(btc_reason.empty());
+  REQUIRE(eth_reason.empty());
+
+  phase = 1;
+  service.poll_once_for_testing();
+  REQUIRE_EQ(btc_reason, "numeric_spec_changed");
+  REQUIRE(eth_reason.empty());
 }
 
 void reference_budget_counts_zero_weight_attempts() {
@@ -360,6 +610,13 @@ int main() {
        service_caches_each_source_and_preserves_sequences},
       {"SERVICE_ERROR_AND_EMPTY_STATES",
        service_publishes_explicit_error_and_empty_states},
+      {"VALID_THEN_ERROR_PRESERVES_CACHE",
+       valid_then_error_preserves_cached_valid_for_new_subscriber},
+      {"FULL_INSTRUMENT_FILTER_FIELDS", parses_full_instrument_filter_fields},
+      {"BATCH_FIVE_SYMBOLS_AND_MISSING_ERROR",
+       batch_parses_five_symbols_with_selected_precision_and_missing_error},
+      {"QUARANTINES_ONLY_INCOMPATIBLE_PRODUCT",
+       quarantines_only_incompatible_usdm_product},
       {"ZERO_WEIGHT_REQUEST_BUDGET",
        reference_budget_counts_zero_weight_attempts},
   };

@@ -1,7 +1,10 @@
 #include "production/production_metadata.hpp"
 
+#include "transport/usdm_reference.hpp"
+
 #include <algorithm>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -155,10 +158,39 @@ acquire_production_metadata(const std::vector<runtime::MarketKey> &market_keys,
     result.products.push_back(std::move(*product));
   }
   if (usdm_body.has_value()) {
-    result.usdm_references.reserve(usdm_indices.size());
+    std::vector<transport::UsdMInstrumentBatchRequest> requests;
+    requests.reserve(usdm_indices.size());
     for (const auto index : usdm_indices) {
-      result.usdm_references.push_back(
-          {canonical_keys[index], *usdm_body, usdm_response.received_at});
+      requests.push_back({canonical_keys[index].symbol, ""});
+    }
+    const auto batch_result =
+        transport::parse_usdm_instrument_definitions_batch(
+            *usdm_body, usdm_response.received_at, requests);
+    std::shared_ptr<const std::string> shared_body;
+    result.usdm_references.reserve(usdm_indices.size());
+    for (std::size_t offset = 0; offset < usdm_indices.size(); ++offset) {
+      const auto index = usdm_indices[offset];
+      if (const auto *batch =
+              std::get_if<transport::UsdMInstrumentBatch>(&batch_result)) {
+        if (const auto *observation = std::get_if<
+                binance_market_data::market::v1::ReferenceObservation>(
+                &batch->symbols[offset])) {
+          result.usdm_references.push_back({canonical_keys[index],
+                                            {},
+                                            usdm_response.received_at,
+                                            *observation,
+                                            nullptr});
+          continue;
+        }
+      }
+      if (shared_body == nullptr) {
+        shared_body = std::make_shared<const std::string>(*usdm_body);
+      }
+      result.usdm_references.push_back({canonical_keys[index],
+                                        {},
+                                        usdm_response.received_at,
+                                        std::nullopt,
+                                        shared_body});
     }
   }
   return result;

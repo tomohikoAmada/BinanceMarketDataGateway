@@ -314,7 +314,7 @@ ProductRuntime::ProductRuntime(MarketKey key, core::NumericSpec numeric_spec,
                                std::string gateway_instance_id,
                                ProductRuntimeOptions options)
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
-    : key_{validate_product_key(std::move(key))},
+    : key_{validate_product_key(std::move(key))}, numeric_spec_{numeric_spec},
       performance_baseline_{make_performance_baseline(
           key_, clock, options.performance_baseline_limits)},
       runtime_{runtime_limits_with_baseline(options.runtime_limits,
@@ -328,7 +328,7 @@ ProductRuntime::ProductRuntime(MarketKey key, core::NumericSpec numeric_spec,
           coordinator_options(key_, event_publication_, performance_baseline_),
           std::move(options.recovery_test)} {}
 #else
-    : key_{validate_product_key(std::move(key))},
+    : key_{validate_product_key(std::move(key))}, numeric_spec_{numeric_spec},
       runtime_{options.runtime_limits, clock, numeric_spec, identity_for(key_),
                std::move(options.runtime_test)},
       event_publication_{std::move(gateway_instance_id), clock,
@@ -365,6 +365,10 @@ void ProductRuntime::stop() noexcept {
 }
 
 const MarketKey &ProductRuntime::key() const noexcept { return key_; }
+
+const core::NumericSpec &ProductRuntime::numeric_spec() const noexcept {
+  return numeric_spec_;
+}
 
 ProductKind ProductRuntime::kind() const noexcept {
   return product_kind_for(key_);

@@ -43,14 +43,16 @@ namespace {
 
 [[nodiscard]] std::unique_ptr<transport::UsdMReferenceService>
 make_reference_service(composition::ConfiguredProductRuntimeSet &products,
-                       const GatewayOptions &options) {
+                       GatewayOptions &options) {
   if (!options.enable_usdm_reference) {
     return nullptr;
   }
   std::vector<transport::UsdMReferenceProduct> references;
   for (const auto &owner : products.products()) {
     if (owner->key().market == runtime::common_wire::MARKET_USD_M_PERPETUAL) {
-      references.push_back({owner->key(), &owner->event_publication()});
+      references.push_back(
+          {owner->key(), &owner->event_publication(), owner->numeric_spec(),
+           [owner_ptr = owner.get()](std::string_view) { owner_ptr->stop(); }});
     }
   }
   if (references.empty()) {
@@ -58,11 +60,15 @@ make_reference_service(composition::ConfiguredProductRuntimeSet &products,
   }
   std::vector<transport::UsdMReferenceSeed> seeds;
   seeds.reserve(options.usdm_reference_seeds.size());
-  for (const auto &seed : options.usdm_reference_seeds) {
-    seeds.push_back({seed.key, seed.exchange_info_body, seed.received_at});
+  for (auto &seed : options.usdm_reference_seeds) {
+    seeds.push_back({seed.key, std::move(seed.exchange_info_body),
+                     seed.received_at, std::move(seed.instrument),
+                     std::move(seed.shared_exchange_info_body)});
   }
   return std::make_unique<transport::UsdMReferenceService>(
-      std::move(references), std::move(seeds), transport::sample_real_clock);
+      std::move(references), std::move(seeds), transport::sample_real_clock,
+      std::move(options.usdm_reference_options),
+      std::move(options.usdm_reference_sources));
 }
 
 } // namespace
@@ -236,6 +242,11 @@ bool ProductionGateway::write_performance_baseline(std::ostream &output) const {
 composition::ConfiguredProductRuntimeSet &
 ProductionGateway::products_for_testing() noexcept {
   return products_;
+}
+
+transport::UsdMReferenceService *
+ProductionGateway::reference_service_for_testing() noexcept {
+  return reference_service_.get();
 }
 
 bool ProductionGateway::stop_requested(

@@ -1,8 +1,8 @@
 #include "transport/usdm_reference.hpp"
 
+#include "protocol/json_helpers.hpp"
+#include "protocol/spot_protocol.hpp"
 #include "transport/usdm_transport.hpp"
-
-#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -11,82 +11,22 @@
 #include <exception>
 #include <limits>
 #include <optional>
+#include <unordered_map>
 #include <utility>
 
 namespace binance_market_data::gateway::transport {
 
 namespace common_wire = ::binance_market_data::common::v1;
-using Json = nlohmann::json;
+using Json = protocol::detail::Json;
+using protocol::detail::non_negative_integer_field;
+using protocol::detail::plain_decimal;
+using protocol::detail::string_field;
 
 namespace {
-
-[[nodiscard]] std::optional<std::string_view>
-string_field(const Json &object, std::string_view name) {
-  const auto iterator = object.find(std::string{name});
-  if (iterator == object.end() || !iterator->is_string()) {
-    return std::nullopt;
-  }
-  return iterator->get_ref<const std::string &>();
-}
-
-[[nodiscard]] std::optional<std::uint64_t>
-unsigned_field(const Json &object, std::string_view name) {
-  const auto iterator = object.find(std::string{name});
-  if (iterator == object.end()) {
-    return std::nullopt;
-  }
-  if (iterator->is_number_unsigned()) {
-    return iterator->get<std::uint64_t>();
-  }
-  if (iterator->is_number_integer()) {
-    const auto value = iterator->get<std::int64_t>();
-    if (value >= 0) {
-      return static_cast<std::uint64_t>(value);
-    }
-  }
-  return std::nullopt;
-}
 
 [[nodiscard]] UsdMReferenceParseError parse_error(std::string field,
                                                   std::string message) {
   return {std::move(field), std::move(message)};
-}
-
-[[nodiscard]] bool decimal_text(std::string_view value, bool allow_negative,
-                                bool allow_zero) noexcept {
-  if (value.empty()) {
-    return false;
-  }
-  if (value.front() == '-') {
-    if (!allow_negative) {
-      return false;
-    }
-    value.remove_prefix(1U);
-  } else if (value.front() == '+') {
-    return false;
-  }
-  if (value.empty()) {
-    return false;
-  }
-  const auto dot = value.find('.');
-  if (dot != std::string_view::npos &&
-      value.find('.', dot + 1U) != std::string_view::npos) {
-    return false;
-  }
-  const auto whole = value.substr(0U, dot);
-  const auto fraction = dot == std::string_view::npos ? std::string_view{}
-                                                      : value.substr(dot + 1U);
-  const auto digits = [](std::string_view text) {
-    return std::all_of(text.begin(), text.end(),
-                       [](char c) { return c >= '0' && c <= '9'; });
-  };
-  if (whole.empty() || !digits(whole) ||
-      (dot != std::string_view::npos && fraction.empty()) ||
-      !digits(fraction)) {
-    return false;
-  }
-  return allow_zero || std::any_of(value.begin(), value.end(),
-                                   [](char c) { return c >= '1' && c <= '9'; });
 }
 
 [[nodiscard]] market::ReferenceObservation
@@ -133,8 +73,8 @@ parse_periodic(UsdMReferenceKind kind, const Json &payload,
   switch (kind) {
   case UsdMReferenceKind::OpenInterest: {
     const auto value = string_field(*entry, "openInterest");
-    const auto source_time = unsigned_field(*entry, "time");
-    if (!value.has_value() || !decimal_text(*value, false, true)) {
+    const auto source_time = non_negative_integer_field(*entry, "time");
+    if (!value.has_value() || !plain_decimal(*value, true)) {
       return parse_error("openInterest",
                          "openInterest must be a non-negative decimal");
     }
@@ -152,12 +92,10 @@ parse_periodic(UsdMReferenceKind kind, const Json &payload,
     const auto ratio = string_field(*entry, "longShortRatio");
     const auto long_account = string_field(*entry, "longAccount");
     const auto short_account = string_field(*entry, "shortAccount");
-    const auto source_time = unsigned_field(*entry, "timestamp");
-    if (!ratio.has_value() || !decimal_text(*ratio, false, true) ||
-        !long_account.has_value() ||
-        !decimal_text(*long_account, false, true) ||
-        !short_account.has_value() ||
-        !decimal_text(*short_account, false, true)) {
+    const auto source_time = non_negative_integer_field(*entry, "timestamp");
+    if (!ratio.has_value() || !plain_decimal(*ratio, true) ||
+        !long_account.has_value() || !plain_decimal(*long_account, true) ||
+        !short_account.has_value() || !plain_decimal(*short_account, true)) {
       return parse_error("ratio",
                          "longShortRatio/longAccount/shortAccount must be "
                          "non-negative decimals");
@@ -182,10 +120,10 @@ parse_periodic(UsdMReferenceKind kind, const Json &payload,
     const auto ratio = string_field(*entry, "buySellRatio");
     const auto buy = string_field(*entry, "buyVol");
     const auto sell = string_field(*entry, "sellVol");
-    const auto source_time = unsigned_field(*entry, "timestamp");
-    if (!ratio.has_value() || !decimal_text(*ratio, false, true) ||
-        !buy.has_value() || !decimal_text(*buy, false, true) ||
-        !sell.has_value() || !decimal_text(*sell, false, true)) {
+    const auto source_time = non_negative_integer_field(*entry, "timestamp");
+    if (!ratio.has_value() || !plain_decimal(*ratio, true) ||
+        !buy.has_value() || !plain_decimal(*buy, true) || !sell.has_value() ||
+        !plain_decimal(*sell, true)) {
       return parse_error(
           "taker", "buySellRatio/buyVol/sellVol must be non-negative decimals");
     }
@@ -232,14 +170,30 @@ void append_filters(const Json &symbol_json,
     };
     if (*type == "PRICE_FILTER") {
       set("tickSize", &market::InstrumentFilter::set_price);
+      set("tickSize", &market::InstrumentFilter::set_tick_size);
+      set("minPrice", &market::InstrumentFilter::set_min_price);
+      set("maxPrice", &market::InstrumentFilter::set_max_price);
     } else if (*type == "LOT_SIZE" || *type == "MARKET_LOT_SIZE") {
       set("stepSize", &market::InstrumentFilter::set_quantity);
+      set("stepSize", &market::InstrumentFilter::set_step_size);
+      set("minQty", &market::InstrumentFilter::set_min_quantity);
+      set("maxQty", &market::InstrumentFilter::set_max_quantity);
     } else if (*type == "MIN_NOTIONAL" || *type == "NOTIONAL") {
       set("notional", &market::InstrumentFilter::set_notional);
     } else if (*type == "MAX_NUM_ORDERS" || *type == "MAX_NUM_ALGO_ORDERS") {
-      const auto value = unsigned_field(filter, "limit");
+      const auto value = non_negative_integer_field(filter, "limit");
       if (value.has_value()) {
         item->set_limit(*value);
+      }
+    } else if (*type == "PERCENT_PRICE" || *type == "PERCENT_PRICE_BY_SIDE") {
+      set("multiplierUp", &market::InstrumentFilter::set_multiplier_up);
+      set("multiplierDown", &market::InstrumentFilter::set_multiplier_down);
+      set("multiplierDecimal",
+          &market::InstrumentFilter::set_multiplier_decimal);
+    } else if (*type == "POSITION_RISK_CONTROL") {
+      const auto value = string_field(filter, "positionControlSide");
+      if (value.has_value()) {
+        item->set_position_control_side(std::string{*value});
       }
     }
   }
@@ -327,44 +281,52 @@ parse_usdm_reference_payload(UsdMReferenceKind kind, std::string_view payload,
   return parse_periodic(kind, decoded, received_at, request_id, symbol);
 }
 
-UsdMReferenceParseResult parse_usdm_instrument_definition(
-    std::string_view payload, runtime::ClockSample received_at,
-    std::string_view request_id, std::string_view symbol) {
-  Json decoded;
-  try {
-    decoded = Json::parse(payload.begin(), payload.end(), nullptr, false);
-  } catch (const std::exception &) {
-    return parse_error("payload", "exchangeInfo is not valid JSON");
+namespace {
+
+[[nodiscard]] std::vector<market::RateLimit>
+extract_rate_limits(const Json &decoded) {
+  std::vector<market::RateLimit> items;
+  const auto rate_limits = decoded.find("rateLimits");
+  if (rate_limits == decoded.end() || !rate_limits->is_array()) {
+    return items;
   }
-  if (decoded.is_discarded() || !decoded.is_object()) {
-    return parse_error("payload", "exchangeInfo must be a JSON object");
-  }
-  const auto symbols = decoded.find("symbols");
-  if (symbols == decoded.end() || !symbols->is_array()) {
-    return parse_error("symbols", "exchangeInfo symbols must be an array");
-  }
-  const Json *selected = nullptr;
-  for (const auto &candidate : *symbols) {
-    if (!candidate.is_object()) {
+  for (const auto &limit : *rate_limits) {
+    if (!limit.is_object()) {
       continue;
     }
-    const auto candidate_symbol = string_field(candidate, "symbol");
-    if (candidate_symbol.has_value() && *candidate_symbol == symbol) {
-      selected = &candidate;
-      break;
+    const auto type = string_field(limit, "rateLimitType");
+    const auto interval = string_field(limit, "interval");
+    const auto interval_num = non_negative_integer_field(limit, "intervalNum");
+    const auto value = non_negative_integer_field(limit, "limit");
+    if (!type.has_value() || !interval.has_value() ||
+        !interval_num.has_value() || !value.has_value() ||
+        *interval_num > static_cast<std::uint64_t>(
+                            std::numeric_limits<std::int32_t>::max())) {
+      continue;
     }
+    market::RateLimit item;
+    item.set_rate_limit_type(std::string{*type});
+    item.set_interval(std::string{*interval});
+    item.set_interval_num(static_cast<std::uint32_t>(*interval_num));
+    item.set_limit(*value);
+    items.push_back(std::move(item));
   }
-  if (selected == nullptr) {
-    return parse_error("symbol", "exchangeInfo does not contain symbol");
-  }
+  return items;
+}
+
+[[nodiscard]] UsdMReferenceParseResult build_instrument_observation(
+    const Json &selected, std::optional<std::uint64_t> server_time,
+    const std::vector<market::RateLimit> &rate_limits,
+    runtime::ClockSample received_at, std::string_view request_id,
+    std::string_view symbol) {
   auto observation =
       base_observation(common_wire::REFERENCE_SOURCE_KIND_INSTRUMENT,
                        received_at, request_id, symbol);
   auto *reference = observation.mutable_instrument();
   reference->set_symbol_present(true);
-  const auto set_required = [selected](std::string_view name,
-                                       std::string *target) {
-    const auto value = string_field(*selected, name);
+  const auto set_required = [&selected](std::string_view name,
+                                        std::string *target) {
+    const auto value = string_field(selected, name);
     if (value.has_value()) {
       *target = std::string{*value};
     }
@@ -379,13 +341,9 @@ UsdMReferenceParseResult parse_usdm_instrument_definition(
                        "exchangeInfo symbol identity fields are required");
   }
   const auto price_precision =
-      decoded.contains("pricePrecision")
-          ? unsigned_field(decoded, "pricePrecision")
-          : unsigned_field(*selected, "pricePrecision");
+      non_negative_integer_field(selected, "pricePrecision");
   const auto quantity_precision =
-      decoded.contains("quantityPrecision")
-          ? unsigned_field(decoded, "quantityPrecision")
-          : unsigned_field(*selected, "quantityPrecision");
+      non_negative_integer_field(selected, "quantityPrecision");
   if (!price_precision.has_value() || !quantity_precision.has_value() ||
       *price_precision > static_cast<std::uint64_t>(
                              std::numeric_limits<std::int32_t>::max()) ||
@@ -397,44 +355,100 @@ UsdMReferenceParseResult parse_usdm_instrument_definition(
   reference->set_price_precision(static_cast<std::int32_t>(*price_precision));
   reference->set_quantity_precision(
       static_cast<std::int32_t>(*quantity_precision));
-  if (const auto onboard = unsigned_field(*selected, "onboardDate");
+  if (const auto onboard = non_negative_integer_field(selected, "onboardDate");
       onboard.has_value()) {
     reference->set_onboard_time_ms(*onboard);
   }
-  if (const auto delivery = unsigned_field(*selected, "deliveryDate");
+  if (const auto delivery =
+          non_negative_integer_field(selected, "deliveryDate");
       delivery.has_value()) {
     reference->set_delivery_time_ms(*delivery);
   }
-  const auto server_time = unsigned_field(decoded, "serverTime");
   if (server_time.has_value()) {
     reference->set_server_time_ms(*server_time);
     observation.set_source_time_ms(*server_time);
   }
-  append_filters(*selected, reference);
-  const auto rate_limits = decoded.find("rateLimits");
-  if (rate_limits != decoded.end() && rate_limits->is_array()) {
-    for (const auto &limit : *rate_limits) {
-      if (!limit.is_object()) {
-        continue;
-      }
-      const auto type = string_field(limit, "rateLimitType");
-      const auto interval = string_field(limit, "interval");
-      const auto interval_num = unsigned_field(limit, "intervalNum");
-      const auto value = unsigned_field(limit, "limit");
-      if (!type.has_value() || !interval.has_value() ||
-          !interval_num.has_value() || !value.has_value() ||
-          *interval_num > static_cast<std::uint64_t>(
-                              std::numeric_limits<std::int32_t>::max())) {
-        continue;
-      }
-      auto *item = reference->add_rate_limits();
-      item->set_rate_limit_type(std::string{*type});
-      item->set_interval(std::string{*interval});
-      item->set_interval_num(static_cast<std::uint32_t>(*interval_num));
-      item->set_limit(*value);
-    }
+  append_filters(selected, reference);
+  for (const auto &limit : rate_limits) {
+    *reference->add_rate_limits() = limit;
   }
   return observation;
+}
+
+} // namespace
+
+UsdMInstrumentBatchResult parse_usdm_instrument_definitions_batch(
+    std::string_view payload, runtime::ClockSample received_at,
+    std::span<const UsdMInstrumentBatchRequest> requests) {
+  Json decoded;
+  try {
+    decoded = Json::parse(payload.begin(), payload.end(), nullptr, false);
+  } catch (const std::exception &) {
+    return parse_error("payload", "exchangeInfo is not valid JSON");
+  }
+  if (decoded.is_discarded() || !decoded.is_object()) {
+    return parse_error("payload", "exchangeInfo must be a JSON object");
+  }
+  const auto symbols = decoded.find("symbols");
+  if (symbols == decoded.end() || !symbols->is_array()) {
+    return parse_error("symbols", "exchangeInfo symbols must be an array");
+  }
+
+  std::unordered_map<std::string_view, std::vector<std::size_t>> requested;
+  requested.reserve(requests.size());
+  for (std::size_t index = 0; index < requests.size(); ++index) {
+    requested[requests[index].symbol].push_back(index);
+  }
+
+  std::vector<const Json *> selected(requests.size(), nullptr);
+  for (const auto &candidate : *symbols) {
+    if (!candidate.is_object()) {
+      continue;
+    }
+    const auto candidate_symbol = string_field(candidate, "symbol");
+    if (!candidate_symbol.has_value()) {
+      continue;
+    }
+    const auto match = requested.find(*candidate_symbol);
+    if (match == requested.end()) {
+      continue;
+    }
+    for (const auto index : match->second) {
+      if (selected[index] == nullptr) {
+        selected[index] = &candidate;
+      }
+    }
+  }
+
+  const auto server_time = non_negative_integer_field(decoded, "serverTime");
+  const auto rate_limits = extract_rate_limits(decoded);
+
+  UsdMInstrumentBatch batch;
+  batch.symbols.reserve(requests.size());
+  for (std::size_t index = 0; index < requests.size(); ++index) {
+    if (selected[index] == nullptr) {
+      batch.symbols.push_back(
+          parse_error("symbol", "exchangeInfo does not contain symbol"));
+      continue;
+    }
+    batch.symbols.push_back(build_instrument_observation(
+        *selected[index], server_time, rate_limits, received_at,
+        requests[index].request_id, requests[index].symbol));
+  }
+  return batch;
+}
+
+UsdMReferenceParseResult parse_usdm_instrument_definition(
+    std::string_view payload, runtime::ClockSample received_at,
+    std::string_view request_id, std::string_view symbol) {
+  const std::array<UsdMInstrumentBatchRequest, 1> request{
+      UsdMInstrumentBatchRequest{symbol, request_id}};
+  auto batch =
+      parse_usdm_instrument_definitions_batch(payload, received_at, request);
+  if (const auto *failure = std::get_if<UsdMReferenceParseError>(&batch)) {
+    return *failure;
+  }
+  return std::move(std::get<UsdMInstrumentBatch>(batch).symbols.front());
 }
 
 } // namespace binance_market_data::gateway::transport
@@ -471,6 +485,85 @@ make_error_observation(UsdMReferenceKind kind, runtime::ClockSample received_at,
   return code;
 }
 
+[[nodiscard]] std::string_view
+seed_body_view(const UsdMReferenceSeed &seed) noexcept {
+  if (seed.shared_exchange_info_body != nullptr) {
+    return *seed.shared_exchange_info_body;
+  }
+  return seed.exchange_info_body;
+}
+
+[[nodiscard]] std::optional<projection::v1::NumericSpec>
+extract_numeric_spec_from_instrument(
+    const market::InstrumentReference &reference) {
+  std::optional<std::string_view> tick_size;
+  std::optional<std::string_view> step_size;
+  for (const auto &filter : reference.filters()) {
+    if (filter.filter_type() == "PRICE_FILTER") {
+      if (tick_size.has_value() || filter.tick_size().empty()) {
+        return std::nullopt;
+      }
+      tick_size = filter.tick_size();
+    } else if (filter.filter_type() == "LOT_SIZE") {
+      if (step_size.has_value() || filter.step_size().empty()) {
+        return std::nullopt;
+      }
+      step_size = filter.step_size();
+    }
+  }
+  if (!tick_size.has_value() || !step_size.has_value()) {
+    return std::nullopt;
+  }
+  const auto price_scale = protocol::decimal_scale_from_quantum(*tick_size);
+  const auto quantity_scale = protocol::decimal_scale_from_quantum(*step_size);
+  if (!std::holds_alternative<projection::v1::DecimalScale>(price_scale) ||
+      !std::holds_alternative<projection::v1::DecimalScale>(quantity_scale)) {
+    return std::nullopt;
+  }
+  return projection::v1::NumericSpec{
+      std::get<projection::v1::DecimalScale>(price_scale),
+      std::get<projection::v1::DecimalScale>(quantity_scale)};
+}
+
+[[nodiscard]] std::optional<std::string> check_incompatible_definition(
+    const UsdMReferenceProduct &product,
+    const std::optional<std::pair<std::int32_t, std::int32_t>>
+        &baseline_precisions,
+    const UsdMReferenceParseResult &parsed) {
+  if (const auto *failure = std::get_if<UsdMReferenceParseError>(&parsed)) {
+    if (failure->field == "symbol") {
+      return std::string{"symbol_missing"};
+    }
+    return "instrument_parse_error:" + failure->field;
+  }
+  const auto &observation = std::get<market::ReferenceObservation>(parsed);
+  if (!observation.has_instrument()) {
+    return std::string{"missing_instrument_payload"};
+  }
+  const auto &instrument = observation.instrument();
+  if (instrument.contract_type() != "PERPETUAL") {
+    return "contract_type_changed:" + instrument.contract_type();
+  }
+  if (instrument.trading_status() != "TRADING") {
+    return "trading_status_changed:" + instrument.trading_status();
+  }
+  if (baseline_precisions.has_value() &&
+      (instrument.price_precision() != baseline_precisions->first ||
+       instrument.quantity_precision() != baseline_precisions->second)) {
+    return std::string{"precision_changed"};
+  }
+  if (product.baseline_numeric_spec.has_value()) {
+    const auto current_spec = extract_numeric_spec_from_instrument(instrument);
+    if (!current_spec.has_value()) {
+      return std::string{"missing_or_invalid_numeric_filter"};
+    }
+    if (*current_spec != *product.baseline_numeric_spec) {
+      return std::string{"numeric_spec_changed"};
+    }
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 struct UsdMReferenceService::Impl final {
@@ -479,7 +572,8 @@ struct UsdMReferenceService::Impl final {
        UsdMReferenceOptions options, UsdMReferenceSources sources)
       : products_{std::move(products)}, seeds_{std::move(seeds)},
         clock_{std::move(clock)}, options_{std::move(options)},
-        sources_{std::move(sources)} {
+        sources_{std::move(sources)}, baseline_precisions_(products_.size()),
+        quarantined_(products_.size(), false) {
     if (!clock_) {
       throw std::invalid_argument{"reference service clock is required"};
     }
@@ -593,31 +687,102 @@ private:
     }
   }
 
+  void
+  record_baseline_precision(std::size_t product_index,
+                            const market::ReferenceObservation &observation) {
+    if (!baseline_precisions_[product_index].has_value() &&
+        observation.has_instrument()) {
+      baseline_precisions_[product_index] =
+          std::pair<std::int32_t, std::int32_t>{
+              observation.instrument().price_precision(),
+              observation.instrument().quantity_precision()};
+    }
+  }
+
   void publish_seed_instruments() {
+    struct PendingSeed final {
+      std::size_t product_index{0U};
+      const UsdMReferenceSeed *seed{nullptr};
+      std::string request_id;
+    };
+    std::vector<PendingSeed> pending;
+    pending.reserve(seeds_.size());
     for (const auto &seed : seeds_) {
       const auto product = std::find_if(
           products_.begin(), products_.end(),
           [&seed](const auto &candidate) { return candidate.key == seed.key; });
-      if (product == products_.end() || seed.exchange_info_body.empty()) {
+      if (product == products_.end()) {
         continue;
       }
-      const auto request_id =
-          next_request_id(UsdMReferenceKind::Instrument, seed.key.symbol);
-      const auto parsed = parse_usdm_instrument_definition(
-          seed.exchange_info_body, seed.received_at, request_id,
-          seed.key.symbol);
-      if (const auto *observation =
-              std::get_if<market::ReferenceObservation>(&parsed)) {
-        const auto published = publish(*product, *observation);
+      const auto product_index =
+          static_cast<std::size_t>(product - products_.begin());
+      if (seed.instrument.has_value()) {
+        auto observation = *seed.instrument;
+        if (observation.request_id().empty()) {
+          observation.set_request_id(
+              next_request_id(UsdMReferenceKind::Instrument, seed.key.symbol));
+        }
+        record_baseline_precision(product_index, observation);
+        const auto published = publish(*product, std::move(observation));
         record_request(false, published);
-      } else {
-        record_request(true, false);
+        continue;
+      }
+      if (seed_body_view(seed).empty()) {
+        continue;
+      }
+      pending.push_back(
+          {product_index, &seed,
+           next_request_id(UsdMReferenceKind::Instrument, seed.key.symbol)});
+    }
+    std::vector<bool> processed(pending.size(), false);
+    for (std::size_t i = 0; i < pending.size(); ++i) {
+      if (processed[i]) {
+        continue;
+      }
+      const auto body = seed_body_view(*pending[i].seed);
+      const auto received_at = pending[i].seed->received_at;
+      std::vector<std::size_t> group_indices;
+      std::vector<UsdMInstrumentBatchRequest> requests;
+      for (std::size_t j = i; j < pending.size(); ++j) {
+        if (processed[j]) {
+          continue;
+        }
+        const auto &candidate = *pending[j].seed;
+        if (seed_body_view(candidate) == body &&
+            candidate.received_at.utc_ns == received_at.utc_ns &&
+            candidate.received_at.monotonic_ns == received_at.monotonic_ns) {
+          processed[j] = true;
+          group_indices.push_back(j);
+          requests.push_back({products_[pending[j].product_index].key.symbol,
+                              pending[j].request_id});
+        }
+      }
+      const auto batch_result =
+          parse_usdm_instrument_definitions_batch(body, received_at, requests);
+      if (std::holds_alternative<UsdMReferenceParseError>(batch_result)) {
+        for (std::size_t k = 0; k < group_indices.size(); ++k) {
+          record_request(true, false);
+        }
+        continue;
+      }
+      const auto &batch = std::get<UsdMInstrumentBatch>(batch_result);
+      for (std::size_t k = 0; k < group_indices.size(); ++k) {
+        const auto product_index = pending[group_indices[k]].product_index;
+        if (const auto *observation =
+                std::get_if<market::ReferenceObservation>(&batch.symbols[k])) {
+          record_baseline_precision(product_index, *observation);
+          const auto published =
+              publish(products_[product_index], *observation);
+          record_request(false, published);
+        } else {
+          record_request(true, false);
+        }
       }
     }
   }
 
   void execute_periodic(std::size_t index, UsdMReferenceKind kind) {
-    if (index >= products_.size()) {
+    if (index >= products_.size() || is_quarantined(index)) {
       return;
     }
     const auto &product = products_[index];
@@ -649,6 +814,11 @@ private:
     record_request(true, false);
   }
 
+  [[nodiscard]] bool is_quarantined(std::size_t index) const noexcept {
+    std::lock_guard lock{mutex_};
+    return quarantined_[index];
+  }
+
   void execute_exchange_info_refresh() {
     if (products_.empty()) {
       return;
@@ -664,13 +834,65 @@ private:
     const auto &body = std::get<ExchangeInfoResponse>(response);
     const auto received_at =
         body.received_at.utc_ns == 0U ? clock_() : body.received_at;
-    for (const auto &product : products_) {
-      const auto request_id =
-          next_request_id(UsdMReferenceKind::Instrument, product.key.symbol);
-      const auto parsed = parse_usdm_instrument_definition(
-          body.body, received_at, request_id, product.key.symbol);
+
+    std::vector<std::size_t> active_indices;
+    std::vector<std::string> request_ids;
+    std::vector<UsdMInstrumentBatchRequest> requests;
+    active_indices.reserve(products_.size());
+    request_ids.reserve(products_.size());
+    requests.reserve(products_.size());
+    for (std::size_t i = 0; i < products_.size(); ++i) {
+      if (is_quarantined(i)) {
+        continue;
+      }
+      active_indices.push_back(i);
+      request_ids.push_back(next_request_id(UsdMReferenceKind::Instrument,
+                                            products_[i].key.symbol));
+      requests.push_back({products_[i].key.symbol, request_ids.back()});
+    }
+    if (requests.empty()) {
+      return;
+    }
+
+    const auto batch_result = parse_usdm_instrument_definitions_batch(
+        body.body, received_at, requests);
+    if (std::holds_alternative<UsdMReferenceParseError>(batch_result)) {
+      for (std::size_t i = 0; i < active_indices.size(); ++i) {
+        record_request(true, false);
+      }
+      return;
+    }
+
+    const auto &batch = std::get<UsdMInstrumentBatch>(batch_result);
+    for (std::size_t offset = 0; offset < active_indices.size(); ++offset) {
+      const auto product_index = active_indices[offset];
+      const auto &product = products_[product_index];
+      const auto &parsed = batch.symbols[offset];
+      const bool guard_enabled =
+          product.baseline_numeric_spec.has_value() ||
+          static_cast<bool>(product.on_incompatible_definition);
+      if (guard_enabled) {
+        const auto reason = check_incompatible_definition(
+            product, baseline_precisions_[product_index], parsed);
+        if (reason.has_value()) {
+          {
+            std::lock_guard lock{mutex_};
+            quarantined_[product_index] = true;
+          }
+          auto error_observation = make_error_observation(
+              UsdMReferenceKind::Instrument, received_at, request_ids[offset],
+              product.key.symbol, "incompatible:" + *reason);
+          static_cast<void>(publish(product, std::move(error_observation)));
+          record_request(true, false);
+          if (product.on_incompatible_definition) {
+            product.on_incompatible_definition(*reason);
+          }
+          continue;
+        }
+      }
       if (const auto *observation =
               std::get_if<market::ReferenceObservation>(&parsed)) {
+        record_baseline_precision(product_index, *observation);
         const auto published = publish(product, *observation);
         record_request(false, published);
       } else {
@@ -728,9 +950,12 @@ private:
   const UsdMReferenceOptions options_;
   UsdMReferenceSources sources_;
 
+  std::vector<std::optional<std::pair<std::int32_t, std::int32_t>>>
+      baseline_precisions_;
   mutable std::mutex mutex_;
   std::condition_variable condition_;
   UsdMReferenceObservation observation_;
+  std::vector<bool> quarantined_;
   std::uint64_t next_request_sequence_{1U};
   std::thread thread_;
   bool stop_requested_{false};

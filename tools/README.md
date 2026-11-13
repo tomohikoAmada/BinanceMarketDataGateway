@@ -32,12 +32,13 @@ gap reasons, errors and fixed-bucket latency facts. Negative UTC-clock
 latencies are retained, not clamped.
 
 Production acceptance uses `--supervisor`: one order-book process, one process
-per Spot symbol (aggTrade + BookTicker), one process per USD-M symbol (aggTrade
-+ bookTicker + markPrice + liquidation) and one reference process per USD-M
-symbol. A burst on one high-rate stream therefore cannot starve order books or
-other symbols. The supervisor merges the shard summaries and runs one
-`GetGatewayStatus` loop. Every derived subscription counts against the
-gateway's 48-stream cap.
+per Spot symbol (`aggTrade` + `bookTicker`), and one process per USD-M symbol
+(`aggTrade` + `bookTicker` + `markPrice` + `liquidation` + `reference_data`;
+11 child processes for the 5-pair 45-stream profile). A burst on one high-rate
+stream therefore cannot starve order books or other symbols. The supervisor
+merges the shard summaries, validates per-source reference coverage/staleness,
+and runs one `GetGatewayStatus` loop. Every derived subscription counts against
+the gateway's 48-stream cap.
 
 `acceptance_monitor.py` samples the running units, consumer summary, archive
 timer and host resources into JSONL and writes a final verdict. It is an

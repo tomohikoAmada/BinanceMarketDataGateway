@@ -97,7 +97,8 @@ make_event(common::Stream stream, std::uint64_t id) {
 }
 
 [[nodiscard]] std::shared_ptr<const protocol::NormalizedSpotEvent>
-make_reference(common::ReferenceSourceKind kind, std::string value) {
+make_reference(common::ReferenceSourceKind kind, std::string value,
+               bool error = false) {
   market::ReferenceObservation reference;
   reference.set_schema_version("reference-observation.v1");
   reference.set_venue(common::VENUE_BINANCE);
@@ -106,7 +107,13 @@ make_reference(common::ReferenceSourceKind kind, std::string value) {
   reference.set_request_id("reference-request");
   reference.set_source_kind(kind);
   reference.set_receive_time_utc_ns(50U);
-  reference.set_status(common::REFERENCE_OBSERVATION_STATUS_VALID);
+  reference.set_status(error ? common::REFERENCE_OBSERVATION_STATUS_ERROR
+                             : common::REFERENCE_OBSERVATION_STATUS_VALID);
+  if (error) {
+    reference.set_error_code("upstream-failed");
+    return std::make_shared<const protocol::NormalizedSpotEvent>(
+        std::move(reference));
+  }
   if (kind == common::REFERENCE_SOURCE_KIND_OPEN_INTEREST) {
     reference.mutable_open_interest()->set_open_interest(std::move(value));
   } else {
@@ -341,6 +348,11 @@ void reference_cache_replays_and_clears_depth_baseline() {
           make_reference(common::REFERENCE_SOURCE_KIND_DEPTH_BASELINE, "100"),
           1U),
       publication::EventPublishResult::Published);
+  REQUIRE_EQ(
+      publication.publish(
+          make_reference(common::REFERENCE_SOURCE_KIND_OPEN_INTEREST, "", true),
+          1U),
+      publication::EventPublishResult::Published);
 
   REQUIRE(publication.quiesce_generation(1U));
   REQUIRE(publication.close_generation_replaced(1U));
@@ -362,6 +374,12 @@ void reference_cache_replays_and_clears_depth_baseline() {
   REQUIRE(std::holds_alternative<market::ReferenceObservation>(*event));
   REQUIRE_EQ(std::get<market::ReferenceObservation>(*event).source_kind(),
              common::REFERENCE_SOURCE_KIND_OPEN_INTEREST);
+  REQUIRE_EQ(std::get<market::ReferenceObservation>(*event).status(),
+             common::REFERENCE_OBSERVATION_STATUS_VALID);
+  REQUIRE_EQ(std::get<market::ReferenceObservation>(*event)
+                 .open_interest()
+                 .open_interest(),
+             "123");
   acknowledge(channel, cached);
   REQUIRE(!channel->peek().has_value());
 }

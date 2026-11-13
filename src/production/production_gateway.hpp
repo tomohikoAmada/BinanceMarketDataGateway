@@ -3,6 +3,7 @@
 #include "composition/multi_market_runtime.hpp"
 #include "grpc/grpc_service.hpp"
 #include "production/reference_seed.hpp"
+#include "transport/usdm_reference.hpp"
 
 #include <binance_market_data/projection/v1/projection_state/book_projection.hpp>
 
@@ -19,9 +20,6 @@
 #include <string_view>
 #include <vector>
 namespace composition = binance_market_data::gateway::composition;
-namespace binance_market_data::gateway::transport {
-class UsdMReferenceService;
-}
 
 namespace binance_market_data::gateway::production {
 
@@ -66,6 +64,8 @@ struct GatewayOptions final {
   // tests keep it off unless they explicitly exercise the scheduler.
   bool enable_usdm_reference{false};
   std::vector<UsdMReferenceSeed> usdm_reference_seeds;
+  transport::UsdMReferenceOptions usdm_reference_options{};
+  transport::UsdMReferenceSources usdm_reference_sources{};
 };
 
 struct ProductObservation final {
@@ -116,6 +116,8 @@ public:
   // these accessors or any acceptance-only recovery hook.
   [[nodiscard]] composition::ConfiguredProductRuntimeSet &
   products_for_testing() noexcept;
+  [[nodiscard]] transport::UsdMReferenceService *
+  reference_service_for_testing() noexcept;
 
 private:
   [[nodiscard]] bool

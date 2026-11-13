@@ -76,6 +76,7 @@ public:
   void stop() noexcept;
 
   [[nodiscard]] const MarketKey &key() const noexcept;
+  [[nodiscard]] const core::NumericSpec &numeric_spec() const noexcept;
   [[nodiscard]] ProductKind kind() const noexcept;
   [[nodiscard]] runtime::MarketRuntime &runtime() noexcept;
   [[nodiscard]] recovery::RecoveryCoordinator &recovery() noexcept;
@@ -87,6 +88,7 @@ public:
 
 private:
   const MarketKey key_;
+  const core::NumericSpec numeric_spec_;
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   std::shared_ptr<performance::ProductTraceBuffer> performance_baseline_;
 #endif

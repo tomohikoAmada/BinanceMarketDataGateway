@@ -21,8 +21,20 @@ RECORDER_STATUS = {
 }
 ARCHIVE_UNIT = "sbmdr-archive.service"
 ARCHIVE_TIMER = "sbmdr-archive.timer"
+ARCHIVE_LOG = Path("/var/log/sbmdr/archive.jsonl")
+SBMDR_ROOTS = Path("/etc/sbmdr/roots.json")
+SBMDR_METADATA_ROOTS = Path("/etc/sbmdr/metadata-roots.json")
 RECORDER_UNITS = ("sbmdr-recorder@spot", "sbmdr-recorder@usdm")
 GIB = 1024 * 1024 * 1024
+PERIODIC_REFERENCE_SOURCE_NAMES = frozenset(
+    {
+        "REFERENCE_SOURCE_KIND_OPEN_INTEREST",
+        "REFERENCE_SOURCE_KIND_TOP_LONG_SHORT_ACCOUNT_RATIO",
+        "REFERENCE_SOURCE_KIND_TOP_LONG_SHORT_POSITION_RATIO",
+        "REFERENCE_SOURCE_KIND_GLOBAL_LONG_SHORT_ACCOUNT_RATIO",
+        "REFERENCE_SOURCE_KIND_TAKER_BUY_SELL_VOLUME",
+    }
+)
 
 
 def utc_now() -> str:
@@ -131,6 +143,162 @@ def state_counts(summary: dict[str, Any]) -> tuple[int, int, int]:
     return live, non_live, unknown
 
 
+def summarize_reference_streams(summary: dict[str, Any]) -> dict[str, Any]:
+    streams = summary.get("streams", [])
+    reference_streams = [
+        stream for stream in streams if stream.get("stream") == "reference_data"
+    ]
+    unhealthy: dict[str, Any] = {}
+    ok_streams = 0
+    error_sources = 0
+    missing_sources = 0
+    max_periodic_age: float | None = None
+    for stream in reference_streams:
+        issues = stream.get("reference_issues", [])
+        if stream.get("reference_ok") is True and not issues:
+            ok_streams += 1
+        else:
+            unhealthy[stream.get("key", "")] = {
+                "issues": issues,
+                "valid": stream.get("current_valid", False),
+                "events": stream.get("event_count", 0),
+            }
+        source_states = stream.get("reference_source_states", {})
+        if isinstance(source_states, dict):
+            for name, source in source_states.items():
+                if not isinstance(source, dict):
+                    continue
+                status = source.get("status")
+                if status == "ERROR":
+                    error_sources += 1
+                elif status == "missing":
+                    missing_sources += 1
+                if name in PERIODIC_REFERENCE_SOURCE_NAMES:
+                    age = source.get("receive_age_seconds")
+                    if isinstance(age, (int, float)):
+                        max_periodic_age = (
+                            float(age)
+                            if max_periodic_age is None
+                            else max(max_periodic_age, float(age))
+                        )
+    return {
+        "reference_streams": len(reference_streams),
+        "reference_ok_streams": ok_streams,
+        "reference_error_sources": error_sources,
+        "reference_missing_sources": missing_sources,
+        "reference_max_periodic_receive_age_seconds": max_periodic_age,
+        "reference_unhealthy": unhealthy,
+    }
+
+
+def _read_json_dict(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size if path.is_file() else 0
+    except OSError:
+        return 0
+
+
+def read_r3_backlog(
+    *,
+    archive_log: Path = ARCHIVE_LOG,
+    roots_path: Path = SBMDR_ROOTS,
+    metadata_roots_path: Path = SBMDR_METADATA_ROOTS,
+    now_seconds: float | None = None,
+) -> dict[str, Any]:
+    now_ts = time.time() if now_seconds is None else now_seconds
+    last_archive = read_last_jsonl(archive_log)
+    archive_finish = last_archive.get("finish_utc_seconds")
+    archive_failed = last_archive.get("failed")
+    migration_failures = 0
+    markets = last_archive.get("markets", {})
+    if isinstance(markets, dict):
+        for entry in markets.values():
+            if isinstance(entry, dict):
+                exit_code = entry.get("migration_exit")
+                if isinstance(exit_code, int) and exit_code != 0:
+                    migration_failures += 1
+
+    roots = _read_json_dict(roots_path)
+    cold_roots = _read_json_dict(metadata_roots_path)
+    pending_migrate = 0
+    oldest_pending_age: float | None = None
+    hot_metadata_bytes = 0
+    cold_metadata_bytes = 0
+    for market, raw_root in roots.items():
+        if not isinstance(raw_root, str) or not raw_root:
+            continue
+        partitions_dir = Path(raw_root) / "partitions"
+        if not partitions_dir.is_dir():
+            continue
+        cold_raw = cold_roots.get(market)
+        cold_partitions = (
+            Path(cold_raw) / "partitions"
+            if isinstance(cold_raw, str) and cold_raw
+            else None
+        )
+        try:
+            entries = sorted(partitions_dir.iterdir())
+        except OSError:
+            continue
+        for partition_dir in entries:
+            if not partition_dir.is_dir():
+                continue
+            hot_metadata_bytes += _file_size(
+                partition_dir / "state" / "catalog.sqlite"
+            )
+            hot_metadata_bytes += _file_size(partition_dir / "partition.json")
+            meta = _read_json_dict(partition_dir / "partition.json")
+            if meta.get("state") == "closed" and cold_partitions is not None:
+                cold_dir = cold_partitions / partition_dir.name
+                if not (cold_dir / "partition.json").is_file():
+                    pending_migrate += 1
+                    closed_ts = meta.get("closed_utc_seconds")
+                    if not isinstance(closed_ts, (int, float)):
+                        try:
+                            closed_ts = (
+                                partition_dir / "partition.json"
+                            ).stat().st_mtime
+                        except OSError:
+                            closed_ts = None
+                    if isinstance(closed_ts, (int, float)):
+                        age = max(0.0, float(now_ts) - float(closed_ts))
+                        oldest_pending_age = (
+                            age
+                            if oldest_pending_age is None
+                            else max(oldest_pending_age, age)
+                        )
+        if cold_partitions is not None and cold_partitions.is_dir():
+            try:
+                for partition_dir in cold_partitions.iterdir():
+                    if partition_dir.is_dir():
+                        cold_metadata_bytes += _file_size(
+                            partition_dir / "state" / "catalog.sqlite"
+                        )
+            except OSError:
+                pass
+    return {
+        "last_archive_finish_utc_seconds": archive_finish,
+        "last_archive_failed": archive_failed,
+        "migration_failures": migration_failures,
+        "pending_migrate_partitions": pending_migrate,
+        "oldest_pending_age_seconds": (
+            round(oldest_pending_age, 1)
+            if oldest_pending_age is not None
+            else None
+        ),
+        "hot_metadata_bytes": hot_metadata_bytes,
+        "cold_metadata_bytes": cold_metadata_bytes,
+    }
+
+
 def collect(
     index: int,
     started: float,
@@ -161,6 +329,8 @@ def collect(
     totals = summary.get("totals", {})
     status = summary.get("status", {})
     live, non_live, unknown = state_counts(summary)
+    reference_summary = summarize_reference_streams(summary)
+    r3_backlog = read_r3_backlog()
     streams = summary.get("streams", [])
     order_books = [
         stream for stream in streams if stream.get("stream") == "order_book"
@@ -258,6 +428,7 @@ def collect(
             "markets_non_live": non_live,
             "markets_unknown": unknown,
             "gap_streams": gap_streams,
+            **reference_summary,
         },
         "gateway": {
             "active": gateway.get("ActiveState", ""),
@@ -276,6 +447,7 @@ def collect(
             "timer_active": archive_timer.get("ActiveState", ""),
             "timer_sub_state": archive_timer.get("SubState", ""),
             "last_trigger_utc": archive_timer.get("LastTriggerUSec", ""),
+            **r3_backlog,
         },
         "resources": {
             "nproc": nproc,
@@ -420,6 +592,27 @@ def final_verdict(
     if consumer.get("markets_non_live"):
         reasons.append(
             f"{consumer.get('markets_non_live')} status markets not Live"
+        )
+    if (
+        expected is not None
+        and consumer.get("reference_streams") is not None
+        and consumer.get("reference_streams") != expected.get("usdm")
+    ):
+        reasons.append(
+            f"reference_streams={consumer.get('reference_streams')} != {expected.get('usdm')}"
+        )
+    if (
+        consumer.get("reference_streams")
+        and consumer.get("reference_ok_streams")
+        != consumer.get("reference_streams")
+    ):
+        reasons.append(
+            f"reference_ok_streams={consumer.get('reference_ok_streams')} != "
+            f"{consumer.get('reference_streams')}"
+        )
+    if last.get("archive", {}).get("migration_failures"):
+        warnings.append(
+            f"archive metadata migration failures={last['archive']['migration_failures']}"
         )
     if consumer.get("exit_reason") not in (None, "running"):
         reasons.append(f"consumer exit_reason={consumer.get('exit_reason')}")

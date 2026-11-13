@@ -1098,6 +1098,99 @@ void contracts_c0_time_reaches_projection_and_both_grpc_streams() {
   require_fully_stopped(gateway);
 }
 
+void incompatible_usdm_reference_stops_only_affected_product() {
+  auto configured = support::gateway_products();
+  const rt::MarketKey eth_usdm_key{common::VENUE_BINANCE,
+                                   common::MARKET_USD_M_PERPETUAL, "ETHUSDT"};
+  auto eth_state = std::make_shared<support::AttemptState>();
+  configured.specifications.push_back(support::make_test_product_spec(
+      eth_usdm_key, support::AttemptMode::Live, eth_state));
+
+  std::atomic<bool> incompatible_btc{false};
+  configured.gateway.enable_usdm_reference = true;
+  configured.gateway.usdm_reference_sources.fetch = [](std::string_view) {
+    return transport::HttpsJsonResult{transport::HttpsJsonResponse{
+        "[]", rt::ClockSample{9000U, 9100U}, true}};
+  };
+  configured.gateway.usdm_reference_sources.exchange_info_fetch =
+      [&incompatible_btc] {
+        const std::string btc_tick = incompatible_btc.load() ? "0.10" : "0.01";
+        const std::string body =
+            R"json({"serverTime":1700000002000,"symbols":[
+              {"symbol":"BTCUSDT","contractType":"PERPETUAL","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT","marginAsset":"USDT","pricePrecision":2,"quantityPrecision":3,"filters":[{"filterType":"PRICE_FILTER","tickSize":")json" +
+            btc_tick +
+            R"json("},{"filterType":"LOT_SIZE","stepSize":"0.001"}]},
+              {"symbol":"ETHUSDT","contractType":"PERPETUAL","status":"TRADING","baseAsset":"ETH","quoteAsset":"USDT","marginAsset":"USDT","pricePrecision":2,"quantityPrecision":3,"filters":[{"filterType":"PRICE_FILTER","tickSize":"0.01"},{"filterType":"LOT_SIZE","stepSize":"0.001"}]}
+            ]})json";
+        return transport::ExchangeInfoResult{transport::ExchangeInfoResponse{
+            body, true, rt::ClockSample{9500U, 9600U}}};
+      };
+
+  auto gateway = make_gateway(std::move(configured));
+  REQUIRE(gateway.start().code == production::StartCode::Serving);
+  REQUIRE(gateway.reference_service_for_testing() != nullptr);
+
+  // First refresh is compatible with baseline NumericSpec (0.01 / 0.001).
+  gateway.reference_service_for_testing()->poll_once_for_testing();
+  const auto before = gateway.observe();
+  REQUIRE(product(before, rt::spot_btcusdt_key()).recovery.state ==
+          recovery::RecoveryState::Live);
+  REQUIRE(product(before, rt::usdm_btcusdt_key()).recovery.state ==
+          recovery::RecoveryState::Live);
+  REQUIRE(product(before, eth_usdm_key).recovery.state ==
+          recovery::RecoveryState::Live);
+
+  // Second refresh mutates BTCUSDT tickSize -> stops ONLY USD-M BTCUSDT.
+  incompatible_btc.store(true);
+  gateway.reference_service_for_testing()->poll_once_for_testing();
+
+  const auto after = gateway.observe();
+  REQUIRE(after.state == production::GatewayState::Serving);
+  REQUIRE(product(after, rt::usdm_btcusdt_key()).recovery.state ==
+          recovery::RecoveryState::Stopped);
+  REQUIRE(product(after, rt::usdm_btcusdt_key()).runtime.state ==
+          rt::RuntimeState::Stopped);
+  REQUIRE(product(after, rt::spot_btcusdt_key()).recovery.state ==
+          recovery::RecoveryState::Live);
+  REQUIRE(product(after, eth_usdm_key).recovery.state ==
+          recovery::RecoveryState::Live);
+
+  auto stub = stub_for(after);
+  ::grpc::ClientContext eth_context;
+  eth_context.set_deadline(std::chrono::system_clock::now() +
+                           std::chrono::seconds{2});
+  auto eth_request =
+      book_request(common::MARKET_USD_M_PERPETUAL, "eth-after-btc-quarantine");
+  eth_request.set_symbol("ETHUSDT");
+  auto eth_reader = stub->SubscribeOrderBook(&eth_context, eth_request);
+  wire::OrderBookStreamItem eth_item;
+  REQUIRE(eth_reader->Read(&eth_item));
+  REQUIRE(eth_item.has_subscription_accepted());
+  REQUIRE(eth_reader->Read(&eth_item));
+  REQUIRE(eth_item.has_snapshot());
+  eth_context.TryCancel();
+  while (eth_reader->Read(&eth_item)) {
+  }
+  static_cast<void>(eth_reader->Finish());
+
+  ::grpc::ClientContext spot_event_context;
+  spot_event_context.set_deadline(std::chrono::system_clock::now() +
+                                  std::chrono::seconds{2});
+  auto spot_event_reader = stub->SubscribeEvents(
+      &spot_event_context,
+      event_request(common::MARKET_SPOT, "spot-event-after-btc-quarantine"));
+  wire::GatewayEventEnvelope spot_event_item;
+  REQUIRE(spot_event_reader->Read(&spot_event_item));
+  REQUIRE(spot_event_item.has_subscription_accepted());
+  spot_event_context.TryCancel();
+  while (spot_event_reader->Read(&spot_event_item)) {
+  }
+  static_cast<void>(spot_event_reader->Finish());
+
+  gateway.stop();
+  require_fully_stopped(gateway);
+}
+
 } // namespace
 
 int main() {
@@ -1146,6 +1239,8 @@ int main() {
        termination_signal_timed_wait_times_out},
       {"METADATA_FAILURES_ORDERED", metadata_failures_are_ordered},
       {"CONFIG_CLI_FAILS_CLOSED", cli_is_fixed_and_fail_closed},
+      {"INCOMPATIBLE_USDM_REFERENCE_STOPS_ONLY_AFFECTED_PRODUCT",
+       incompatible_usdm_reference_stops_only_affected_product},
   };
   for (const auto &[name, test] : tests) {
     try {

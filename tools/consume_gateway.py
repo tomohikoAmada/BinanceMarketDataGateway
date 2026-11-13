@@ -56,6 +56,46 @@ MARK_PRICE_SCHEMA = "mark-price.v1"
 LIQUIDATION_SCHEMA = "liquidation.v1"
 REFERENCE_OBSERVATION_SCHEMA = "reference-observation.v1"
 
+REFERENCE_SOURCE_PAYLOADS: dict[int, str] = {
+    enums_pb2.REFERENCE_SOURCE_KIND_OPEN_INTEREST: "open_interest",
+    enums_pb2.REFERENCE_SOURCE_KIND_TOP_LONG_SHORT_ACCOUNT_RATIO: (
+        "top_long_short_account_ratio"
+    ),
+    enums_pb2.REFERENCE_SOURCE_KIND_TOP_LONG_SHORT_POSITION_RATIO: (
+        "top_long_short_position_ratio"
+    ),
+    enums_pb2.REFERENCE_SOURCE_KIND_GLOBAL_LONG_SHORT_ACCOUNT_RATIO: (
+        "global_long_short_account_ratio"
+    ),
+    enums_pb2.REFERENCE_SOURCE_KIND_TAKER_BUY_SELL_VOLUME: (
+        "taker_buy_sell_volume"
+    ),
+    enums_pb2.REFERENCE_SOURCE_KIND_INSTRUMENT: "instrument",
+    enums_pb2.REFERENCE_SOURCE_KIND_DEPTH_BASELINE: "depth_baseline",
+}
+REQUIRED_REFERENCE_SOURCES: tuple[int, ...] = tuple(
+    REFERENCE_SOURCE_PAYLOADS.keys()
+)
+PERIODIC_REFERENCE_SOURCES: frozenset[int] = frozenset(
+    {
+        enums_pb2.REFERENCE_SOURCE_KIND_OPEN_INTEREST,
+        enums_pb2.REFERENCE_SOURCE_KIND_TOP_LONG_SHORT_ACCOUNT_RATIO,
+        enums_pb2.REFERENCE_SOURCE_KIND_TOP_LONG_SHORT_POSITION_RATIO,
+        enums_pb2.REFERENCE_SOURCE_KIND_GLOBAL_LONG_SHORT_ACCOUNT_RATIO,
+        enums_pb2.REFERENCE_SOURCE_KIND_TAKER_BUY_SELL_VOLUME,
+    }
+)
+EMPTY_ALLOWED_REFERENCE_SOURCES: frozenset[int] = frozenset(
+    {
+        enums_pb2.REFERENCE_SOURCE_KIND_TOP_LONG_SHORT_ACCOUNT_RATIO,
+        enums_pb2.REFERENCE_SOURCE_KIND_TOP_LONG_SHORT_POSITION_RATIO,
+        enums_pb2.REFERENCE_SOURCE_KIND_GLOBAL_LONG_SHORT_ACCOUNT_RATIO,
+        enums_pb2.REFERENCE_SOURCE_KIND_TAKER_BUY_SELL_VOLUME,
+    }
+)
+PERIODIC_REFERENCE_MAX_AGE_SECONDS = 600.0
+INSTRUMENT_REFERENCE_MAX_RECEIVE_AGE_SECONDS = 48.0 * 3600.0
+
 RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 FATAL_RPC_CODES = {
     grpc.StatusCode.INVALID_ARGUMENT,
@@ -264,6 +304,9 @@ class StreamState:
         default_factory=LatencyStats
     )
     reference_sources: set[int] = dataclasses.field(default_factory=set)
+    reference_source_states: dict[str, dict[str, Any]] = dataclasses.field(
+        default_factory=dict
+    )
 
     @property
     def book_levels(self) -> int:
@@ -411,29 +454,79 @@ class StreamState:
             raise ProtocolViolation("reference symbol mismatch")
         if reference.schema_version != REFERENCE_OBSERVATION_SCHEMA:
             raise ProtocolViolation("reference schema version mismatch")
-        if (
-            reference.source_kind
-            == enums_pb2.REFERENCE_SOURCE_KIND_UNSPECIFIED
-        ):
+        expected_payload = REFERENCE_SOURCE_PAYLOADS.get(reference.source_kind)
+        if expected_payload is None:
             raise ProtocolViolation("reference source kind is unspecified")
+        kind_name = enums_pb2.ReferenceSourceKind.Name(reference.source_kind)
+        payload_name = reference.WhichOneof("payload")
+        now_ns = now_utc_ns()
+        receive_ns = int(reference.receive_time_utc_ns or 0)
+        source_time_ms = (
+            int(reference.source_time_ms)
+            if reference.HasField("source_time_ms")
+            else None
+        )
+        entry = self.reference_source_states.setdefault(
+            kind_name,
+            {
+                "status": "missing",
+                "last_success_receive_utc_ns": None,
+                "last_success_source_time_ms": None,
+                "last_error": "",
+                "last_observation_utc_ns": None,
+                "observations": 0,
+                "valid_count": 0,
+                "empty_count": 0,
+                "error_count": 0,
+            },
+        )
+        entry["observations"] += 1
+        entry["last_observation_utc_ns"] = receive_ns or now_ns
         status = reference.status
         if status == enums_pb2.REFERENCE_OBSERVATION_STATUS_VALID:
-            if reference.WhichOneof("payload") is None:
+            if payload_name is None:
                 raise ProtocolViolation("VALID reference has no payload")
+            if payload_name != expected_payload:
+                raise ProtocolViolation(
+                    f"reference source_kind {kind_name} mismatch payload "
+                    f"{payload_name}"
+                )
+            entry["status"] = "VALID"
+            entry["valid_count"] += 1
+            entry["last_success_receive_utc_ns"] = receive_ns or now_ns
+            entry["last_success_source_time_ms"] = source_time_ms
+            entry["last_error"] = ""
             self.reference_sources.add(reference.source_kind)
             self.current_valid = True
-        elif status in {
-            enums_pb2.REFERENCE_OBSERVATION_STATUS_EMPTY,
-            enums_pb2.REFERENCE_OBSERVATION_STATUS_ERROR,
-        }:
-            if reference.WhichOneof("payload") is not None:
+        elif status == enums_pb2.REFERENCE_OBSERVATION_STATUS_EMPTY:
+            if payload_name is not None:
                 raise ProtocolViolation(
                     "EMPTY/ERROR reference carries a payload"
                 )
+            entry["status"] = "EMPTY"
+            entry["empty_count"] += 1
+            if reference.source_kind in EMPTY_ALLOWED_REFERENCE_SOURCES:
+                entry["last_success_receive_utc_ns"] = receive_ns or now_ns
+                entry["last_success_source_time_ms"] = source_time_ms
+                entry["last_error"] = ""
+                self.reference_sources.add(reference.source_kind)
+                self.current_valid = True
+            else:
+                entry["last_error"] = "disallowed_empty"
+                self.reference_sources.discard(reference.source_kind)
+        elif status == enums_pb2.REFERENCE_OBSERVATION_STATUS_ERROR:
+            if payload_name is not None:
+                raise ProtocolViolation(
+                    "EMPTY/ERROR reference carries a payload"
+                )
+            entry["status"] = "ERROR"
+            entry["error_count"] += 1
+            entry["last_error"] = reference.error_code or "error"
+            self.reference_sources.discard(reference.source_kind)
         else:
             raise ProtocolViolation("reference status is unspecified")
         self.event_count += 1
-        self.last_event_utc_ns = now_utc_ns()
+        self.last_event_utc_ns = now_ns
         self._record_publish_latency(delivery, reference.receive_time_utc_ns)
 
     def consume(self, item: Any) -> str:
@@ -540,8 +633,8 @@ class StreamState:
         self.last_error = message
         self.on_gap_state()
 
-    def summary(self) -> dict[str, Any]:
-        return {
+    def summary(self, current_ns: Optional[int] = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "key": self.spec.key,
             "venue": enums_pb2.Venue.Name(self.spec.venue),
             "market": market_name(self.spec.market),
@@ -575,6 +668,88 @@ class StreamState:
             "latency_receive_to_publish_ms": self.receive_to_publish.to_dict(),
             "latency_publish_to_client_ms": self.publish_to_client.to_dict(),
         }
+        if self.spec.stream == "reference_data":
+            now_ns = now_utc_ns() if current_ns is None else current_ns
+            details, issues = evaluate_reference_source_states(
+                self.reference_source_states, now_ns
+            )
+            payload["reference_source_states"] = details
+            payload["reference_issues"] = issues
+            payload["reference_ok"] = not issues
+        return payload
+
+
+def evaluate_reference_source_states(
+    states: dict[str, dict[str, Any]], now_ns: Optional[int] = None
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    current_ns = now_utc_ns() if now_ns is None else now_ns
+    details: dict[str, dict[str, Any]] = {}
+    issues: list[str] = []
+    for kind in REQUIRED_REFERENCE_SOURCES:
+        kind_name = enums_pb2.ReferenceSourceKind.Name(kind)
+        raw = states.get(kind_name, {})
+        status = raw.get("status", "missing")
+        rx_ns = raw.get("last_success_receive_utc_ns")
+        src_ms = raw.get("last_success_source_time_ms")
+        rx_age = (
+            round((current_ns - rx_ns) / 1_000_000_000.0, 3)
+            if isinstance(rx_ns, int) and rx_ns > 0
+            else None
+        )
+        src_age = (
+            round((current_ns // 1_000_000 - src_ms) / 1000.0, 3)
+            if isinstance(src_ms, int)
+            else None
+        )
+        covered_status = status == "VALID" or (
+            status == "EMPTY" and kind in EMPTY_ALLOWED_REFERENCE_SOURCES
+        )
+        source_issue: Optional[str] = None
+        if not covered_status:
+            source_issue = f"{kind_name}:status={status}"
+        elif rx_ns is None or rx_ns <= 0:
+            source_issue = f"{kind_name}:missing_receive_time"
+        elif kind in PERIODIC_REFERENCE_SOURCES:
+            if rx_age is not None and rx_age > PERIODIC_REFERENCE_MAX_AGE_SECONDS:
+                source_issue = f"{kind_name}:stale_receive_age={rx_age:.1f}s"
+            elif (
+                status == "VALID"
+                and src_age is not None
+                and src_age > PERIODIC_REFERENCE_MAX_AGE_SECONDS
+            ):
+                source_issue = f"{kind_name}:stale_source_age={src_age:.1f}s"
+        elif kind == enums_pb2.REFERENCE_SOURCE_KIND_INSTRUMENT:
+            if (
+                rx_age is not None
+                and rx_age > INSTRUMENT_REFERENCE_MAX_RECEIVE_AGE_SECONDS
+            ):
+                source_issue = f"{kind_name}:stale_receive_age={rx_age:.1f}s"
+        if source_issue is not None:
+            issues.append(source_issue)
+        details[kind_name] = {
+            "status": status,
+            "covered": source_issue is None,
+            "last_success_receive_utc_ns": rx_ns,
+            "last_success_source_time_ms": src_ms,
+            "receive_age_seconds": rx_age,
+            "source_age_seconds": src_age,
+            "last_error": raw.get("last_error", ""),
+            "observations": raw.get("observations", 0),
+            "valid_count": raw.get("valid_count", 0),
+            "empty_count": raw.get("empty_count", 0),
+            "error_count": raw.get("error_count", 0),
+        }
+    return details, issues
+
+
+def reference_stream_issues(
+    stream_summary: dict[str, Any], now_ns: Optional[int] = None
+) -> list[str]:
+    states = stream_summary.get("reference_source_states")
+    if isinstance(states, dict):
+        _, issues = evaluate_reference_source_states(states, now_ns)
+        return issues
+    return ["missing_reference_source_states"]
 
 
 def build_streams(config: dict[str, Any], profile: str) -> list[StreamSpec]:
@@ -668,7 +843,13 @@ def filter_streams(
             for stream in streams
             if stream.market == MARKET_USD_M_PERPETUAL
             and stream.stream
-            in ("agg_trade", "book_ticker", "mark_price", "liquidation")
+            in (
+                "agg_trade",
+                "book_ticker",
+                "mark_price",
+                "liquidation",
+                "reference_data",
+            )
         ]
     if stream_filter == "reference_data":
         return [stream for stream in streams if stream.stream == stream_filter]
@@ -977,11 +1158,24 @@ class Consumer:
             "eofs": sum(state.eof_count for state in self.states),
         }
 
-    def _compute_ok(self) -> bool:
+    def _compute_ok(self, current_ns: Optional[int] = None) -> bool:
         if self.fatal_error:
             return False
         books = [state for state in self.states if state.spec.is_order_book]
         events = [state for state in self.states if not state.spec.is_order_book]
+        required_event_data = [
+            state for state in events if state.spec.stream != "liquidation"
+        ]
+        reference_streams = [
+            state for state in events if state.spec.stream == "reference_data"
+        ]
+        now_ns = now_utc_ns() if current_ns is None else current_ns
+        reference_ok = all(
+            not evaluate_reference_source_states(
+                state.reference_source_states, now_ns
+            )[1]
+            for state in reference_streams
+        )
         status_ok = True
         if self.enable_status:
             status_ok = (
@@ -995,7 +1189,8 @@ class Consumer:
                 state.snapshot_count > 0 and state.update_count > 0
                 for state in books
             )
-            and all(state.event_count > 0 for state in events)
+            and all(state.event_count > 0 for state in required_event_data)
+            and reference_ok
             and sum(state.protocol_errors for state in self.states) == 0
             and status_ok
         )
@@ -1163,13 +1358,18 @@ class Supervisor:
                 (f"events-{stream.symbol}", "spot_events", stream.symbol)
             )
         usdm_seen: set[str] = set()
-        reference_seen: set[str] = set()
         for stream in self.streams:
             if stream.market != MARKET_USD_M_PERPETUAL:
                 continue
             if (
                 stream.stream
-                in ("agg_trade", "book_ticker", "mark_price", "liquidation")
+                in (
+                    "agg_trade",
+                    "book_ticker",
+                    "mark_price",
+                    "liquidation",
+                    "reference_data",
+                )
                 and stream.symbol not in usdm_seen
             ):
                 usdm_seen.add(stream.symbol)
@@ -1177,18 +1377,6 @@ class Supervisor:
                     (
                         f"usdm-events-{stream.symbol}",
                         "usdm_events",
-                        stream.symbol,
-                    )
-                )
-            if (
-                stream.stream == "reference_data"
-                and stream.symbol not in reference_seen
-            ):
-                reference_seen.add(stream.symbol)
-                shards.append(
-                    (
-                        f"reference-{stream.symbol}",
-                        "reference_data",
                         stream.symbol,
                     )
                 )
@@ -1343,11 +1531,23 @@ class Supervisor:
         streams: list[dict[str, Any]],
         totals: dict[str, int],
         status: dict[str, Any],
+        current_ns: Optional[int] = None,
     ) -> bool:
         if self.fatal_error:
             return False
         books = [stream for stream in streams if stream["stream"] == "order_book"]
         events = [stream for stream in streams if stream["stream"] != "order_book"]
+        required_event_data = [
+            stream for stream in events if stream["stream"] != "liquidation"
+        ]
+        reference_streams = [
+            stream for stream in events if stream["stream"] == "reference_data"
+        ]
+        now_ns = now_utc_ns() if current_ns is None else current_ns
+        reference_ok = all(
+            not reference_stream_issues(stream, now_ns)
+            for stream in reference_streams
+        )
         expected_keys = {stream.key for stream in self.streams}
         actual_keys = {stream["key"] for stream in streams}
         status_ok = (
@@ -1365,7 +1565,10 @@ class Supervisor:
                 stream["snapshot_count"] > 0 and stream["update_count"] > 0
                 for stream in books
             )
-            and all(stream["event_count"] > 0 for stream in events)
+            and all(
+                stream["event_count"] > 0 for stream in required_event_data
+            )
+            and reference_ok
             and totals["protocol_errors"] == 0
             and status_ok
         )

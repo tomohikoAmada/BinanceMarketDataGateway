@@ -618,13 +618,14 @@ def test_configured_profile_partitions_usdm_side_and_reference() -> None:
     assert len(streams) == 45
     usdm_events = consumer_module.filter_streams(streams, "usdm_events")
     reference = consumer_module.filter_streams(streams, "reference_data")
-    assert len(usdm_events) == 20
+    assert len(usdm_events) == 25
     assert len(reference) == 5
     assert {stream.stream for stream in usdm_events} == {
         "agg_trade",
         "book_ticker",
         "mark_price",
         "liquidation",
+        "reference_data",
     }
     one_side = consumer_module.filter_streams(
         streams, "usdm_events", "BTCUSDT"
@@ -632,6 +633,267 @@ def test_configured_profile_partitions_usdm_side_and_reference() -> None:
     one_reference = consumer_module.filter_streams(
         streams, "reference_data", "BTCUSDT"
     )
-    assert len(one_side) == 4
+    assert len(one_side) == 5
     assert len(one_reference) == 1
     assert one_reference[0].expected_schema == "reference-observation.v1"
+
+    supervisor = object.__new__(consumer_module.Supervisor)
+    supervisor.streams = streams
+    shards = supervisor._shards()
+    assert len(shards) == 11
+    assert not any(name.startswith("reference-") for name, _, _ in shards)
+    total_routed = sum(
+        len(consumer_module.filter_streams(streams, s_filter, symbol))
+        for _, s_filter, symbol in shards
+    )
+    assert total_routed == 45
+
+
+def _make_reference_envelope(
+    subscription_id: str,
+    sequence: int,
+    source_kind: int,
+    status: int,
+    *,
+    receive_ns: int,
+    source_time_ms: int | None = None,
+    error_code: str = "",
+    payload_override: str | None = None,
+) -> gateway_messages_pb2.GatewayEventEnvelope:
+    item = gateway_messages_pb2.GatewayEventEnvelope()
+    _delivery(item, subscription_id, sequence)
+    obs = item.reference_observation
+    obs.schema_version = consumer_module.REFERENCE_OBSERVATION_SCHEMA
+    obs.venue = enums_pb2.VENUE_BINANCE
+    obs.market = USDM
+    obs.symbol = "BTCUSDT"
+    obs.request_id = f"req-{sequence}"
+    obs.source_kind = source_kind
+    obs.status = status
+    obs.receive_time_utc_ns = receive_ns
+    if source_time_ms is not None:
+        obs.source_time_ms = source_time_ms
+    if error_code:
+        obs.error_code = error_code
+    if status == enums_pb2.REFERENCE_OBSERVATION_STATUS_VALID:
+        payload_name = (
+            payload_override
+            or consumer_module.REFERENCE_SOURCE_PAYLOADS[source_kind]
+        )
+        if payload_name == "open_interest":
+            obs.open_interest.open_interest = "10.0"
+        elif payload_name == "top_long_short_account_ratio":
+            obs.top_long_short_account_ratio.long_short_ratio = "1.1"
+        elif payload_name == "top_long_short_position_ratio":
+            obs.top_long_short_position_ratio.long_short_ratio = "1.2"
+        elif payload_name == "global_long_short_account_ratio":
+            obs.global_long_short_account_ratio.long_short_ratio = "1.3"
+        elif payload_name == "taker_buy_sell_volume":
+            obs.taker_buy_sell_volume.buy_sell_ratio = "0.9"
+        elif payload_name == "instrument":
+            obs.instrument.symbol_present = True
+            obs.instrument.trading_status = "TRADING"
+        elif payload_name == "depth_baseline":
+            obs.depth_baseline.symbol = "BTCUSDT"
+            obs.depth_baseline.last_update_id = 100
+    return item
+
+
+def _new_reference_state() -> consumer_module.StreamState:
+    spec = consumer_module.StreamSpec(
+        consumer_module.VENUE_BINANCE, USDM, "BTCUSDT", "reference_data"
+    )
+    state = consumer_module.StreamState(spec)
+    state.gateway_instance_id = GATEWAY_INSTANCE_ID
+    state.subscription_id = "ref-sub"
+    state.session_accepted = True
+    state.accepted_count = 1
+    state.last_session_sequence = 1
+    return state
+
+
+def test_reference_source_kind_payload_mismatch_raises() -> None:
+    state = _new_reference_state()
+    bad = _make_reference_envelope(
+        "ref-sub",
+        2,
+        enums_pb2.REFERENCE_SOURCE_KIND_OPEN_INTEREST,
+        enums_pb2.REFERENCE_OBSERVATION_STATUS_VALID,
+        receive_ns=1_000_000_000,
+        payload_override="instrument",
+    )
+    with pytest.raises(consumer_module.ProtocolViolation):
+        state.consume(bad)
+
+
+def test_reference_coverage_error_empty_and_staleness(tmp_path: Path) -> None:
+    now_ns = 1_700_000_000 * 1_000_000_000
+    now_ms = now_ns // 1_000_000
+
+    # ERROR-only -> _compute_ok False in both Consumer and Supervisor
+    state = _new_reference_state()
+    state.consume(
+        _make_reference_envelope(
+            "ref-sub",
+            2,
+            enums_pb2.REFERENCE_SOURCE_KIND_OPEN_INTEREST,
+            enums_pb2.REFERENCE_OBSERVATION_STATUS_ERROR,
+            receive_ns=now_ns,
+            error_code="http-429",
+        )
+    )
+    consumer = consumer_module.Consumer(
+        target="127.0.0.1:1",
+        streams=[state.spec],
+        output_path=tmp_path / "summary.json",
+        profile="test",
+        install_signals=False,
+        enable_status=False,
+    )
+    consumer.states = [state]
+    assert consumer._compute_ok(current_ns=now_ns) is False
+
+    # Feed VALID for OI, INSTRUMENT, DEPTH_BASELINE, and EMPTY for the 4 ratio/taker stats
+    seq = 3
+    for kind in (
+        enums_pb2.REFERENCE_SOURCE_KIND_OPEN_INTEREST,
+        enums_pb2.REFERENCE_SOURCE_KIND_INSTRUMENT,
+        enums_pb2.REFERENCE_SOURCE_KIND_DEPTH_BASELINE,
+    ):
+        rx = (
+            now_ns - 3_600 * 1_000_000_000
+            if kind == enums_pb2.REFERENCE_SOURCE_KIND_DEPTH_BASELINE
+            else now_ns
+        )
+        state.consume(
+            _make_reference_envelope(
+                "ref-sub",
+                seq,
+                kind,
+                enums_pb2.REFERENCE_OBSERVATION_STATUS_VALID,
+                receive_ns=rx,
+                source_time_ms=now_ms,
+            )
+        )
+        seq += 1
+    for kind in consumer_module.EMPTY_ALLOWED_REFERENCE_SOURCES:
+        state.consume(
+            _make_reference_envelope(
+                "ref-sub",
+                seq,
+                kind,
+                enums_pb2.REFERENCE_OBSERVATION_STATUS_EMPTY,
+                receive_ns=now_ns,
+            )
+        )
+        seq += 1
+    assert consumer._compute_ok(current_ns=now_ns) is True
+
+    # Supervisor agrees with ok=True and checks liquidation 0-events allowed
+    supervisor = object.__new__(consumer_module.Supervisor)
+    supervisor.fatal_error = None
+    supervisor.status_consumer = consumer
+    supervisor.streams = [state.spec]
+    consumer._status_seen_keys = set(consumer.expected_product_keys)
+    consumer._status_identity_mismatches = 0
+    summary = state.summary(current_ns=now_ns)
+    totals = {"streams": 1, "protocol_errors": 0}
+    assert supervisor._compute_ok([summary], totals, {}, current_ns=now_ns) is True
+
+    # Disallowed EMPTY on OPEN_INTEREST fails ok
+    state.consume(
+        _make_reference_envelope(
+            "ref-sub",
+            seq,
+            enums_pb2.REFERENCE_SOURCE_KIND_OPEN_INTEREST,
+            enums_pb2.REFERENCE_OBSERVATION_STATUS_EMPTY,
+            receive_ns=now_ns,
+        )
+    )
+    seq += 1
+    assert consumer._compute_ok(current_ns=now_ns) is False
+    bad_summary = state.summary(current_ns=now_ns)
+    assert (
+        supervisor._compute_ok([bad_summary], totals, {}, current_ns=now_ns)
+        is False
+    )
+
+    # Restore VALID OI with old source bucket (> 600s) -> fails ok (stale source age)
+    state.consume(
+        _make_reference_envelope(
+            "ref-sub",
+            seq,
+            enums_pb2.REFERENCE_SOURCE_KIND_OPEN_INTEREST,
+            enums_pb2.REFERENCE_OBSERVATION_STATUS_VALID,
+            receive_ns=now_ns,
+            source_time_ms=now_ms - 605_000,
+        )
+    )
+    seq += 1
+    assert consumer._compute_ok(current_ns=now_ns) is False
+
+    # Restore fresh OI, advance now_ns by 605s -> periodic stale fails ok
+    state.consume(
+        _make_reference_envelope(
+            "ref-sub",
+            seq,
+            enums_pb2.REFERENCE_SOURCE_KIND_OPEN_INTEREST,
+            enums_pb2.REFERENCE_OBSERVATION_STATUS_VALID,
+            receive_ns=now_ns,
+            source_time_ms=now_ms,
+        )
+    )
+    seq += 1
+    assert consumer._compute_ok(current_ns=now_ns) is True
+    assert (
+        consumer._compute_ok(current_ns=now_ns + 605 * 1_000_000_000) is False
+    )
+
+    # INSTRUMENT within 48h stays ok when periodic is fresh, fails > 48h
+    instrument_old_ns = now_ns - 49 * 3600 * 1_000_000_000
+    state.consume(
+        _make_reference_envelope(
+            "ref-sub",
+            seq,
+            enums_pb2.REFERENCE_SOURCE_KIND_INSTRUMENT,
+            enums_pb2.REFERENCE_OBSERVATION_STATUS_VALID,
+            receive_ns=instrument_old_ns,
+            source_time_ms=now_ms,
+        )
+    )
+    assert consumer._compute_ok(current_ns=now_ns) is False
+
+
+def test_zero_force_orders_does_not_fail_liquidation_stream(tmp_path: Path) -> None:
+    spec = consumer_module.StreamSpec(
+        consumer_module.VENUE_BINANCE,
+        consumer_module.MARKET_USD_M_PERPETUAL,
+        "BTCUSDT",
+        "liquidation",
+    )
+    state = consumer_module.StreamState(spec)
+    state.accepted_count = 1
+    state.current_valid = True
+    consumer = consumer_module.Consumer(
+        target="127.0.0.1:1",
+        streams=[spec],
+        output_path=tmp_path / "summary.json",
+        profile="test",
+        install_signals=False,
+        enable_status=False,
+    )
+    consumer.states = [state]
+    assert consumer._compute_ok() is True
+
+    supervisor = object.__new__(consumer_module.Supervisor)
+    supervisor.fatal_error = None
+    supervisor.status_consumer = consumer
+    supervisor.streams = [spec]
+    consumer._status_seen_keys = set(consumer.expected_product_keys)
+    consumer._status_identity_mismatches = 0
+    assert (
+        supervisor._compute_ok(
+            [state.summary()], {"streams": 1, "protocol_errors": 0}, {}
+        )
+        is True
+    )

@@ -6,6 +6,7 @@
 #include "transport/spot_transport.hpp"
 
 #include <binance_market_data/market/v1/reference_data.pb.h>
+#include <binance_market_data/projection/v1/numeric/numeric_spec.hpp>
 
 #include <chrono>
 #include <condition_variable>
@@ -14,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -42,6 +44,18 @@ struct UsdMReferenceParseError final {
 using UsdMReferenceParseResult =
     std::variant<market::ReferenceObservation, UsdMReferenceParseError>;
 
+struct UsdMInstrumentBatchRequest final {
+  std::string_view symbol;
+  std::string_view request_id;
+};
+
+struct UsdMInstrumentBatch final {
+  std::vector<UsdMReferenceParseResult> symbols;
+};
+
+using UsdMInstrumentBatchResult =
+    std::variant<UsdMInstrumentBatch, UsdMReferenceParseError>;
+
 [[nodiscard]] common_wire::ReferenceSourceKind
 usdm_reference_source_kind(UsdMReferenceKind kind) noexcept;
 
@@ -57,6 +71,10 @@ parse_usdm_reference_payload(UsdMReferenceKind kind, std::string_view payload,
                              std::string_view request_id,
                              std::string_view symbol);
 
+[[nodiscard]] UsdMInstrumentBatchResult parse_usdm_instrument_definitions_batch(
+    std::string_view payload, runtime::ClockSample received_at,
+    std::span<const UsdMInstrumentBatchRequest> requests);
+
 [[nodiscard]] UsdMReferenceParseResult parse_usdm_instrument_definition(
     std::string_view payload, runtime::ClockSample received_at,
     std::string_view request_id, std::string_view symbol);
@@ -64,12 +82,16 @@ parse_usdm_reference_payload(UsdMReferenceKind kind, std::string_view payload,
 struct UsdMReferenceSeed final {
   runtime::MarketKey key;
   std::string exchange_info_body;
-  runtime::ClockSample received_at;
+  runtime::ClockSample received_at{};
+  std::optional<market::ReferenceObservation> instrument{};
+  std::shared_ptr<const std::string> shared_exchange_info_body{};
 };
 
 struct UsdMReferenceProduct final {
   runtime::MarketKey key;
   publication::EventPublication *publication{nullptr};
+  std::optional<projection::v1::NumericSpec> baseline_numeric_spec{};
+  std::function<void(std::string_view reason)> on_incompatible_definition{};
 };
 
 struct UsdMReferenceOptions final {

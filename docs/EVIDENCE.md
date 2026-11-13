@@ -43,20 +43,33 @@ This is the current evidence index. Full historical records are in
 - A 10 Spot + 10 USD-M startup metadata test resolves all 20 products and
   verifies each symbol's precision from one fetch count per market.
 
-## C2/G5/G6 — USD-M five WS + typed reference data
+## G5 / G6 / G7 / G8-a,b,d — USD-M five WS, typed reference data, quarantine & sharded acceptance tooling
 
-Local candidate only; no Linux deployment or 24 h run has been performed.
+Local verification completed on macOS Release; upstream Linux CI artifacts and joint 24h VPS deployment remain pending.
 
-- Contracts source `0ecd024833c8b93ff95287e5fd7593060784b173`;
-  descriptor fingerprint
-  `a2a93ca5cf4e17c9a64ca0939ad208f1202c1746628eed5260bd0edb81666c86`.
-- Contracts message RREV `e79d88e75cb72b2bb7dae75e6d0b5646`; gRPC RREV
-  `0237321d3ab670daa101c3214f0778bd`.
-- Projection P2 source `a4151d4e8ddaedcc8ed0c4c34f4ced6b14f2fd7e`; recipe
-  revision `ef04bfbc02bc79f6b31cb6e30588da76`; `proto_adapter=True`.
-- Gateway implements two USD-M WebSockets per product and typed
-  `REFERENCE_DATA`; local Release CTest **28/28** passed. Linux package
-  IDs/PREVs and a joint 45-stream run remain G7 evidence.
+- Contracts source `24a209b1a415c4f4dd56d864eee9132135bc7237`;
+  message C++ RREV `9739b82137e9d6437ef66bbbf81a9ddd`; gRPC C++ RREV
+  `40c3986aa8e13d2f8ebb137adfea931d`.
+- Projection source `ebe86957e04dfed3bdda9ec58988d999419e4342`; recipe
+  revision `04cc16f91ddd2d214a1dd0efccac0eb3`; `proto_adapter=True`,
+  `shared=False`.
+- Protocol/Transport: `src/protocol/json_helpers.hpp` shares strict WS and REST
+  JSON helpers (while preserving `non_negative_integer_field` cleanly separate);
+  `parse_usdm_instrument_definitions_batch` decodes `exchangeInfo` once per
+  batch; `execute_exchange_info_refresh()` quarantines only incompatible
+  USD-M `ProductRuntime` instances via `owner->stop()` on `NumericSpec`,
+  precision, `contractType`, `status`, or missing-symbol changes; `EventPublication`
+  preserves prior cached `VALID` references on subsequent `ERROR` and never
+  replays `ERROR-only` as an initial value.
+- Acceptance tooling: `tools/consume_gateway.py` enforces `source_kind` <-> `payload`
+  oneof agreement, tracks all 7 `ReferenceSourceKind` sources per USD-M symbol
+  (allowing `EMPTY` only for the 4 ratio/taker stats endpoints, failing `ERROR-only`
+  or stale 600s periodic / 48h `INSTRUMENT` sources in both `Consumer._compute_ok`
+  and `Supervisor._compute_ok`), merges `reference_data` into `usdm-events-{symbol}`
+  (11 child shards for 5 pairs / 45 streams), and `tools/acceptance_monitor.py`
+  incorporates reference health and lightweight R3 partition/metadata backlog checks.
+- Local Release CTest **28/28** passed; Python pytest (`tools/tests`) **26/26** passed;
+  `scripts/format-check.sh` passed.
 
 ## Plan G1 — Projection M-P2 production pin
 
