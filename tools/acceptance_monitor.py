@@ -300,13 +300,41 @@ def rolling_max(values: list[float], window: int) -> float | None:
     )
 
 
-def final_verdict(samples: list[dict[str, Any]]) -> dict[str, Any]:
+def load_expected(config_path: Path) -> dict[str, int] | None:
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    spot = config.get("spot_symbols")
+    usdm = config.get("usdm_symbols")
+    if not isinstance(spot, list) or not isinstance(usdm, list):
+        return None
+    products = len(spot) + len(usdm)
+    return {
+        "spot": len(spot),
+        "usdm": len(usdm),
+        "products": products,
+        "books": products,
+        # Current functional consumer: one book per product, plus Spot
+        # aggTrade and BookTicker per Spot symbol.
+        "streams": products + 2 * len(spot),
+    }
+
+
+def final_verdict(
+    samples: list[dict[str, Any]], expected: dict[str, int] | None = None
+) -> dict[str, Any]:
     if not samples:
         return {"status": "FAIL", "reasons": ["no samples"]}
     last = samples[-1]
     consumer = last["consumer"]
     reasons: list[str] = []
     warnings: list[str] = []
+    if expected is None:
+        warnings.append("config expected counts unavailable")
+    expected_streams = expected["streams"] if expected else None
+    expected_books = expected["books"] if expected else None
+    expected_products = expected["products"] if expected else None
 
     if len(samples) < 2:
         reasons.append("insufficient samples")
@@ -348,12 +376,20 @@ def final_verdict(samples: list[dict[str, Any]]) -> dict[str, Any]:
         else:
             recorder_drop_deltas[unit] = None
             warnings.append(f"{unit} drop counter unavailable")
-    if consumer.get("streams") != 40:
-        reasons.append(f"streams={consumer.get('streams')} != 40")
-    if consumer.get("accepted") != 40:
-        reasons.append(f"accepted={consumer.get('accepted')} != 40")
-    if consumer.get("valid") != 40:
-        reasons.append(f"valid={consumer.get('valid')} != 40")
+    if expected_streams is not None and consumer.get("streams") != expected_streams:
+        reasons.append(
+            f"streams={consumer.get('streams')} != {expected_streams}"
+        )
+    if expected_streams is not None and consumer.get("accepted") != expected_streams:
+        reasons.append(
+            f"accepted={consumer.get('accepted')} != {expected_streams}"
+        )
+    if expected_streams is not None and consumer.get("valid") != expected_streams:
+        reasons.append(f"valid={consumer.get('valid')} != {expected_streams}")
+    if expected_books is not None and consumer.get("order_books") != expected_books:
+        reasons.append(
+            f"order_books={consumer.get('order_books')} != {expected_books}"
+        )
     if consumer.get("books_without_snapshot"):
         reasons.append(
             f"{consumer.get('books_without_snapshot')} order books have no snapshot"
@@ -370,6 +406,17 @@ def final_verdict(samples: list[dict[str, Any]]) -> dict[str, Any]:
         reasons.append("status identity mismatches present")
     if consumer.get("missing_keys"):
         reasons.append(f"status missing {consumer.get('missing_keys')} keys")
+    if expected_products is not None and consumer.get("seen_keys") != expected_products:
+        reasons.append(
+            f"status seen_keys={consumer.get('seen_keys')} != {expected_products}"
+        )
+    if (
+        expected_products is not None
+        and consumer.get("markets_live") != expected_products
+    ):
+        reasons.append(
+            f"markets_live={consumer.get('markets_live')} != {expected_products}"
+        )
     if consumer.get("markets_non_live"):
         reasons.append(
             f"{consumer.get('markets_non_live')} status markets not Live"
@@ -378,12 +425,14 @@ def final_verdict(samples: list[dict[str, Any]]) -> dict[str, Any]:
         reasons.append(f"consumer exit_reason={consumer.get('exit_reason')}")
 
     post_warmup = samples[2:]
-    if any(
-        sample["consumer"]["accepted"] != 40 for sample in post_warmup
+    if expected_streams is not None and any(
+        sample["consumer"]["accepted"] != expected_streams for sample in post_warmup
     ):
-        reasons.append("accepted fell below 40 after warmup")
-    if any(sample["consumer"]["valid"] != 40 for sample in post_warmup):
-        reasons.append("valid fell below 40 after warmup")
+        reasons.append("accepted fell below expected count after warmup")
+    if expected_streams is not None and any(
+        sample["consumer"]["valid"] != expected_streams for sample in post_warmup
+    ):
+        reasons.append("valid fell below expected count after warmup")
     if any(sample["consumer"]["missing_keys"] for sample in post_warmup):
         reasons.append("status keys missing after warmup")
     if any(sample["consumer"]["identity_mismatches"] for sample in post_warmup):
@@ -437,6 +486,7 @@ def final_verdict(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "max_cpu_10m_percent_1core": cpu_10m,
         "archive_success_observed": archive_success,
         "recorder_drop_deltas": recorder_drop_deltas,
+        "expected": expected,
     }
 
 
@@ -444,11 +494,13 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--duration", type=float, default=7200.0)
     parser.add_argument("--interval", type=float, default=30.0)
+    parser.add_argument("--config", default="/etc/bmdg/gateway.json")
     parser.add_argument("--samples", default="/var/lib/bmdg-consumer/g4-2h.jsonl")
     parser.add_argument(
         "--final", default="/var/lib/bmdg-consumer/g4-2h-final.json"
     )
     args = parser.parse_args()
+    expected = load_expected(Path(args.config))
     samples_path = Path(args.samples)
     samples_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
@@ -481,7 +533,7 @@ def main() -> int:
             if sample["elapsed_seconds"] >= args.duration:
                 break
             time.sleep(max(0.0, args.interval))
-    verdict = final_verdict(samples)
+    verdict = final_verdict(samples, expected)
     verdict["started_utc"] = started_utc
     verdict["samples_file"] = str(samples_path)
     Path(args.final).write_text(

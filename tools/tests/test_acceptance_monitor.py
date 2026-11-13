@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -37,3 +38,19 @@ def test_read_last_jsonl_ignores_partial_tail(tmp_path: Path) -> None:
 
 def test_read_last_jsonl_missing_file_is_unknown(tmp_path: Path) -> None:
     assert monitor.read_last_jsonl(tmp_path / "missing.jsonl") == {}
+
+
+def test_expected_counts_follow_configured_five_pairs(tmp_path: Path) -> None:
+    symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+    path = tmp_path / "gateway.json"
+    path.write_text(
+        json.dumps({"spot_symbols": symbols, "usdm_symbols": symbols}),
+        encoding="utf-8",
+    )
+    assert monitor.load_expected(path) == {
+        "spot": 5,
+        "usdm": 5,
+        "products": 10,
+        "books": 10,
+        "streams": 20,
+    }

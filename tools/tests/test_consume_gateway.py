@@ -369,6 +369,18 @@ def test_live40_requires_exactly_ten_spot_and_ten_usdm() -> None:
         )
 
 
+def test_configured_profile_uses_five_pairs_without_hardcoded_ten() -> None:
+    spot = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+    usdm = list(spot)
+    streams = consumer_module.build_streams(
+        {"spot_symbols": spot, "usdm_symbols": usdm}, "configured"
+    )
+    assert len(streams) == 20
+    assert sum(1 for stream in streams if stream.stream == "order_book") == 10
+    assert sum(1 for stream in streams if stream.stream == "agg_trade") == 5
+    assert sum(1 for stream in streams if stream.stream == "book_ticker") == 5
+
+
 def test_live40_builds_twenty_books_and_twenty_spot_events() -> None:
     spot = [f"SPOT{i}USDT" for i in range(10)]
     usdm = [f"USD{i}USDT" for i in range(10)]

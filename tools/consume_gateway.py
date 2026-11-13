@@ -1390,7 +1390,9 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--target", default="127.0.0.1:50051")
     parser.add_argument("--config", required=True)
-    parser.add_argument("--profile", default="live40", choices=("live40",))
+    parser.add_argument(
+        "--profile", default="configured", choices=("configured", "live40")
+    )
     parser.add_argument(
         "--duration-seconds",
         type=float,

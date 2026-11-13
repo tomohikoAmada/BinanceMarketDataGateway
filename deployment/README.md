@@ -32,8 +32,10 @@ sudo systemctl status bmdg
 ```
 
 During the 2h acceptance run, start the `bmdg-consumer.service` probe as the
-only 40-stream consumer. Enable `bmdg` and `bmdg-consumer` only after the run
-passes.
+only live consumer. The consumer derives its products and expected counts from
+`--config`; the current five-pair S1 profile uses identity + Spot-event streams
+(20 streams), while the full USD-M alignment profile later uses 45. Enable
+`bmdg` and `bmdg-consumer` only after the run passes.
 
 The unit intentionally uses `RestartSec=300`: BMDG's shared-IP API budget is
 in-memory, while Binance's server-side counters persist. A full quiet window is
