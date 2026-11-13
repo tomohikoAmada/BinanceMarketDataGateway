@@ -21,17 +21,17 @@ class BinanceMarketDataGatewayRuntimeDependencies(ConanFile):
 
     def requirements(self):
         self.requires(
-            "binance-market-data-contracts-cpp/0.1.0#53713fb82c27cf6ea0395f6b8a853006"
+            "binance-market-data-contracts-cpp/0.1.0#e79d88e75cb72b2bb7dae75e6d0b5646"
         )
         self.requires(
-            "binance-market-data-projection/0.1.0#00e889f34095258672fd46db83f0826a"
+            "binance-market-data-projection/0.1.0#ef04bfbc02bc79f6b31cb6e30588da76"
         )
         self.requires("boost/1.91.0")
         self.requires("nlohmann_json/3.12.0")
         self.requires("openssl/3.6.3")
         if self.options.with_g7_grpc:
             self.requires(
-                "binance-market-data-contracts-grpc-cpp/0.1.0#c3661aa735e1eb6450c1a93f635dbc20"
+                "binance-market-data-contracts-grpc-cpp/0.1.0#0237321d3ab670daa101c3214f0778bd"
             )
 
     def generate(self):

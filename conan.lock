@@ -10,9 +10,9 @@
         "grpc/1.83.0#67e377a995d4a1279bffe2b941ac2f55%1784803802.92",
         "c-ares/1.34.8#074b97a9e38159813ed5e2dcfeb290ca%1784539118.141",
         "boost/1.91.0#9b41246fdc6288d648e8ad5b1649fbaf%1783338724.114",
-        "binance-market-data-projection/0.1.0#00e889f34095258672fd46db83f0826a%1794448580.6890938",
-        "binance-market-data-contracts-grpc-cpp/0.1.0#c3661aa735e1eb6450c1a93f635dbc20%1792301553.538743",
-        "binance-market-data-contracts-cpp/0.1.0#53713fb82c27cf6ea0395f6b8a853006%1792301552.989697",
+        "binance-market-data-projection/0.1.0#ef04bfbc02bc79f6b31cb6e30588da76%1794540132.0",
+        "binance-market-data-contracts-grpc-cpp/0.1.0#0237321d3ab670daa101c3214f0778bd%1794540200.0",
+        "binance-market-data-contracts-cpp/0.1.0#e79d88e75cb72b2bb7dae75e6d0b5646%1794537701.0",
         "benchmark/1.9.5#b885dc73ad67b40a55d45684d1c88ad1%1787477351.236324",
         "abseil/20260107.1#883e95a7be2b767999f64669ac642e5d%1773137897.755"
     ],
