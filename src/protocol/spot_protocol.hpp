@@ -3,6 +3,7 @@
 #include "runtime/clock.hpp"
 
 #include <binance_market_data/market/v1/market_events.pb.h>
+#include <binance_market_data/market/v1/reference_data.pb.h>
 #include <binance_market_data/projection/v1/numeric/numeric_spec.hpp>
 
 #include <cstdint>
@@ -56,7 +57,9 @@ using SpotMetadataBatchResult = std::variant<SpotMetadataBatch, ProtocolError>;
 using DepthFrameResult =
     std::variant<market::DepthUpdate, ServerShutdown, ProtocolError>;
 using NormalizedMarketEvent =
-    std::variant<market::DepthUpdate, market::AggTrade, market::BookTicker>;
+    std::variant<market::DepthUpdate, market::AggTrade, market::BookTicker,
+                 market::MarkPrice, market::Liquidation,
+                 market::ReferenceObservation>;
 using NormalizedSpotEvent = NormalizedMarketEvent;
 using CombinedFrameResult =
     std::variant<NormalizedMarketEvent, ServerShutdown, ProtocolError>;

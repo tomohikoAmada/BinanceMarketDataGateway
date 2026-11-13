@@ -315,9 +315,9 @@ def load_expected(config_path: Path) -> dict[str, int] | None:
         "usdm": len(usdm),
         "products": products,
         "books": products,
-        # Current functional consumer: one book per product, plus Spot
-        # aggTrade and BookTicker per Spot symbol.
-        "streams": products + 2 * len(spot),
+        # Five subscriptions per USD-M product (four WS events plus typed
+        # reference data), two Spot events per Spot product, and one book.
+        "streams": products + 2 * len(spot) + 5 * len(usdm),
     }
 
 

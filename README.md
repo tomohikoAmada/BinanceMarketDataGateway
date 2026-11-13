@@ -135,7 +135,8 @@ while Binance's server-side counters persist.
 - `SubscribeOrderBook`: Projection-Applied order book; accepted + initial
   snapshot, then contiguous depth updates.
 - `SubscribeEvents`: exactly one V1 selector. Spot supports DIFF_DEPTH,
-  AGG_TRADE, BOOK_TICKER; USD-M supports DIFF_DEPTH. Depth events are
+  AGG_TRADE, BOOK_TICKER; USD-M supports DIFF_DEPTH, AGG_TRADE, BOOK_TICKER,
+  MARK_PRICE, LIQUIDATION and typed REFERENCE_DATA. Depth events are
   pre-Projection normalized events.
 - `GetGatewayStatus`: dynamic product list, state, active subscriptions,
   connection generation and last Applied Depth receive time.

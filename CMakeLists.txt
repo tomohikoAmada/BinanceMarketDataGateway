@@ -279,6 +279,7 @@ if(BMDG_BUILD_DOMAIN_GRAPH)
     add_library(bmdg_transport
         src/transport/spot_transport.cpp
         src/transport/usdm_transport.cpp
+        src/transport/usdm_reference.cpp
     )
     bmdg_configure_library(bmdg_transport)
     target_link_libraries(
@@ -473,6 +474,11 @@ if(BMDG_BUILD_DOMAIN_GRAPH)
         bmdg_add_test(
             bmdg_usdm_transport_tests
             tests/transport/usdm_transport_tests.cpp
+            bmdg_transport
+        )
+        bmdg_add_test(
+            bmdg_usdm_reference_tests
+            tests/transport/usdm_reference_tests.cpp
             bmdg_transport
         )
 
@@ -794,6 +800,7 @@ foreach(_bmdg_pair IN ITEMS
         "bmd_gateway_public_api_budget_tests;bmdg_public_api_budget_tests"
         "bmd_gateway_spot_transport_tests;bmdg_spot_transport_tests"
         "bmd_gateway_usdm_transport_tests;bmdg_usdm_transport_tests"
+        "bmd_gateway_usdm_reference_tests;bmdg_usdm_reference_tests"
         "bmd_gateway_market_runtime_tests;bmdg_market_runtime_tests"
         "bmd_gateway_composition_tests;bmdg_composition_tests"
         "bmd_gateway_recovery_tests;bmdg_recovery_tests"

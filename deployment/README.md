@@ -34,7 +34,8 @@ sudo systemctl status bmdg
 During the 2h acceptance run, start the `bmdg-consumer.service` probe as the
 only live consumer. The consumer derives its products and expected counts from
 `--config`; the current five-pair S1 profile uses identity + Spot-event streams
-(20 streams), while the full USD-M alignment profile later uses 45. Enable
+(45 streams: 10 order books, 10 Spot events, 20 USD-M WS events and 5
+ReferenceData). Enable
 `bmdg` and `bmdg-consumer` only after the run passes.
 
 The unit intentionally uses `RestartSec=300`: BMDG's shared-IP API budget is

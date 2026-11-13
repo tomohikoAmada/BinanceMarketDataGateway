@@ -49,11 +49,14 @@ int main(int argc, char **argv) {
                    "owners_joined=yes\n";
       return EXIT_SUCCESS;
     }
+    auto resolved =
+        std::get<production::ProductionMetadata>(std::move(metadata));
+    production::GatewayOptions options;
+    options.enable_usdm_reference = true;
+    options.usdm_reference_seeds = resolved.usdm_references;
     return production::run_production_service(
-        config,
-        production::make_product_runtime_specs(
-            std::get<production::ProductionMetadata>(metadata)),
-        signals, std::cout, std::cerr);
+        config, production::make_product_runtime_specs(std::move(resolved)),
+        signals, std::cout, std::cerr, std::move(options));
   } catch (const std::exception &error) {
     std::cerr << "gateway_fatal=" << error.what() << '\n';
     return EXIT_FAILURE;

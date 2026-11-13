@@ -119,7 +119,7 @@ private:
 #endif
   ) {
     UsdMTransportOptions options;
-    options.normalized_event_sink =
+    auto sink =
         [&publication](
             std::shared_ptr<const protocol::NormalizedMarketEvent> event,
             std::uint64_t generation
@@ -138,6 +138,8 @@ private:
                      ? transport::NormalizedEventSinkResult::InvariantFailure
                      : transport::NormalizedEventSinkResult::Continue;
         };
+    options.reference_event_sink = sink;
+    options.normalized_event_sink = std::move(sink);
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     options.performance_baseline = std::move(performance_baseline);
 #endif

@@ -40,7 +40,8 @@ independently buildable.
   non-loopback endpoints before starting products or binding.
 - Preserve bounded queues, slow-client isolation, cancellation lifetime safety,
   source quiescence before reset, and async-safe signal handling.
-- Spot events: DIFF_DEPTH, AGG_TRADE, BOOK_TICKER. USD-M: DIFF_DEPTH only.
+- Spot events: DIFF_DEPTH, AGG_TRADE, BOOK_TICKER. USD-M: DIFF_DEPTH,
+  AGG_TRADE, BOOK_TICKER, MARK_PRICE, LIQUIDATION and typed REFERENCE_DATA.
   Order-book publication is Projection-Applied; depth events are pre-Projection.
   Sessions do not stitch across a full rebootstrap/source replacement.
 - Tests may use existing internal seams; production must not contain an

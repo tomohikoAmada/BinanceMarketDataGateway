@@ -375,10 +375,13 @@ def test_configured_profile_uses_five_pairs_without_hardcoded_ten() -> None:
     streams = consumer_module.build_streams(
         {"spot_symbols": spot, "usdm_symbols": usdm}, "configured"
     )
-    assert len(streams) == 20
+    assert len(streams) == 45
     assert sum(1 for stream in streams if stream.stream == "order_book") == 10
-    assert sum(1 for stream in streams if stream.stream == "agg_trade") == 5
-    assert sum(1 for stream in streams if stream.stream == "book_ticker") == 5
+    assert sum(1 for stream in streams if stream.stream == "agg_trade") == 10
+    assert sum(1 for stream in streams if stream.stream == "book_ticker") == 10
+    assert sum(1 for stream in streams if stream.stream == "mark_price") == 5
+    assert sum(1 for stream in streams if stream.stream == "liquidation") == 5
+    assert sum(1 for stream in streams if stream.stream == "reference_data") == 5
 
 
 def test_live40_builds_twenty_books_and_twenty_spot_events() -> None:
@@ -604,3 +607,31 @@ def test_retry_backoff_resets_after_healthy_session_and_caps() -> None:
     assert consumer._retry_delay(1) == 1.0
     assert consumer._retry_delay(2) == 2.0
     assert consumer._retry_delay(9) == 4.0
+
+
+def test_configured_profile_partitions_usdm_side_and_reference() -> None:
+    spot = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+    usdm = list(spot)
+    streams = consumer_module.build_streams(
+        {"spot_symbols": spot, "usdm_symbols": usdm}, "configured"
+    )
+    assert len(streams) == 45
+    usdm_events = consumer_module.filter_streams(streams, "usdm_events")
+    reference = consumer_module.filter_streams(streams, "reference_data")
+    assert len(usdm_events) == 20
+    assert len(reference) == 5
+    assert {stream.stream for stream in usdm_events} == {
+        "agg_trade",
+        "book_ticker",
+        "mark_price",
+        "liquidation",
+    }
+    one_side = consumer_module.filter_streams(
+        streams, "usdm_events", "BTCUSDT"
+    )
+    one_reference = consumer_module.filter_streams(
+        streams, "reference_data", "BTCUSDT"
+    )
+    assert len(one_side) == 4
+    assert len(one_reference) == 1
+    assert one_reference[0].expected_schema == "reference-observation.v1"

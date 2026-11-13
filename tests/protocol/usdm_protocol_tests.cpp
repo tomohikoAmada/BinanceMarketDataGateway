@@ -503,6 +503,122 @@ void contracts_c0_source_time_oracle() {
   }
 }
 
+void usdm_public_and_market_event_payloads() {
+  const rt::ClockSample received{1700000000000000000ULL, 5000U};
+  const auto public_depth = protocol::parse_usdm_public_event_frame(
+      R"json({"stream":"btcusdt@depth@100ms","data":{"e":"depthUpdate","E":1700000000000,"T":1700000000001,"s":"BTCUSDT","U":100,"u":102,"pu":99,"b":[["100.0","1.0"]],"a":[["101.0","0.0"]]}})json",
+      received, "usdm-public", "BTCUSDT");
+  REQUIRE(
+      std::holds_alternative<protocol::NormalizedMarketEvent>(public_depth));
+  const auto &public_depth_event =
+      std::get<protocol::NormalizedMarketEvent>(public_depth);
+  REQUIRE(std::holds_alternative<protocol::market::DepthUpdate>(
+      public_depth_event));
+  const auto &depth =
+      std::get<protocol::market::DepthUpdate>(public_depth_event);
+  REQUIRE_EQ(depth.metadata().stream(), common_wire::STREAM_DIFF_DEPTH);
+  REQUIRE_EQ(depth.previous_final_update_id(), 99U);
+  REQUIRE_EQ(depth.metadata().exchange_event_time_ms(), 1700000000000U);
+  REQUIRE_EQ(depth.metadata().exchange_transaction_time_ms(), 1700000000001U);
+
+  const auto ticker = protocol::parse_usdm_public_event_frame(
+      R"json({"stream":"btcusdt@bookTicker","data":{"e":"bookTicker","u":400900217,"s":"BTCUSDT","b":"25.35190000","B":"31.21000000","a":"25.36520000","A":"40.66000000","T":1568014460893,"E":1568014460894,"st":1}})json",
+      received, "usdm-public", "BTCUSDT");
+  REQUIRE(std::holds_alternative<protocol::NormalizedMarketEvent>(ticker));
+  const auto &ticker_event = std::get<protocol::NormalizedMarketEvent>(ticker);
+  REQUIRE(std::holds_alternative<protocol::market::BookTicker>(ticker_event));
+  const auto &book = std::get<protocol::market::BookTicker>(ticker_event);
+  REQUIRE_EQ(book.metadata().market(), common_wire::MARKET_USD_M_PERPETUAL);
+  REQUIRE_EQ(book.metadata().exchange_event_time_ms(), 1568014460894U);
+  REQUIRE_EQ(book.metadata().exchange_transaction_time_ms(), 1568014460893U);
+  REQUIRE_EQ(book.best_bid_price(), "25.35190000");
+  REQUIRE_EQ(book.best_bid_quantity(), "31.21000000");
+  REQUIRE_EQ(book.best_ask_price(), "25.36520000");
+
+  const auto trade = protocol::parse_usdm_market_event_frame(
+      R"json({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1568014460893,"s":"BTCUSDT","a":12345,"p":"9910","q":"0.014","f":100,"l":105,"T":1568014460892,"m":true,"nq":"0.013","st":1}})json",
+      received, "usdm-market", "BTCUSDT");
+  REQUIRE(std::holds_alternative<protocol::NormalizedMarketEvent>(trade));
+  const auto &trade_event = std::get<protocol::NormalizedMarketEvent>(trade);
+  REQUIRE(std::holds_alternative<protocol::market::AggTrade>(trade_event));
+  const auto &agg = std::get<protocol::market::AggTrade>(trade_event);
+  REQUIRE_EQ(agg.metadata().stream(), common_wire::STREAM_AGG_TRADE);
+  REQUIRE_EQ(agg.metadata().exchange_trade_time_ms(), 1568014460892U);
+  REQUIRE_EQ(agg.normal_quantity(), "0.013");
+  REQUIRE(agg.has_normal_quantity());
+
+  const auto no_nq = protocol::parse_usdm_market_event_frame(
+      R"json({"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1,"s":"BTCUSDT","a":1,"p":"1","q":"1","f":1,"l":1,"T":1,"m":false}})json",
+      received, "usdm-market", "BTCUSDT");
+  REQUIRE(std::holds_alternative<protocol::NormalizedMarketEvent>(no_nq));
+  REQUIRE(!std::get<protocol::market::AggTrade>(
+               std::get<protocol::NormalizedMarketEvent>(no_nq))
+               .has_normal_quantity());
+
+  const auto mark = protocol::parse_usdm_market_event_frame(
+      R"json({"stream":"btcusdt@markPrice@1s","data":{"e":"markPriceUpdate","E":1562305380000,"s":"BTCUSDT","p":"11794.15000000","i":"11784.62659091","P":"11784.25641265","r":"-0.00038167","ap":"11794.15000000","T":1562306400000,"st":1}})json",
+      received, "usdm-market", "BTCUSDT");
+  REQUIRE(std::holds_alternative<protocol::NormalizedMarketEvent>(mark));
+  const auto &mark_event = std::get<protocol::NormalizedMarketEvent>(mark);
+  REQUIRE(std::holds_alternative<protocol::market::MarkPrice>(mark_event));
+  const auto &price = std::get<protocol::market::MarkPrice>(mark_event);
+  REQUIRE_EQ(price.funding_rate(), "-0.00038167");
+  REQUIRE_EQ(price.next_funding_time_ms(), 1562306400000U);
+  REQUIRE(price.has_mark_price_moving_average());
+  REQUIRE_EQ(price.mark_price_moving_average(), "11794.15000000");
+  REQUIRE(!price.metadata().has_exchange_transaction_time_ms());
+  REQUIRE(!price.metadata().has_exchange_trade_time_ms());
+
+  const auto liquidation = protocol::parse_usdm_market_event_frame(
+      R"json({"stream":"btcusdt@forceOrder","data":{"e":"forceOrder","E":1568014460893,"o":{"s":"BTCUSDT","S":"SELL","o":"LIMIT","f":"IOC","q":"0.014","p":"9910","ap":"9910","X":"FILLED","l":"0.014","z":"0.014","T":1568014460893}}})json",
+      received, "usdm-market", "BTCUSDT");
+  REQUIRE(std::holds_alternative<protocol::NormalizedMarketEvent>(liquidation));
+  const auto &liquidation_event =
+      std::get<protocol::NormalizedMarketEvent>(liquidation);
+  REQUIRE(
+      std::holds_alternative<protocol::market::Liquidation>(liquidation_event));
+  const auto &order =
+      std::get<protocol::market::Liquidation>(liquidation_event);
+  REQUIRE_EQ(order.side(), "SELL");
+  REQUIRE_EQ(order.order_type(), "LIMIT");
+  REQUIRE_EQ(order.time_in_force(), "IOC");
+  REQUIRE_EQ(order.original_quantity(), "0.014");
+  REQUIRE_EQ(order.average_price(), "9910");
+  REQUIRE_EQ(order.order_trade_time_ms(), 1568014460893U);
+  REQUIRE_EQ(order.metadata().exchange_event_time_ms(), 1568014460893U);
+
+  const auto wrong_stream = protocol::parse_usdm_market_event_frame(
+      R"json({"stream":"btcusdt@bookTicker","data":{"e":"bookTicker","u":1,"s":"BTCUSDT","b":"1","B":"1","a":"2","A":"1","T":1,"E":1}})json",
+      received, "usdm-market", "BTCUSDT");
+  REQUIRE(std::holds_alternative<protocol::ProtocolError>(wrong_stream));
+  REQUIRE_EQ(std::get<protocol::ProtocolError>(wrong_stream).code,
+             protocol::ProtocolErrorCode::WrongEvent);
+
+  const auto wrong_symbol = protocol::parse_usdm_public_event_frame(
+      R"json({"stream":"btcusdt@bookTicker","data":{"e":"bookTicker","u":1,"s":"ETHUSDT","b":"1","B":"1","a":"2","A":"1","T":1,"E":1}})json",
+      received, "usdm-public", "BTCUSDT");
+  REQUIRE(std::holds_alternative<protocol::ProtocolError>(wrong_symbol));
+  REQUIRE_EQ(std::get<protocol::ProtocolError>(wrong_symbol).code,
+             protocol::ProtocolErrorCode::WrongSymbol);
+
+  const auto snapshot = protocol::parse_usdm_depth_snapshot(
+      R"json({"lastUpdateId":100,"E":1700000000000,"T":1699999999999,"bids":[["100.0","1.0"]],"asks":[]})json",
+      received, "snapshot-request", "BTCUSDT");
+  REQUIRE(std::holds_alternative<protocol::market::ExchangeDepthSnapshot>(
+      snapshot));
+  const auto &baseline =
+      std::get<protocol::market::ExchangeDepthSnapshot>(snapshot);
+  REQUIRE(baseline.has_exchange_event_time_ms());
+  REQUIRE_EQ(baseline.exchange_event_time_ms(), 1700000000000U);
+  REQUIRE_EQ(baseline.exchange_transaction_time_ms(), 1699999999999U);
+
+  const auto missing_funding_time = protocol::parse_usdm_market_event_frame(
+      R"json({"stream":"btcusdt@markPrice@1s","data":{"e":"markPriceUpdate","E":1,"s":"BTCUSDT","p":"1","i":"1","P":"1","r":"0"}})json",
+      received, "usdm-market", "BTCUSDT");
+  REQUIRE(
+      std::holds_alternative<protocol::ProtocolError>(missing_funding_time));
+}
+
 } // namespace
 
 int main() {
@@ -526,6 +642,8 @@ int main() {
        unrelated_extensions_preserve_strict_fields},
       {"EXTENSIONS_PRESERVE_PROJECTION_SEQUENCE_CHECKS",
        extensions_do_not_bypass_projection_sequence_checks},
+      {"USDM_PUBLIC_AND_MARKET_EVENT_PAYLOADS",
+       usdm_public_and_market_event_payloads},
   };
 
   for (const auto &[name, test] : tests) {

@@ -43,6 +43,21 @@ This is the current evidence index. Full historical records are in
 - A 10 Spot + 10 USD-M startup metadata test resolves all 20 products and
   verifies each symbol's precision from one fetch count per market.
 
+## C2/G5/G6 — USD-M five WS + typed reference data
+
+Local candidate only; no Linux deployment or 24 h run has been performed.
+
+- Contracts source `0ecd024833c8b93ff95287e5fd7593060784b173`;
+  descriptor fingerprint
+  `a2a93ca5cf4e17c9a64ca0939ad208f1202c1746628eed5260bd0edb81666c86`.
+- Contracts message RREV `e79d88e75cb72b2bb7dae75e6d0b5646`; gRPC RREV
+  `0237321d3ab670daa101c3214f0778bd`.
+- Projection P2 source `a4151d4e8ddaedcc8ed0c4c34f4ced6b14f2fd7e`; recipe
+  revision `ef04bfbc02bc79f6b31cb6e30588da76`; `proto_adapter=True`.
+- Gateway implements two USD-M WebSockets per product and typed
+  `REFERENCE_DATA`; local Release CTest **28/28** passed. Linux package
+  IDs/PREVs and a joint 45-stream run remain G7 evidence.
+
 ## Plan G1 — Projection M-P2 production pin
 
 Built from Gateway candidate `7016d47bda65ab86ad2114e88321f4dfa487f38f`
@@ -132,7 +147,7 @@ Gateway candidate `282f0fc6773534470bd3bcdf9eaa3096740e0eed`.
   errors, resubscribes with `1,2,4,8,16,30 s` backoff, and writes the summary
   atomically every 30 s. It never starts/stops the gateway or contacts Binance.
 - The client uses the fixed Contracts Python revision
-  `518880bdfa60948c3b65b6b3525d024526995166`, with `grpcio==1.81.1` and
+  `0ecd024833c8b93ff95287e5fd7593060784b173`, with `grpcio==1.81.1` and
   `protobuf==6.33.5`. `deployment/bmdg-consumer.service` is the thin loopback
   unit; it deliberately has no `Requires`/`BindsTo` on `bmdg.service`.
 - Tests: C++ diagnostics dedup/change and timed-signal tests pass; Python fake

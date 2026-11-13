@@ -49,13 +49,15 @@ acquire_production_metadata(const std::vector<runtime::MarketKey> &market_keys,
   }
 
   std::optional<std::string> usdm_body;
+  transport::ExchangeInfoResponse usdm_response;
   if (has_market(runtime::common_wire::MARKET_USD_M_PERPETUAL)) {
     const auto response = sources.usdm_fetch();
     if (const auto *error = std::get_if<transport::NetworkError>(&response)) {
       return MetadataError{MetadataStage::UsdMFetch, std::nullopt,
                            network_message(*error)};
     }
-    usdm_body = std::get<transport::ExchangeInfoResponse>(response).body;
+    usdm_response = std::get<transport::ExchangeInfoResponse>(response);
+    usdm_body = usdm_response.body;
   }
 
   auto canonical_keys = market_keys;
@@ -151,6 +153,13 @@ acquire_production_metadata(const std::vector<runtime::MarketKey> &market_keys,
   result.products.reserve(canonical_keys.size());
   for (auto &product : resolved) {
     result.products.push_back(std::move(*product));
+  }
+  if (usdm_body.has_value()) {
+    result.usdm_references.reserve(usdm_indices.size());
+    for (const auto index : usdm_indices) {
+      result.usdm_references.push_back(
+          {canonical_keys[index], *usdm_body, usdm_response.received_at});
+    }
   }
   return result;
 }

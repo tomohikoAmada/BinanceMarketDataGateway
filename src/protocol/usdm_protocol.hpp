@@ -29,6 +29,8 @@ using UsdMMetadataBatchResult =
     std::variant<UsdMMetadataBatch, protocol::ProtocolError>;
 using UsdMDepthFrameResult = protocol::DepthFrameResult;
 using UsdMDepthSnapshotResult = protocol::DepthSnapshotResult;
+using UsdMPublicFrameResult = protocol::CombinedFrameResult;
+using UsdMMarketFrameResult = protocol::CombinedFrameResult;
 
 [[nodiscard]] UsdMMetadataResult
 parse_usdm_exchange_info(std::string_view payload);
@@ -58,6 +60,14 @@ parse_usdm_depth_snapshot(std::string_view payload,
 [[nodiscard]] UsdMDepthSnapshotResult parse_usdm_depth_snapshot(
     std::string_view payload, runtime::ClockSample received_at,
     std::string_view request_id, std::string_view requested_symbol);
+
+[[nodiscard]] UsdMPublicFrameResult parse_usdm_public_event_frame(
+    std::string_view payload, runtime::ClockSample received_at,
+    std::string_view connection_id, std::string_view requested_symbol);
+
+[[nodiscard]] UsdMMarketFrameResult parse_usdm_market_event_frame(
+    std::string_view payload, runtime::ClockSample received_at,
+    std::string_view connection_id, std::string_view requested_symbol);
 
 [[nodiscard]] std::optional<std::string>
 usdm_stream_symbol(std::string_view canonical_symbol);

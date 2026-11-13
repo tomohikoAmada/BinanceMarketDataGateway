@@ -21,7 +21,13 @@ struct UsdMTransportRoutes final {
   std::string websocket_host;
   std::string websocket_port;
   std::string websocket_target;
+  std::string raw_websocket_target;
+  std::string market_websocket_target;
   std::string diff_depth_stream;
+  std::string book_ticker_stream;
+  std::string agg_trade_stream;
+  std::string mark_price_stream;
+  std::string force_order_stream;
   std::size_t snapshot_limit{1000U};
   std::string connection_id_prefix;
   std::string snapshot_request_id;
@@ -34,8 +40,15 @@ inline const UsdMTransportRoutes kUsdMTransportRoutes{
     "/fapi/v1/depth?symbol=BTCUSDT&limit=1000",
     "fstream.binance.com",
     "443",
+    "/public/stream?streams=btcusdt@depth@100ms/btcusdt@bookTicker",
     "/public/ws/btcusdt@depth@100ms",
+    "/market/stream?streams=btcusdt@aggTrade/btcusdt@markPrice@1s/"
+    "btcusdt@forceOrder",
     "btcusdt@depth@100ms",
+    "btcusdt@bookTicker",
+    "btcusdt@aggTrade",
+    "btcusdt@markPrice@1s",
+    "btcusdt@forceOrder",
     1000U,
     "binance-usdm-btcusdt-g",
     "g11-usdm-btcusdt-depth-request-1",
@@ -48,6 +61,7 @@ make_usdm_transport_routes(std::string_view exact_symbol);
 
 struct UsdMTransportOptions final {
   transport::NormalizedEventSink normalized_event_sink;
+  transport::NormalizedEventSink reference_event_sink;
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   std::shared_ptr<performance::ProductTraceBuffer> performance_baseline;
 #endif

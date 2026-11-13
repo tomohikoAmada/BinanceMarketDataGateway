@@ -95,7 +95,7 @@ inline support::market::DepthUpdate depth(const rt::MarketKey &key,
   }
   const auto routes = transport::make_usdm_transport_routes(key.symbol);
   check(routes.has_value());
-  check(routes->websocket_target ==
+  check(routes->raw_websocket_target ==
         "/public/ws/" + *protocol::usdm_stream_symbol(key.symbol) +
             "@depth@100ms");
   source["U"] = id - 1U;

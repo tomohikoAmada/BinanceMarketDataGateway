@@ -3,8 +3,8 @@
 `consume_gateway.py` attaches to an already running `bmdg` and verifies the
 configured product/stream contract. It never starts/stops the daemon and never
 connects to Binance. Products and expected counts come from `--config`; the
-current S1 five-pair profile uses 20 streams (10 OrderBook + 10 Spot events),
-while the full USD-M alignment profile later uses 45.
+current five-pair profile uses 45 streams (10 OrderBook + 10 Spot events +
+20 USD-M WS events + 5 ReferenceData).
 
 Run it with a client-only virtual environment containing the pinned versions
 from `requirements-client.txt`, plus the generated Python package from the
@@ -31,11 +31,13 @@ seconds and contains per-stream first snapshot, updates/events, resubscriptions,
 gap reasons, errors and fixed-bucket latency facts. Negative UTC-clock
 latencies are retained, not clamped.
 
-Production acceptance uses `--supervisor`: one order-book process plus one
-independent process per Spot symbol (aggTrade + BookTicker), so a burst on one
-BookTicker stream cannot starve the order-book or other symbols. The supervisor
-merges the shard summaries and runs one `GetGatewayStatus` loop. Every derived
-subscription counts against the gateway's 48-stream cap.
+Production acceptance uses `--supervisor`: one order-book process, one process
+per Spot symbol (aggTrade + BookTicker), one process per USD-M symbol (aggTrade
++ bookTicker + markPrice + liquidation) and one reference process per USD-M
+symbol. A burst on one high-rate stream therefore cannot starve order books or
+other symbols. The supervisor merges the shard summaries and runs one
+`GetGatewayStatus` loop. Every derived subscription counts against the
+gateway's 48-stream cap.
 
 `acceptance_monitor.py` samples the running units, consumer summary, archive
 timer and host resources into JSONL and writes a final verdict. It is an

@@ -25,12 +25,20 @@ public:
                                Clock::time_point now = Clock::now()) {
     std::lock_guard lock{mutex_};
     auto &market = markets_[usdm ? 1U : 0U];
-    auto &window = websocket ? market.connections : market.weight;
     const auto delay = admission_delay(market, websocket, cost, now);
     if (delay > Duration::zero()) {
       return delay;
     }
-    window.events.emplace_back(now, cost);
+    if (websocket) {
+      market.connections.events.emplace_back(now, cost);
+    } else {
+      // Every REST attempt consumes the request-count share, including
+      // weight=0 statistics endpoints.
+      market.requests.events.emplace_back(now, 1U);
+      if (cost != 0U) {
+        market.weight.events.emplace_back(now, cost);
+      }
+    }
     return Duration::zero();
   }
 
@@ -71,7 +79,7 @@ private:
     std::deque<std::pair<Clock::time_point, unsigned>> events;
 
     [[nodiscard]] Duration delay(unsigned cost, Clock::time_point now) {
-      if (cost == 0U || cost > capacity) {
+      if (cost > capacity) {
         throw std::invalid_argument{"request cost exceeds Gateway share"};
       }
       while (!events.empty() && events.front().first + period <= now) {
@@ -97,23 +105,30 @@ private:
   struct Market {
     Window weight;
     Window connections{60U, std::chrono::seconds{300}, {}};
+    Window requests{1200U, std::chrono::seconds{60}, {}};
     Clock::time_point blocked_until{};
   };
   [[nodiscard]] static Duration admission_delay(Market &market, bool websocket,
                                                 unsigned cost,
                                                 Clock::time_point now) {
-    auto &window = websocket ? market.connections : market.weight;
     const auto block = market.blocked_until > now ? market.blocked_until - now
                                                   : Duration::zero();
-    return std::max(window.delay(cost, now), block);
+    if (websocket) {
+      return std::max(market.connections.delay(cost, now), block);
+    }
+    return std::max(std::max(market.weight.delay(cost, now),
+                             market.requests.delay(1U, now)),
+                    block);
   }
   std::mutex mutex_;
   std::array<Market, 2> markets_{
       Market{Window{3000U, std::chrono::seconds{60}, {}},
              Window{60U, std::chrono::seconds{300}, {}},
+             Window{1200U, std::chrono::seconds{60}, {}},
              {}},
       Market{Window{600U, std::chrono::seconds{60}, {}},
              Window{60U, std::chrono::seconds{300}, {}},
+             Window{200U, std::chrono::seconds{300}, {}},
              {}}};
 };
 
@@ -134,7 +149,10 @@ private:
   if (target.starts_with("/fapi/v1/depth")) {
     return 20U; // Gateway's fixed limit=1000.
   }
-  return is_usdm_host(host) ? 1U : 20U; // exchangeInfo.
+  if (target.starts_with("/futures/data/")) {
+    return 0U; // Statistics endpoints count attempts, not weight.
+  }
+  return is_usdm_host(host) ? 1U : 20U; // exchangeInfo/openInterest.
 }
 
 } // namespace binance_market_data::gateway::transport::detail

@@ -96,6 +96,27 @@ make_event(common::Stream stream, std::uint64_t id) {
       std::move(ticker));
 }
 
+[[nodiscard]] std::shared_ptr<const protocol::NormalizedSpotEvent>
+make_reference(common::ReferenceSourceKind kind, std::string value) {
+  market::ReferenceObservation reference;
+  reference.set_schema_version("reference-observation.v1");
+  reference.set_venue(common::VENUE_BINANCE);
+  reference.set_market(common::MARKET_USD_M_PERPETUAL);
+  reference.set_symbol("BTCUSDT");
+  reference.set_request_id("reference-request");
+  reference.set_source_kind(kind);
+  reference.set_receive_time_utc_ns(50U);
+  reference.set_status(common::REFERENCE_OBSERVATION_STATUS_VALID);
+  if (kind == common::REFERENCE_SOURCE_KIND_OPEN_INTEREST) {
+    reference.mutable_open_interest()->set_open_interest(std::move(value));
+  } else {
+    reference.mutable_depth_baseline()->set_last_update_id(
+        static_cast<std::uint64_t>(std::stoull(value)));
+  }
+  return std::make_shared<const protocol::NormalizedSpotEvent>(
+      std::move(reference));
+}
+
 [[nodiscard]] publication::ValidatedEventSubscription
 subscription(common::Stream stream, std::string request_id = "request-1") {
   const char *schema = nullptr;
@@ -108,6 +129,15 @@ subscription(common::Stream stream, std::string request_id = "request-1") {
     break;
   case common::STREAM_BOOK_TICKER:
     schema = publication::kBookTickerEventSchema;
+    break;
+  case common::STREAM_MARK_PRICE:
+    schema = publication::kMarkPriceEventSchema;
+    break;
+  case common::STREAM_LIQUIDATION:
+    schema = publication::kLiquidationEventSchema;
+    break;
+  case common::STREAM_REFERENCE_DATA:
+    schema = publication::kReferenceObservationSchema;
     break;
   default:
     throw TestFailure{"unsupported test stream"};
@@ -298,6 +328,44 @@ void permanent_close_drains_without_fake_gap() {
   REQUIRE(!channel->terminal_reserved());
 }
 
+void reference_cache_replays_and_clears_depth_baseline() {
+  publication::EventPublication publication{"gw-reference", advancing_clock()};
+  REQUIRE(publication.open_generation(1U));
+  REQUIRE_EQ(
+      publication.publish(
+          make_reference(common::REFERENCE_SOURCE_KIND_OPEN_INTEREST, "123"),
+          1U),
+      publication::EventPublishResult::Published);
+  REQUIRE_EQ(
+      publication.publish(
+          make_reference(common::REFERENCE_SOURCE_KIND_DEPTH_BASELINE, "100"),
+          1U),
+      publication::EventPublishResult::Published);
+
+  REQUIRE(publication.quiesce_generation(1U));
+  REQUIRE(publication.close_generation_replaced(1U));
+  REQUIRE(publication.open_generation(2U));
+
+  auto channel = admit(publication, common::STREAM_REFERENCE_DATA,
+                       "reference-subscription");
+  auto accepted = channel->peek();
+  REQUIRE(accepted.has_value());
+  REQUIRE(std::holds_alternative<wire::SubscriptionAccepted>(
+      accepted.ordinary->payload));
+  acknowledge(channel, accepted);
+
+  auto cached = channel->peek();
+  REQUIRE(cached.has_value());
+  const auto &event =
+      std::get<std::shared_ptr<const protocol::NormalizedSpotEvent>>(
+          cached.ordinary->payload);
+  REQUIRE(std::holds_alternative<market::ReferenceObservation>(*event));
+  REQUIRE_EQ(std::get<market::ReferenceObservation>(*event).source_kind(),
+             common::REFERENCE_SOURCE_KIND_OPEN_INTEREST);
+  acknowledge(channel, cached);
+  REQUIRE(!channel->peek().has_value());
+}
+
 } // namespace
 
 int main() {
@@ -310,7 +378,10 @@ int main() {
        quiesce_replacement_and_fresh_generation},
       {"PERMANENT_CLOSE_DRAINS_WITHOUT_FAKE_GAP",
        permanent_close_drains_without_fake_gap},
+      {"REFERENCE_CACHE_REPLAY_AND_DEPTH_RESET",
+       reference_cache_replays_and_clears_depth_baseline},
   };
+
   for (const auto &[name, test] : tests) {
     try {
       test();

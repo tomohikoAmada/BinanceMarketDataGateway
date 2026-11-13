@@ -1,5 +1,7 @@
 #include "production/production_gateway.hpp"
 
+#include "transport/usdm_reference.hpp"
+
 #include <chrono>
 #include <optional>
 #include <stdexcept>
@@ -39,6 +41,30 @@ namespace {
            runtime->state == runtime::RuntimeState::Stopped));
 }
 
+[[nodiscard]] std::unique_ptr<transport::UsdMReferenceService>
+make_reference_service(composition::ConfiguredProductRuntimeSet &products,
+                       const GatewayOptions &options) {
+  if (!options.enable_usdm_reference) {
+    return nullptr;
+  }
+  std::vector<transport::UsdMReferenceProduct> references;
+  for (const auto &owner : products.products()) {
+    if (owner->key().market == runtime::common_wire::MARKET_USD_M_PERPETUAL) {
+      references.push_back({owner->key(), &owner->event_publication()});
+    }
+  }
+  if (references.empty()) {
+    return nullptr;
+  }
+  std::vector<transport::UsdMReferenceSeed> seeds;
+  seeds.reserve(options.usdm_reference_seeds.size());
+  for (const auto &seed : options.usdm_reference_seeds) {
+    seeds.push_back({seed.key, seed.exchange_info_body, seed.received_at});
+  }
+  return std::make_unique<transport::UsdMReferenceService>(
+      std::move(references), std::move(seeds), transport::sample_real_clock);
+}
+
 } // namespace
 
 std::vector<ProductObservation>
@@ -70,6 +96,7 @@ ProductionGateway::ProductionGateway(
           options.allow_ephemeral_listen_for_testing},
       startup_now_{std::move(options.startup_now)},
       products_{std::move(specifications), clock, gateway_instance_id_},
+      reference_service_{make_reference_service(products_, options)},
       server_{products_.registry(), std::move(clock), gateway_instance_id_,
               std::move(options.grpc)} {
   if (initial_startup_timeout_ <= std::chrono::steady_clock::duration::zero()) {
@@ -128,6 +155,9 @@ ProductionGateway::start(const std::function<bool()> &external_stop_requested) {
     if (!server_.start(grpc_listen_address_)) {
       rollback();
       return {StartCode::GrpcBindFailed, std::nullopt};
+    }
+    if (reference_service_ != nullptr) {
+      static_cast<void>(reference_service_->start());
     }
     if (stop_requested(external_stop_requested)) {
       rollback();
@@ -269,6 +299,9 @@ void ProductionGateway::rollback() noexcept {
 void ProductionGateway::shutdown_graph() noexcept {
   // OrderBookGrpcServer combines the accepted G11 admission cut, bounded
   // context cancellation, Server::Shutdown/Wait, and handler drain.
+  if (reference_service_ != nullptr) {
+    reference_service_->stop();
+  }
   server_.shutdown();
   products_.stop();
 }

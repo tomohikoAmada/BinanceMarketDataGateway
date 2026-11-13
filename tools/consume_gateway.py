@@ -39,6 +39,9 @@ MARKET_USD_M_PERPETUAL = enums_pb2.MARKET_USD_M_PERPETUAL
 STREAM_AGG_TRADE = enums_pb2.STREAM_AGG_TRADE
 STREAM_BOOK_TICKER = enums_pb2.STREAM_BOOK_TICKER
 STREAM_DIFF_DEPTH = enums_pb2.STREAM_DIFF_DEPTH
+STREAM_LIQUIDATION = enums_pb2.STREAM_LIQUIDATION
+STREAM_MARK_PRICE = enums_pb2.STREAM_MARK_PRICE
+STREAM_REFERENCE_DATA = enums_pb2.STREAM_REFERENCE_DATA
 DELIVERY_MODE_CONTIGUOUS_EVENTS = enums_pb2.DELIVERY_MODE_CONTIGUOUS_EVENTS
 INITIAL_SNAPSHOT_MODE_REQUIRED = enums_pb2.INITIAL_SNAPSHOT_MODE_REQUIRED
 
@@ -49,6 +52,9 @@ SNAPSHOT_SCHEMA = "local-order-book-snapshot.v1"
 DEPTH_SCHEMA = "depth-update.v1"
 AGG_TRADE_SCHEMA = "agg-trade.v1"
 BOOK_TICKER_SCHEMA = "book-ticker.v1"
+MARK_PRICE_SCHEMA = "mark-price.v1"
+LIQUIDATION_SCHEMA = "liquidation.v1"
+REFERENCE_OBSERVATION_SCHEMA = "reference-observation.v1"
 
 RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 FATAL_RPC_CODES = {
@@ -137,6 +143,9 @@ class StreamSpec:
         return {
             "agg_trade": "agg_trade",
             "book_ticker": "book_ticker",
+            "mark_price": "mark_price",
+            "liquidation": "liquidation",
+            "reference_data": "reference_observation",
         }[self.stream]
 
     @property
@@ -144,6 +153,9 @@ class StreamSpec:
         return {
             "agg_trade": AGG_TRADE_SCHEMA,
             "book_ticker": BOOK_TICKER_SCHEMA,
+            "mark_price": MARK_PRICE_SCHEMA,
+            "liquidation": LIQUIDATION_SCHEMA,
+            "reference_data": REFERENCE_OBSERVATION_SCHEMA,
         }[self.stream]
 
 
@@ -251,6 +263,7 @@ class StreamState:
     publish_to_client: LatencyStats = dataclasses.field(
         default_factory=LatencyStats
     )
+    reference_sources: set[int] = dataclasses.field(default_factory=set)
 
     @property
     def book_levels(self) -> int:
@@ -362,20 +375,66 @@ class StreamState:
         )
 
     def _event(self, event: Any, delivery: Any) -> None:
+        expected_stream = {
+            "agg_trade": STREAM_AGG_TRADE,
+            "book_ticker": STREAM_BOOK_TICKER,
+            "mark_price": STREAM_MARK_PRICE,
+            "liquidation": STREAM_LIQUIDATION,
+        }.get(self.spec.stream)
+        if expected_stream is None:
+            raise ProtocolViolation("unexpected metadata event stream")
         self._validate_identity(event.metadata)
-        expected_stream = (
-            STREAM_AGG_TRADE
-            if self.spec.stream == "agg_trade"
-            else STREAM_BOOK_TICKER
-        )
         if event.metadata.stream != expected_stream:
             raise ProtocolViolation("event stream mismatch")
+        if self.spec.stream == "mark_price":
+            if event.metadata.HasField("exchange_transaction_time_ms"):
+                raise ProtocolViolation(
+                    "markPrice T must not be transaction time"
+                )
+            if not event.next_funding_time_ms:
+                raise ProtocolViolation("markPrice next funding time is absent")
+        if self.spec.stream == "liquidation" and not event.order_trade_time_ms:
+            raise ProtocolViolation("liquidation order trade time is absent")
         self.event_count += 1
         self.current_valid = True
         self.last_event_utc_ns = now_utc_ns()
         self._record_publish_latency(
             delivery, event.metadata.receive_time_utc_ns
         )
+
+    def _reference(self, reference: Any, delivery: Any) -> None:
+        if reference.venue != self.spec.venue:
+            raise ProtocolViolation("reference venue mismatch")
+        if reference.market != self.spec.market:
+            raise ProtocolViolation("reference market mismatch")
+        if reference.symbol != self.spec.symbol:
+            raise ProtocolViolation("reference symbol mismatch")
+        if reference.schema_version != REFERENCE_OBSERVATION_SCHEMA:
+            raise ProtocolViolation("reference schema version mismatch")
+        if (
+            reference.source_kind
+            == enums_pb2.REFERENCE_SOURCE_KIND_UNSPECIFIED
+        ):
+            raise ProtocolViolation("reference source kind is unspecified")
+        status = reference.status
+        if status == enums_pb2.REFERENCE_OBSERVATION_STATUS_VALID:
+            if reference.WhichOneof("payload") is None:
+                raise ProtocolViolation("VALID reference has no payload")
+            self.reference_sources.add(reference.source_kind)
+            self.current_valid = True
+        elif status in {
+            enums_pb2.REFERENCE_OBSERVATION_STATUS_EMPTY,
+            enums_pb2.REFERENCE_OBSERVATION_STATUS_ERROR,
+        }:
+            if reference.WhichOneof("payload") is not None:
+                raise ProtocolViolation(
+                    "EMPTY/ERROR reference carries a payload"
+                )
+        else:
+            raise ProtocolViolation("reference status is unspecified")
+        self.event_count += 1
+        self.last_event_utc_ns = now_utc_ns()
+        self._record_publish_latency(delivery, reference.receive_time_utc_ns)
 
     def consume(self, item: Any) -> str:
         if item.HasField("envelope_metadata"):
@@ -452,7 +511,10 @@ class StreamState:
                     f"unexpected event payload {payload}; expected "
                     f"{self.spec.expected_payload}"
                 )
-            self._event(getattr(item, payload), delivery)
+            if payload == "reference_observation":
+                self._reference(item.reference_observation, delivery)
+            else:
+                self._event(getattr(item, payload), delivery)
         self.last_session_sequence = delivery.session_sequence
         self.last_payload = payload
         return "continue"
@@ -492,6 +554,10 @@ class StreamState:
             "snapshot_count": self.snapshot_count,
             "update_count": self.update_count,
             "event_count": self.event_count,
+            "reference_sources": sorted(
+                enums_pb2.ReferenceSourceKind.Name(value)
+                for value in self.reference_sources
+            ),
             "book_levels": self.book_levels,
             "resubscriptions": self.resubscriptions,
             "gap_count": self.gap_count,
@@ -554,6 +620,31 @@ def build_streams(config: dict[str, Any], profile: str) -> list[StreamSpec]:
         streams.append(
             StreamSpec(VENUE_BINANCE, MARKET_SPOT, symbol, "book_ticker")
         )
+    if profile == "configured":
+        for symbol in usdm_symbols:
+            for kind in (
+                "agg_trade",
+                "book_ticker",
+                "mark_price",
+                "liquidation",
+            ):
+                streams.append(
+                    StreamSpec(
+                        VENUE_BINANCE,
+                        MARKET_USD_M_PERPETUAL,
+                        symbol,
+                        kind,
+                    )
+                )
+        for symbol in usdm_symbols:
+            streams.append(
+                StreamSpec(
+                    VENUE_BINANCE,
+                    MARKET_USD_M_PERPETUAL,
+                    symbol,
+                    "reference_data",
+                )
+            )
     return streams
 
 
@@ -571,6 +662,16 @@ def filter_streams(
             if stream.market == MARKET_SPOT
             and stream.stream in ("agg_trade", "book_ticker")
         ]
+    if stream_filter == "usdm_events":
+        return [
+            stream
+            for stream in streams
+            if stream.market == MARKET_USD_M_PERPETUAL
+            and stream.stream
+            in ("agg_trade", "book_ticker", "mark_price", "liquidation")
+        ]
+    if stream_filter == "reference_data":
+        return [stream for stream in streams if stream.stream == stream_filter]
     return [stream for stream in streams if stream.stream == stream_filter]
 
 
@@ -682,9 +783,13 @@ class Consumer:
         selector.venue = spec.venue
         selector.market = spec.market
         selector.symbol = spec.symbol
-        selector.stream = (
-            STREAM_AGG_TRADE if spec.stream == "agg_trade" else STREAM_BOOK_TICKER
-        )
+        selector.stream = {
+            "agg_trade": STREAM_AGG_TRADE,
+            "book_ticker": STREAM_BOOK_TICKER,
+            "mark_price": STREAM_MARK_PRICE,
+            "liquidation": STREAM_LIQUIDATION,
+            "reference_data": STREAM_REFERENCE_DATA,
+        }[spec.stream]
         request.delivery_mode = DELIVERY_MODE_CONTIGUOUS_EVENTS
         request.supported_payload_schema_versions.append(spec.expected_schema)
         return request
@@ -1057,6 +1162,36 @@ class Supervisor:
             shards.append(
                 (f"events-{stream.symbol}", "spot_events", stream.symbol)
             )
+        usdm_seen: set[str] = set()
+        reference_seen: set[str] = set()
+        for stream in self.streams:
+            if stream.market != MARKET_USD_M_PERPETUAL:
+                continue
+            if (
+                stream.stream
+                in ("agg_trade", "book_ticker", "mark_price", "liquidation")
+                and stream.symbol not in usdm_seen
+            ):
+                usdm_seen.add(stream.symbol)
+                shards.append(
+                    (
+                        f"usdm-events-{stream.symbol}",
+                        "usdm_events",
+                        stream.symbol,
+                    )
+                )
+            if (
+                stream.stream == "reference_data"
+                and stream.symbol not in reference_seen
+            ):
+                reference_seen.add(stream.symbol)
+                shards.append(
+                    (
+                        f"reference-{stream.symbol}",
+                        "reference_data",
+                        stream.symbol,
+                    )
+                )
         return shards
 
     def __init__(
@@ -1420,7 +1555,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
             "order_book",
             "agg_trade",
             "book_ticker",
+            "mark_price",
+            "liquidation",
+            "reference_data",
             "spot_events",
+            "usdm_events",
         ),
         default="all",
         help="internal shard filter",

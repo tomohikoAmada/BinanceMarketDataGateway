@@ -2,6 +2,7 @@
 
 #include "composition/multi_market_runtime.hpp"
 #include "grpc/grpc_service.hpp"
+#include "production/reference_seed.hpp"
 
 #include <binance_market_data/projection/v1/projection_state/book_projection.hpp>
 
@@ -11,12 +12,16 @@
 #include <cstdint>
 #include <functional>
 #include <iosfwd>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 namespace composition = binance_market_data::gateway::composition;
+namespace binance_market_data::gateway::transport {
+class UsdMReferenceService;
+}
 
 namespace binance_market_data::gateway::production {
 
@@ -57,6 +62,10 @@ struct GatewayOptions final {
   // Narrow deterministic seam for the set-wide startup deadline only.
   std::function<std::chrono::steady_clock::time_point()> startup_now{
       std::chrono::steady_clock::now};
+  // Production enables the low-frequency USD-M reference scheduler; offline
+  // tests keep it off unless they explicitly exercise the scheduler.
+  bool enable_usdm_reference{false};
+  std::vector<UsdMReferenceSeed> usdm_reference_seeds;
 };
 
 struct ProductObservation final {
@@ -126,6 +135,7 @@ private:
   // Declaration order is the lifetime proof: server_ is destroyed before its
   // non-owning registry/status references in products_.
   composition::ConfiguredProductRuntimeSet products_;
+  std::unique_ptr<transport::UsdMReferenceService> reference_service_;
   rpc::OrderBookGrpcServer server_;
 
   mutable std::mutex state_mutex_;

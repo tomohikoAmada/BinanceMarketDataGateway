@@ -63,6 +63,11 @@ void official_routes_are_frozen() {
           "fstream.binance.com");
   REQUIRE(transport::kUsdMTransportRoutes.websocket_port == "443");
   REQUIRE(transport::kUsdMTransportRoutes.websocket_target ==
+          "/public/stream?streams=btcusdt@depth@100ms/btcusdt@bookTicker");
+  REQUIRE(transport::kUsdMTransportRoutes.market_websocket_target ==
+          "/market/stream?streams=btcusdt@aggTrade/btcusdt@markPrice@1s/"
+          "btcusdt@forceOrder");
+  REQUIRE(transport::kUsdMTransportRoutes.raw_websocket_target ==
           "/public/ws/btcusdt@depth@100ms");
   REQUIRE(transport::kUsdMTransportRoutes.websocket_target !=
           "/ws/btcusdt@depth@100ms");
@@ -78,8 +83,18 @@ void exact_usdm_routes_are_product_bound() {
   REQUIRE(eth.has_value());
   REQUIRE(btc->depth_target == "/fapi/v1/depth?symbol=BTCUSDT&limit=1000");
   REQUIRE(eth->depth_target == "/fapi/v1/depth?symbol=ETHUSDT&limit=1000");
-  REQUIRE(btc->websocket_target == "/public/ws/btcusdt@depth@100ms");
-  REQUIRE(eth->websocket_target == "/public/ws/ethusdt@depth@100ms");
+  REQUIRE(btc->raw_websocket_target == "/public/ws/btcusdt@depth@100ms");
+  REQUIRE(eth->raw_websocket_target == "/public/ws/ethusdt@depth@100ms");
+  REQUIRE(btc->websocket_target ==
+          "/public/stream?streams=btcusdt@depth@100ms/btcusdt@bookTicker");
+  REQUIRE(eth->websocket_target ==
+          "/public/stream?streams=ethusdt@depth@100ms/ethusdt@bookTicker");
+  REQUIRE(btc->market_websocket_target ==
+          "/market/stream?streams=btcusdt@aggTrade/btcusdt@markPrice@1s/"
+          "btcusdt@forceOrder");
+  REQUIRE(eth->market_websocket_target ==
+          "/market/stream?streams=ethusdt@aggTrade/ethusdt@markPrice@1s/"
+          "ethusdt@forceOrder");
   REQUIRE(btc->diff_depth_stream == "btcusdt@depth@100ms");
   REQUIRE(eth->diff_depth_stream == "ethusdt@depth@100ms");
   REQUIRE(btc->connection_id_prefix != eth->connection_id_prefix);
@@ -113,7 +128,7 @@ void clean_stop_preserves_shared_network_semantics() {
   REQUIRE(!runtime_observation.fault_reason.has_value());
 }
 
-void event_profile_is_closed_depth_only_publication() {
+void event_profile_is_dual_websocket_publication() {
   const auto clock = deterministic_clock();
   rt::MarketRuntime runtime{{4U, 4U}, clock, numeric_spec()};
   REQUIRE(runtime.start() == rt::StartResult::Started);
@@ -137,9 +152,14 @@ void event_profile_is_closed_depth_only_publication() {
   runtime.stop();
 
   REQUIRE(active.profile ==
-          transport::BinanceTransportProfile::DepthWithEvents);
+          transport::BinanceTransportProfile::UsdMCombinedEvents);
+  REQUIRE(active.websocket_handshake);
+  REQUIRE(active.market_websocket_handshake);
+  REQUIRE(active.connection_id != active.market_connection_id);
   REQUIRE(active.agg_trade_frame_count == 0U);
   REQUIRE(active.book_ticker_frame_count == 0U);
+  REQUIRE(active.mark_price_frame_count == 0U);
+  REQUIRE(active.liquidation_frame_count == 0U);
 }
 
 void eth_transport_identity_is_deterministic() {
@@ -171,8 +191,8 @@ int main() {
        exact_usdm_routes_are_product_bound},
       {"CLEAN_STOP_PRESERVES_SHARED_NETWORK_SEMANTICS",
        clean_stop_preserves_shared_network_semantics},
-      {"EVENT_PROFILE_IS_CLOSED_DEPTH_ONLY_PUBLICATION",
-       event_profile_is_closed_depth_only_publication},
+      {"EVENT_PROFILE_IS_DUAL_WEBSOCKET_PUBLICATION",
+       event_profile_is_dual_websocket_publication},
       {"ETH_TRANSPORT_IDENTITY_IS_DETERMINISTIC",
        eth_transport_identity_is_deterministic},
   };

@@ -52,5 +52,5 @@ def test_expected_counts_follow_configured_five_pairs(tmp_path: Path) -> None:
         "usdm": 5,
         "products": 10,
         "books": 10,
-        "streams": 20,
+        "streams": 45,
     }

@@ -1,6 +1,6 @@
 # Current BMDG state
 
-Updated: 2026-11-12. Source tree reorganized by domain and renamed BMDG;
+Updated: 2026-11-13. Source tree reorganized by domain and renamed BMDG;
 historical G0-G11 / G12-A/B/C records archived. v0.4 G3-a, G3-b and M-G1.A are
 complete; plans G1 (Projection M-P2 production pin), G2 (persistent recoverable
 recovery) and G3 (runtime diagnostics + attach-only consumer) have Linux
@@ -35,12 +35,13 @@ PLAN_G2=PERSISTENT_RECOVERY_LINUX_RELEASE_27/27
 PLAN_G3=DIAGNOSTICS_CONSUMER_LINUX_RELEASE_27/27
 PLAN_G4=COMPLETE_VPS_2H_PASS_WITH_OBSERVATIONS
 M4_24H=STOPPED_EARLY_2026-11-12T14:13Z_NOT_PASSED
+C2_G5_G6=CANDIDATE_LOCAL_28/28_LINUX_AND_24H_PENDING
 DEPLOYED_GATEWAY_RELEASE=5e47c59c0769de8b16b67f1aabdb095c3bacdf78
 DEPLOYED_GATEWAY_BINARY_SHA256=f57c1a13670f18a59f34c882c98532934f242d596e9e138852a35a78599c105f
 PLAN_G3C=OPEN_RESOURCE_LATENCY_BUDGET
 DATA_PARITY_SPOT=ALIGNED
-DATA_PARITY_USDM=GAP_BOOKTICKER_AGGTRADE_MARKPRICE_LIQUIDATION
-DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
+DATA_PARITY_USDM=IMPLEMENTED_C2_G5_G6_PENDING_R4
+DATA_PARITY_REST_SIDE_DATA=IMPLEMENTED_TYPED_REFERENCE_DATA_PENDING_R4
 ```
 
 ## Implemented
@@ -57,7 +58,8 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
   failure or exception rolls back the whole set. Later failures are isolated.
 - `SubscribeOrderBook`, `SubscribeEvents`, `GetGatewayStatus`.
   `SubscribeMarketState` is not implemented.
-- Spot events: DIFF_DEPTH / AGG_TRADE / BOOK_TICKER. USD-M events: DIFF_DEPTH.
+- Spot events: DIFF_DEPTH / AGG_TRADE / BOOK_TICKER. USD-M events: DIFF_DEPTH /
+  AGG_TRADE / BOOK_TICKER / MARK_PRICE / LIQUIDATION / REFERENCE_DATA.
   Order-book data is Projection-Applied; depth events are pre-Projection.
 - Per-product 8 order-book + 8 event subscriptions; ordinary order-book queues
   64, event queues 1024, each with a terminal slot; slow consumers are
@@ -93,6 +95,12 @@ DATA_PARITY_REST_SIDE_DATA=RESEARCH_ONLY
   inputs and binary SHA are recorded in [EVIDENCE](EVIDENCE.md). Projection's
   same-commit Ubuntu GCC suite has one inherited M5 allocation-instrumentation
   test failure (513/514); all M-P2 and production Core/Adapter tests pass.
+- C2/G5/G6 local candidate: Contracts message RREV
+  `e79d88e75cb72b2bb7dae75e6d0b5646`, gRPC RREV
+  `0237321d3ab670daa101c3214f0778bd`, Projection P2 RREV
+  `ef04bfbc02bc79f6b31cb6e30588da76`; USD-M dual WS and typed
+  `REFERENCE_DATA` implemented; local Release CTest **28/28**. Linux package
+  IDs/PREVs and the joint 45-stream run remain G7 evidence.
 - Plan G2: recoverable failures continue after the sixth attempt with a 30 s
   backoff cap; history remains seven entries. Seven-failure recovery, long
   `Retry-After` cancellation and Spot/USD-M product-isolation tests pass.

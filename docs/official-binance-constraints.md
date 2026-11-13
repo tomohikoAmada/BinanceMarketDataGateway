@@ -34,7 +34,10 @@ behavior; do not treat old values as permanent.
 
 - Base: `wss://fstream.binance.com`; high-frequency public depth uses
   `/public`, regular market data `/market`, private data `/private`.
-  Single-symbol depth: `/public/ws/<symbol>@depth@100ms`.
+  USD-M public combined route: `/public/stream?streams=<symbol>@depth@100ms/<symbol>@bookTicker`.
+  USD-M market combined route: `/market/stream?streams=<symbol>@aggTrade/<symbol>@markPrice@1s/<symbol>@forceOrder`.
+  Single-symbol depth remains available at `/public/ws/<symbol>@depth@100ms` for the
+  depth-only diagnostic profile.
 - Connection lifetime: 24 hours. Server ping every 3 minutes; disconnect if no
   pong within 10 minutes. At most 1024 streams per connection.
 - `st == 1` and `ps` pair identity are present on relevant single-symbol

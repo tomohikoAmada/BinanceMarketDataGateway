@@ -354,9 +354,15 @@ order_book_request(const rt::MarketKey &key, std::string request_id) {
     return publication::kAggTradeEventSchema;
   case common::STREAM_BOOK_TICKER:
     return publication::kBookTickerEventSchema;
+  case common::STREAM_MARK_PRICE:
+    return publication::kMarkPriceEventSchema;
+  case common::STREAM_LIQUIDATION:
+    return publication::kLiquidationEventSchema;
+  case common::STREAM_REFERENCE_DATA:
+    return publication::kReferenceObservationSchema;
   case common::STREAM_DEPTH_SNAPSHOT:
   case common::STREAM_UNSPECIFIED:
-    break;
+    return publication::kDepthEventSchema;
   default:
     break;
   }
@@ -505,13 +511,14 @@ void selector_matrix_and_registry() {
                         common::STREAM_DIFF_DEPTH, "usdm-depth-validation"),
           "gw-g11-routing")));
   for (const auto stream :
-       {common::STREAM_AGG_TRADE, common::STREAM_BOOK_TICKER}) {
-    REQUIRE_EQ(
-        std::get<rpc::RequestValidationError>(rpc::validate_g11_event_request(
+       {common::STREAM_AGG_TRADE, common::STREAM_BOOK_TICKER,
+        common::STREAM_MARK_PRICE, common::STREAM_LIQUIDATION,
+        common::STREAM_REFERENCE_DATA}) {
+    REQUIRE(std::holds_alternative<publication::ValidatedEventSubscription>(
+        rpc::validate_g11_event_request(
             event_request(common::MARKET_USD_M_PERPETUAL, stream,
-                          "usdm-reject-validation"),
-            "gw-g11-routing")),
-        rpc::RequestValidationError::InvalidArgument);
+                          "usdm-accept-validation"),
+            "gw-g11-routing")));
   }
 }
 
@@ -606,8 +613,8 @@ void four_product_eth_routing_status_and_shutdown() {
   ::grpc::ClientContext unsupported_context;
   set_deadline(unsupported_context);
   auto unsupported = stub->SubscribeEvents(
-      &unsupported_context,
-      event_request(usdm_eth, common::STREAM_AGG_TRADE, "usdm-eth-agg"));
+      &unsupported_context, event_request(usdm_eth, common::STREAM_UNSPECIFIED,
+                                          "usdm-eth-unspecified"));
   REQUIRE(!unsupported->Read(&event_item));
   REQUIRE_EQ(unsupported->Finish().error_code(),
              ::grpc::StatusCode::INVALID_ARGUMENT);
@@ -669,20 +676,6 @@ void loopback_routing_ids_status_and_generation_cuts() {
   rpc::OrderBookGrpcServer server{products.registry(), clock, "gw-g11-routing"};
   REQUIRE(server.start("127.0.0.1:0"));
   auto stub = make_stub(server.selected_port());
-
-  const auto reject_usdm_event = [&](common::Stream stream) {
-    ::grpc::ClientContext context;
-    set_deadline(context);
-    auto reader = stub->SubscribeEvents(
-        &context,
-        event_request(common::MARKET_USD_M_PERPETUAL, stream, "reject-usdm"));
-    wire::GatewayEventEnvelope item;
-    REQUIRE(!reader->Read(&item));
-    REQUIRE_EQ(reader->Finish().error_code(),
-               ::grpc::StatusCode::INVALID_ARGUMENT);
-  };
-  reject_usdm_event(common::STREAM_AGG_TRADE);
-  reject_usdm_event(common::STREAM_BOOK_TICKER);
 
   ::grpc::ClientContext spot_book_context;
   ::grpc::ClientContext usdm_book_context;

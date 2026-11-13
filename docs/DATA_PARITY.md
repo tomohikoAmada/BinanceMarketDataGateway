@@ -1,6 +1,6 @@
 # BMDG ↔ BMDR data parity
 
-Updated: 2026-11-10. This document defines the research/live data contract
+Updated: 2026-11-13. This document defines the research/live data contract
 between **BMDG** (Binance Market Data Gateway) and **BMDR** (Binance Market
 Data Recorder, Python) / **S-BMDR** (C++ rewrite).
 
@@ -30,20 +30,21 @@ Binance public streams/REST
 | Spot bookTicker | recorded | event | aligned |
 | Spot aggTrade | recorded | event | aligned |
 | USD-M depth@100ms | recorded | order book + depth event | aligned |
-| USD-M bookTicker | recorded | not provided | **gap** |
-| USD-M aggTrade | recorded | not provided | **gap** |
-| USD-M markPrice@1s | recorded | not provided | **gap** |
-| USD-M forceOrder | recorded | not provided | **gap** |
-| exchangeInfo | raw REST recorded | internal startup use, not published | research-only |
-| depth snapshot | raw REST recorded | internal bootstrap use, not published | research-only |
-| OI / long-short ratios / taker volume | recorded | not provided | research-only for v1 |
+| USD-M bookTicker | recorded | event | implemented; fixture/wire parity pending R4 |
+| USD-M aggTrade | recorded | event with optional `nq` | implemented; fixture/wire parity pending R4 |
+| USD-M markPrice@1s | recorded | event with next funding time and optional `ap` | implemented; fixture/wire parity pending R4 |
+| USD-M forceOrder | recorded | typed liquidation event | implemented; fixture/wire parity pending R4 |
+| exchangeInfo | raw REST recorded | typed instrument definition (24 h refresh) | implemented; fixture/wire parity pending R4 |
+| depth snapshot | raw REST recorded | typed depth-baseline reference observation | implemented; fixture/wire parity pending R4 |
+| OI / long-short ratios / taker volume | recorded | typed ReferenceObservation, 300 s polling | implemented; fixture/wire parity pending R4 |
 | raw payload bytes | preserved | normalized protobuf only | research-only |
 | gap/capture flags | `capture_flags`, `sequence_gap`, chunk incomplete | Projection state, ConsumerGap, new generation | semantic mapping needed |
 
-Current BMDG is therefore **not yet a live superset of BMDR**. Spot is
-aligned; USD-M is depth-only; REST side data is absent. Until the phases below
-close, fields BMDG does not publish are **research-only** and must not drive a
-live strategy signal.
+BMDG now implements the five USD-M WS families plus the five periodic REST
+sources, exchangeInfo and depth-baseline observations. Raw payload bytes remain
+a Recorder-only capability; BMDG publishes normalized messages. G7 must still
+run the joint replay/live comparison before claiming full parity for every
+field.
 
 ## Contract parity
 
@@ -94,18 +95,16 @@ Define **BMDG Live Contract v1** as the only live source for strategies:
 
 1. `SubscribeOrderBook`: Projection-Applied book, snapshot + diffs, depth
    limit, `last_update_id`, quality, gap.
-2. `SubscribeEvents`: add USD-M `BOOK_TICKER`, `AGG_TRADE`, `MARK_PRICE`,
-   `LIQUIDATION` (requires Contracts messages/enums and two USD-M WS routes).
-3. `SubscribeMarketState`: implement `MarketStateSnapshot` for:
-   - best bid/ask + quantities;
-   - top-N bids/asks;
-   - mid/spread/microprice with an explicit exact-arithmetic/rounding policy;
-   - `source_book_update_id`, `source_trade_id`;
-   - `book_synchronized`, quality, gap, `data_freshness_ms`.
-4. `GetGatewayStatus`: add gap/quality/freshness details needed by monitoring.
-5. REST reference data (OI, long/short, taker): **research-only for Live
-   Contract v1**. Do not add it to a live strategy until BMDG publishes a
-   bounded polling path with explicit freshness and staleness semantics.
+2. `SubscribeEvents`: USD-M `BOOK_TICKER`, `AGG_TRADE`, `MARK_PRICE`,
+   `LIQUIDATION` and typed `REFERENCE_DATA` are implemented through two
+   product-local USD-M WS connections.
+3. REST reference data (OI, long/short, taker, exchangeInfo, depth baseline)
+   is implemented as bounded `REFERENCE_DATA` observations; clients retain
+   source/receive times and apply the 600 s/48 h staleness rules.
+4. `SubscribeMarketState` remains unimplemented; mid/spread/microprice and
+   `data_freshness_ms` are not part of this delivery.
+5. `GetGatewayStatus` keeps its existing fields; per-source reference health is
+   carried by typed observation status rather than a new status framework.
 
 Projection Core should stay pure. Put mid/spread/microprice and
 `MarketStateSnapshot` composition in a dedicated builder above Core (Adapter or
@@ -124,15 +123,13 @@ funding and OI require exchange data, not book derivation.
 
 ## Delivery phases
 
-- **Phase 1**: Contracts + BMDG USD-M five-stream parity; parity test for
-  depth/bookTicker/aggTrade/markPrice/forceOrder.
-- **Phase 2**: `MarketStateSnapshot` / `SubscribeMarketState` for
-  Projection-computable fields; exact mid/spread/microprice policy.
-- **Phase 3**: promote REST reference data only if live strategies require
-  it; add bounded polling publication with freshness/staleness semantics.
-- **Phase 4**: Full BMDR ↔ BMDG replay/live parity campaign on the target VPS.
+- **Phase 1 (implemented)**: Contracts C2 and BMDG USD-M five-stream support.
+- **Phase 2 (implemented)**: BMDG periodic REST reference observations,
+  exchangeInfo refresh and depth baseline publication with explicit status.
+- **Phase 3**: G7 joint BMDR ↔ BMDG replay/live parity campaign on the target
+  VPS, including staleness and field-level comparison.
+- **Phase 4**: only if required, add `MarketStateSnapshot` derived fields with
+  an explicit exact-arithmetic/rounding policy.
 
-Until these phases close, research must not use a BMDR-only live-required
-field for production signals. In particular, USD-M bookTicker/aggTrade/
-markPrice/forceOrder and all REST side data are research-only until BMDG
-publishes them.
+Research must not treat a warming, EMPTY, ERROR or stale reference observation
+as fresh, and must not use raw payload bytes as if BMDG published them.

@@ -111,8 +111,11 @@ does not add a generic registry framework or a shared multiplexed transport.
 
 `SubscribeOrderBook` publishes Projection-Applied data. `SubscribeEvents`
 requires exactly one V1 selector; Spot supports DIFF_DEPTH / AGG_TRADE /
-BOOK_TICKER, USD-M only DIFF_DEPTH. Depth events are
-`PRE_PROJECTION_NORMALIZED`.
+BOOK_TICKER, USD-M supports those plus MARK_PRICE / LIQUIDATION /
+REFERENCE_DATA. Depth events are `PRE_PROJECTION_NORMALIZED`. USD-M owns two
+WebSocket connections per product (`/public` depth+bookTicker and `/market`
+aggTrade+markPrice+forceOrder); all events use one product lifecycle and the
+same bounded publication path.
 
 Per product: at most 8 resident order-book subscriptions and 8 active event
 subscriptions; each ordinary queue is 64 with one terminal slot. Slow consumers
@@ -138,7 +141,10 @@ present timestamp. This is time evidence, not a freshness SLA; quiet markets do
 not automatically Gap/resync.
 
 USD-M depth `E` is event time, `T` is transaction time, trade time stays absent;
-`T=0` and missing `T` keep their presence semantics.
+`T=0` and missing `T` keep their presence semantics. MarkPrice `T` is the next
+funding time; forceOrder `T` is the order trade time. Low-frequency REST
+reference observations preserve source and receive times and never synthesize
+missing numeric values.
 
 ## Build and history
 

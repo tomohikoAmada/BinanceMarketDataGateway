@@ -150,6 +150,12 @@ required_event_schema(common_wire::Stream stream) noexcept {
     return publication::kAggTradeEventSchema;
   case common_wire::STREAM_BOOK_TICKER:
     return publication::kBookTickerEventSchema;
+  case common_wire::STREAM_MARK_PRICE:
+    return publication::kMarkPriceEventSchema;
+  case common_wire::STREAM_LIQUIDATION:
+    return publication::kLiquidationEventSchema;
+  case common_wire::STREAM_REFERENCE_DATA:
+    return publication::kReferenceObservationSchema;
   case common_wire::STREAM_DEPTH_SNAPSHOT:
   case common_wire::STREAM_UNSPECIFIED:
     return std::nullopt;
@@ -213,8 +219,10 @@ required_event_schema(common_wire::Stream stream) noexcept {
   const auto usdm =
       allow_usdm && selector.market() == common_wire::MARKET_USD_M_PERPETUAL;
   const auto supported_stream =
-      (spot && required_schema.has_value()) ||
-      (usdm && selector.stream() == common_wire::STREAM_DIFF_DEPTH);
+      (spot && (selector.stream() == common_wire::STREAM_DIFF_DEPTH ||
+                selector.stream() == common_wire::STREAM_AGG_TRADE ||
+                selector.stream() == common_wire::STREAM_BOOK_TICKER)) ||
+      (usdm && required_schema.has_value());
   if (selector.venue() != common_wire::VENUE_BINANCE ||
       (require_legacy_btcusdt && selector.symbol() != "BTCUSDT") ||
       !supported_stream || !required_schema.has_value()) {
@@ -372,9 +380,21 @@ namespace {
     } else if (const auto *trade =
                    std::get_if<protocol::market::AggTrade>(event.get())) {
       *item.mutable_agg_trade() = *trade;
+    } else if (const auto *ticker =
+                   std::get_if<protocol::market::BookTicker>(event.get())) {
+      *item.mutable_book_ticker() = *ticker;
+    } else if (const auto *mark =
+                   std::get_if<protocol::market::MarkPrice>(event.get())) {
+      *item.mutable_mark_price() = *mark;
+    } else if (const auto *liquidation =
+                   std::get_if<protocol::market::Liquidation>(event.get())) {
+      *item.mutable_liquidation() = *liquidation;
+    } else if (const auto *reference =
+                   std::get_if<protocol::market::ReferenceObservation>(
+                       event.get())) {
+      *item.mutable_reference_observation() = *reference;
     } else {
-      *item.mutable_book_ticker() =
-          std::get<protocol::market::BookTicker>(*event);
+      throw std::logic_error{"event publication payload type is unknown"};
     }
     return item;
   }

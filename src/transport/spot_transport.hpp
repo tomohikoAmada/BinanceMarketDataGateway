@@ -50,9 +50,18 @@ struct NetworkError final {
 struct ExchangeInfoResponse final {
   std::string body;
   bool tls_verified{false};
+  runtime::ClockSample received_at{};
 };
 
 using ExchangeInfoResult = std::variant<ExchangeInfoResponse, NetworkError>;
+
+struct HttpsJsonResponse final {
+  std::string body;
+  runtime::ClockSample received_at;
+  bool tls_verified{false};
+};
+
+using HttpsJsonResult = std::variant<HttpsJsonResponse, NetworkError>;
 
 // All strings in this route description own their storage. The exact symbol
 // remains the caller's MarketKey identity; lowercase text is only Binance
@@ -85,6 +94,14 @@ fetch_exchange_info_https(std::string_view exact_symbol);
 [[nodiscard]] ExchangeInfoResult fetch_spot_exchange_info_set_https();
 [[nodiscard]] runtime::ClockSample sample_real_clock() noexcept;
 
+// Blocking one-shot GET for low-frequency reference polling. It reuses the
+// shared TLS/HTTP implementation and public API budget; callers run it on their
+// product-owned reference thread, never on a WebSocket I/O thread.
+[[nodiscard]] HttpsJsonResult fetch_https_json(std::string host,
+                                               std::string port,
+                                               std::string target,
+                                               std::string user_agent);
+
 enum class TransportStartResult : std::uint8_t {
   Started,
   AlreadyStarted,
@@ -97,6 +114,7 @@ enum class BinanceTransportProfile : std::uint8_t {
   G9CombinedEvents,
   SpotCombinedEvents = G9CombinedEvents,
   DepthWithEvents,
+  UsdMCombinedEvents,
 };
 
 using SpotTransportProfile = BinanceTransportProfile;
@@ -128,15 +146,19 @@ struct TransportObservation final {
   bool stopped{false};
   bool tls_verified{false};
   bool websocket_handshake{false};
+  bool market_websocket_handshake{false};
   bool rest_depth_fetched{false};
   bool server_ping_observed{false};
   bool server_shutdown_observed{false};
   std::size_t depth_frame_count{0U};
   std::size_t agg_trade_frame_count{0U};
   std::size_t book_ticker_frame_count{0U};
+  std::size_t mark_price_frame_count{0U};
+  std::size_t liquidation_frame_count{0U};
   std::optional<std::uint64_t> last_event_utc_ns;
   SpotTransportProfile profile{SpotTransportProfile::DepthOnly};
   std::string connection_id;
+  std::string market_connection_id;
   std::uint64_t connection_generation{1U};
   std::optional<NetworkError> terminal_error;
 };
@@ -190,13 +212,18 @@ struct BinanceTransportConfig final {
   std::string websocket_host;
   std::string websocket_port;
   std::string websocket_target;
+  std::string market_websocket_host;
+  std::string market_websocket_port;
+  std::string market_websocket_target;
   std::string connection_id_prefix;
   std::string snapshot_request_id;
   std::string user_agent;
   BinanceTransportProfile profile{BinanceTransportProfile::DepthOnly};
   NormalizedEventSink normalized_event_sink;
+  NormalizedEventSink reference_event_sink;
   DepthFrameParser depth_frame_parser;
   CombinedFrameParser combined_frame_parser;
+  CombinedFrameParser market_frame_parser;
   DepthSnapshotParser depth_snapshot_parser;
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   std::shared_ptr<performance::ProductTraceBuffer> performance_baseline;

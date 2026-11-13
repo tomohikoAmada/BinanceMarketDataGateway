@@ -9,6 +9,8 @@ namespace binance_market_data::gateway::transport {
 
 using protocol::parse_usdm_depth_frame;
 using protocol::parse_usdm_depth_snapshot;
+using protocol::parse_usdm_market_event_frame;
+using protocol::parse_usdm_public_event_frame;
 using protocol::usdm_stream_symbol;
 
 namespace {
@@ -34,10 +36,30 @@ make_usdm_transport_config(std::string exact_symbol,
   config.connection_id_prefix = routes->connection_id_prefix;
   config.snapshot_request_id = routes->snapshot_request_id;
   config.user_agent = "bmdg-usdm/1.0.0";
-  config.profile = options.normalized_event_sink
-                       ? transport::BinanceTransportProfile::DepthWithEvents
-                       : transport::BinanceTransportProfile::DepthOnly;
+  if (options.normalized_event_sink) {
+    config.profile = transport::BinanceTransportProfile::UsdMCombinedEvents;
+    config.websocket_target = routes->websocket_target;
+    config.market_websocket_host = routes->websocket_host;
+    config.market_websocket_port = routes->websocket_port;
+    config.market_websocket_target = routes->market_websocket_target;
+    config.combined_frame_parser = [symbol](std::string_view payload,
+                                            runtime::ClockSample received_at,
+                                            std::string_view connection_id) {
+      return parse_usdm_public_event_frame(payload, received_at, connection_id,
+                                           symbol);
+    };
+    config.market_frame_parser = [symbol](std::string_view payload,
+                                          runtime::ClockSample received_at,
+                                          std::string_view connection_id) {
+      return parse_usdm_market_event_frame(payload, received_at, connection_id,
+                                           symbol);
+    };
+  } else {
+    config.profile = transport::BinanceTransportProfile::DepthOnly;
+    config.websocket_target = routes->raw_websocket_target;
+  }
   config.normalized_event_sink = std::move(options.normalized_event_sink);
+  config.reference_event_sink = std::move(options.reference_event_sink);
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   config.performance_baseline = std::move(options.performance_baseline);
 #endif
@@ -71,8 +93,19 @@ make_usdm_transport_routes(std::string_view exact_symbol) {
       "/fapi/v1/depth?symbol=" + std::string{exact_symbol} + "&limit=1000";
   routes.websocket_host = kUsdMTransportRoutes.websocket_host;
   routes.websocket_port = kUsdMTransportRoutes.websocket_port;
-  routes.websocket_target = "/public/ws/" + *encoded_symbol + "@depth@100ms";
+  routes.raw_websocket_target =
+      "/public/ws/" + *encoded_symbol + "@depth@100ms";
   routes.diff_depth_stream = *encoded_symbol + "@depth@100ms";
+  routes.book_ticker_stream = *encoded_symbol + "@bookTicker";
+  routes.agg_trade_stream = *encoded_symbol + "@aggTrade";
+  routes.mark_price_stream = *encoded_symbol + "@markPrice@1s";
+  routes.force_order_stream = *encoded_symbol + "@forceOrder";
+  routes.websocket_target =
+      "/public/stream?streams=" + routes.diff_depth_stream + "/" +
+      routes.book_ticker_stream;
+  routes.market_websocket_target =
+      "/market/stream?streams=" + routes.agg_trade_stream + "/" +
+      routes.mark_price_stream + "/" + routes.force_order_stream;
   routes.snapshot_limit = 1000U;
   routes.connection_id_prefix = "binance-usdm-" + *encoded_symbol + "-g";
   routes.snapshot_request_id =

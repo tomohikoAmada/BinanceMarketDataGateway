@@ -38,6 +38,7 @@ using protocol::parse_depth_snapshot;
 using protocol::ProtocolError;
 using protocol::ServerShutdown;
 using protocol::spot_stream_symbol;
+namespace common_wire = ::binance_market_data::common::v1;
 namespace core = protocol::core;
 namespace market = protocol::market;
 
@@ -161,9 +162,10 @@ public:
 
   AsyncExchangeInfoGet(asio::io_context &context, ssl::context &tls_context,
                        detail::ExchangeInfoEndpoint endpoint,
-                       Completion completion)
+                       runtime::RuntimeClock clock, Completion completion)
       : resolver_{context}, stream_{context, tls_context}, timer_{context},
-        endpoint_{std::move(endpoint)}, completion_{std::move(completion)} {
+        clock_{std::move(clock)}, endpoint_{std::move(endpoint)},
+        completion_{std::move(completion)} {
     request_.method(http::verb::get);
     request_.target(endpoint_.target);
     request_.version(11);
@@ -178,7 +180,7 @@ public:
   }
 
   void start() {
-    if (detail::shared_public_api_budget().delay(
+    if (detail::shared_public_api_budget().admit(
             detail::is_usdm_host(endpoint_.host), false,
             detail::public_rest_weight(endpoint_.host, endpoint_.target)) >
         std::chrono::steady_clock::duration::zero()) {
@@ -305,7 +307,17 @@ private:
                 retry_after_from(response)));
             return;
           }
-          self->finish(ExchangeInfoResponse{std::move(response.body()), true});
+          runtime::ClockSample received_at{};
+          try {
+            received_at = self->clock_();
+          } catch (...) {
+            self->finish(network_error(NetworkErrorCode::Internal,
+                                       "exchange-info-receive-clock",
+                                       "receive clock failed"));
+            return;
+          }
+          self->finish(ExchangeInfoResponse{std::move(response.body()), true,
+                                            received_at});
         });
   }
 
@@ -347,6 +359,7 @@ private:
   beast::flat_buffer buffer_;
   http::request<http::empty_body> request_;
   http::response_parser<http::string_body> parser_;
+  runtime::RuntimeClock clock_;
   detail::ExchangeInfoEndpoint endpoint_;
   Completion completion_;
   std::uint64_t timeout_generation_{0U};
@@ -1117,6 +1130,41 @@ runtime::ClockSample sample_real_clock() noexcept {
   return {safe(utc), safe(monotonic)};
 }
 
+HttpsJsonResult fetch_https_json(std::string host, std::string port,
+                                 std::string target, std::string user_agent) {
+  asio::io_context context;
+  ssl::context tls_context{ssl::context::tls_client};
+  configure_ssl_context(tls_context);
+  std::optional<AsyncHttpsGet::Result> completion;
+  auto request = std::make_shared<AsyncHttpsGet>(
+      context, tls_context, sample_real_clock, host, port, target,
+      std::move(user_agent), [&completion](AsyncHttpsGet::Result result) {
+        completion.emplace(std::move(result));
+      });
+  try {
+    request->start();
+    context.run();
+  } catch (const std::exception &failure) {
+    return network_error(NetworkErrorCode::Internal, "reference-http",
+                         failure.what());
+  } catch (...) {
+    return network_error(NetworkErrorCode::Internal, "reference-http",
+                         "reference HTTP request failed");
+  }
+  if (!completion.has_value()) {
+    return network_error(NetworkErrorCode::Internal, "reference-http",
+                         "reference HTTP request produced no completion");
+  }
+  if (const auto *failure = std::get_if<NetworkError>(&*completion)) {
+    return *failure;
+  }
+  auto [response, received_at] = std::get<
+      std::pair<http::response<http::string_body>, runtime::ClockSample>>(
+      std::move(*completion));
+  return HttpsJsonResponse{std::move(response.body()), received_at,
+                           response.result() == http::status::ok};
+}
+
 ExchangeInfoResult
 detail::fetch_exchange_info_https(const ExchangeInfoEndpoint &endpoint) {
   if (endpoint.host.empty() || endpoint.port.empty() ||
@@ -1131,7 +1179,7 @@ detail::fetch_exchange_info_https(const ExchangeInfoEndpoint &endpoint) {
     configure_ssl_context(tls_context);
     std::optional<ExchangeInfoResult> result;
     const auto operation = std::make_shared<AsyncExchangeInfoGet>(
-        context, tls_context, endpoint,
+        context, tls_context, endpoint, sample_real_clock,
         [&result](ExchangeInfoResult completed) {
           if (!result.has_value()) {
             result.emplace(std::move(completed));
@@ -1222,6 +1270,21 @@ public:
       throw std::invalid_argument{
           "Spot combined transport requires a combined parser"};
     }
+    const auto has_market_websocket = !config_.market_websocket_host.empty() ||
+                                      !config_.market_websocket_port.empty() ||
+                                      !config_.market_websocket_target.empty();
+    if (has_market_websocket && (config_.market_websocket_host.empty() ||
+                                 config_.market_websocket_port.empty() ||
+                                 config_.market_websocket_target.empty() ||
+                                 !config_.market_frame_parser)) {
+      throw std::invalid_argument{
+          "secondary market WebSocket requires complete routes and a parser"};
+    }
+    if (config_.profile == BinanceTransportProfile::UsdMCombinedEvents &&
+        !has_market_websocket) {
+      throw std::invalid_argument{
+          "USD-M combined transport requires the market WebSocket route"};
+    }
     if (config_.profile != BinanceTransportProfile::DepthOnly &&
         !config_.normalized_event_sink) {
       throw std::invalid_argument{
@@ -1234,6 +1297,11 @@ public:
     observation_.connection_id = config_.connection_id_prefix +
                                  std::to_string(connection_generation) + "-" +
                                  std::to_string(opened_at.utc_ns);
+    if (!config_.market_websocket_target.empty()) {
+      observation_.market_connection_id =
+          config_.connection_id_prefix + std::to_string(connection_generation) +
+          "-market-" + std::to_string(opened_at.utc_ns);
+    }
   }
 
   ~Impl() { stop(); }
@@ -1257,16 +1325,20 @@ public:
         start_stop_cut_test_transport();
       }
     });
-    condition_.wait(lock, [this] {
-      return observation_.websocket_handshake ||
+    const auto require_market = !config_.market_websocket_target.empty();
+    condition_.wait(lock, [this, require_market] {
+      return (observation_.websocket_handshake &&
+              (!require_market || observation_.market_websocket_handshake)) ||
              observation_.terminal_error.has_value() || observation_.stopped ||
              stop_requested_;
     });
     if (observation_.stopped || stop_requested_) {
       return TransportStartResult::Stopped;
     }
-    return observation_.websocket_handshake ? TransportStartResult::Started
-                                            : TransportStartResult::Failed;
+    return observation_.websocket_handshake &&
+                   (!require_market || observation_.market_websocket_handshake)
+               ? TransportStartResult::Started
+               : TransportStartResult::Failed;
   }
 
   void stop() noexcept {
@@ -1339,6 +1411,9 @@ private:
       std::lock_guard lock{mutex_};
       observation_.tls_verified = true;
       observation_.websocket_handshake = true;
+      if (!config_.market_websocket_target.empty()) {
+        observation_.market_websocket_handshake = true;
+      }
       observation_.rest_depth_fetched = true;
       observation_.depth_frame_count = 1U;
       observation_.running = true;
@@ -1402,19 +1477,81 @@ private:
       observation_.running = true;
     }
     condition_.notify_all();
-    depth_request_ = std::make_shared<AsyncHttpsGet>(
+    if (!config_.market_websocket_target.empty()) {
+      start_market_websocket();
+      return;
+    }
+    start_depth_request();
+  }
+
+  void start_market_websocket() {
+    WebSocketCallbacks callbacks;
+    callbacks.tls_verified = [this] {
+      std::lock_guard lock{mutex_};
+      observation_.tls_verified = true;
+    };
+    callbacks.active = [this] { market_websocket_active(); };
+    callbacks.ping = [this] {
+      std::lock_guard lock{mutex_};
+      observation_.server_ping_observed = true;
+      condition_.notify_all();
+    };
+    callbacks.message = [this](std::string payload,
+                               runtime::ClockSample received_at) {
+      return receive_market_websocket_message(std::move(payload), received_at);
+    };
+    callbacks.failure = [this](NetworkError failure) {
+      terminal_failure(std::move(failure), false);
+    };
+    market_websocket_ = std::make_shared<AsyncWebSocket>(
+        context_, tls_context_, clock_, config_.market_websocket_host,
+        config_.market_websocket_port, config_.market_websocket_target,
+        config_.user_agent, std::move(callbacks));
+    market_websocket_->start();
+  }
+
+  void market_websocket_active() {
+    {
+      std::lock_guard lock{mutex_};
+      if (stop_requested_) {
+        return;
+      }
+      observation_.market_websocket_handshake = true;
+      observation_.running = true;
+    }
+    condition_.notify_all();
+    start_depth_request();
+  }
+
+  void start_depth_request() {
+    {
+      std::lock_guard lock{mutex_};
+      if (stop_requested_ || depth_request_) {
+        return;
+      }
+    }
+    auto request = std::make_shared<AsyncHttpsGet>(
         context_, tls_context_, clock_, config_.rest_host, config_.rest_port,
         config_.depth_target, config_.user_agent,
         [this](AsyncHttpsGet::Result result) {
           receive_depth_response(std::move(result));
         });
-    depth_request_->start();
+    {
+      std::lock_guard lock{mutex_};
+      if (stop_requested_) {
+        request->cancel();
+        return;
+      }
+      depth_request_ = request;
+    }
+    request->start();
   }
 
   [[nodiscard]] bool
   receive_websocket_message(std::string payload,
                             runtime::ClockSample received_at) {
-    if (config_.profile != BinanceTransportProfile::SpotCombinedEvents) {
+    if (config_.profile == BinanceTransportProfile::DepthOnly ||
+        config_.profile == BinanceTransportProfile::DepthWithEvents) {
       auto parsed = config_.depth_frame_parser(payload, received_at,
                                                observe().connection_id);
       if (std::holds_alternative<ServerShutdown>(parsed)) {
@@ -1464,6 +1601,19 @@ private:
 
     auto parsed = config_.combined_frame_parser(payload, received_at,
                                                 observe().connection_id);
+    return handle_combined_frame(std::move(parsed), received_at);
+  }
+
+  [[nodiscard]] bool
+  receive_market_websocket_message(std::string payload,
+                                   runtime::ClockSample received_at) {
+    auto parsed = config_.market_frame_parser(payload, received_at,
+                                              observe().market_connection_id);
+    return handle_combined_frame(std::move(parsed), received_at);
+  }
+
+  [[nodiscard]] bool handle_combined_frame(CombinedFrameResult parsed,
+                                           runtime::ClockSample received_at) {
     if (std::holds_alternative<ServerShutdown>(parsed)) {
       receive_server_shutdown();
       return false;
@@ -1511,16 +1661,22 @@ private:
 #endif
       );
     }
-    {
-      std::lock_guard lock{mutex_};
-      if (std::holds_alternative<market::AggTrade>(*event)) {
-        ++observation_.agg_trade_frame_count;
-      } else {
-        ++observation_.book_ticker_frame_count;
-      }
+    record_event_count(*event);
+    return true;
+  }
+
+  void record_event_count(const NormalizedMarketEvent &event) {
+    std::lock_guard lock{mutex_};
+    if (std::holds_alternative<market::AggTrade>(event)) {
+      ++observation_.agg_trade_frame_count;
+    } else if (std::holds_alternative<market::BookTicker>(event)) {
+      ++observation_.book_ticker_frame_count;
+    } else if (std::holds_alternative<market::MarkPrice>(event)) {
+      ++observation_.mark_price_frame_count;
+    } else if (std::holds_alternative<market::Liquidation>(event)) {
+      ++observation_.liquidation_frame_count;
     }
     condition_.notify_all();
-    return true;
   }
 
   [[nodiscard]] bool publish_normalized_event(
@@ -1624,9 +1780,54 @@ private:
                        true);
       return;
     }
+    auto snapshot = std::get<market::ExchangeDepthSnapshot>(std::move(parsed));
+    if (config_.reference_event_sink) {
+      market::ReferenceObservation observation;
+      observation.set_schema_version("reference-observation.v1");
+      observation.set_venue(common_wire::VENUE_BINANCE);
+      observation.set_market(common_wire::MARKET_USD_M_PERPETUAL);
+      observation.set_symbol(snapshot.symbol());
+      observation.set_request_id(snapshot.request_id());
+      observation.set_source_kind(
+          common_wire::REFERENCE_SOURCE_KIND_DEPTH_BASELINE);
+      observation.set_receive_time_utc_ns(received_at.utc_ns);
+      observation.set_status(common_wire::REFERENCE_OBSERVATION_STATUS_VALID);
+      if (snapshot.has_exchange_event_time_ms()) {
+        observation.set_source_time_ms(snapshot.exchange_event_time_ms());
+      }
+      *observation.mutable_depth_baseline() = snapshot;
+      std::shared_ptr<const NormalizedMarketEvent> event;
+      try {
+        event = std::make_shared<const NormalizedMarketEvent>(
+            std::move(observation));
+      } catch (...) {
+        terminal_failure(network_error(NetworkErrorCode::Internal,
+                                       "depth-baseline-allocation",
+                                       "reference event allocation failed"),
+                         true);
+        return;
+      }
+      NormalizedEventSinkResult sink_result{};
+      try {
+        sink_result = config_.reference_event_sink(event, connection_generation_
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
+                                                   ,
+                                                   {}
+#endif
+        );
+      } catch (...) {
+        sink_result = NormalizedEventSinkResult::InvariantFailure;
+      }
+      if (sink_result == NormalizedEventSinkResult::InvariantFailure) {
+        terminal_failure(network_error(NetworkErrorCode::Internal,
+                                       "depth-baseline-publication",
+                                       "reference event sink failed closed"),
+                         true);
+        return;
+      }
+    }
     const auto admitted = runtime_.submit_snapshot(
-        std::get<market::ExchangeDepthSnapshot>(std::move(parsed)),
-        runtime::SourceProvenance{connection_generation_});
+        std::move(snapshot), runtime::SourceProvenance{connection_generation_});
     if (admitted != runtime::AdmissionResult::Accepted) {
       terminal_failure(
           network_error(NetworkErrorCode::RuntimeAdmission,
@@ -1690,6 +1891,10 @@ private:
     if (websocket) {
       websocket->cancel();
     }
+    auto market_websocket = std::move(market_websocket_);
+    if (market_websocket) {
+      market_websocket->cancel();
+    }
     auto depth_request = std::move(depth_request_);
     if (depth_request) {
       depth_request->cancel();
@@ -1714,6 +1919,7 @@ private:
   std::optional<asio::executor_work_guard<asio::io_context::executor_type>>
       work_guard_;
   std::shared_ptr<AsyncWebSocket> websocket_;
+  std::shared_ptr<AsyncWebSocket> market_websocket_;
   std::shared_ptr<AsyncHttpsGet> depth_request_;
   std::optional<asio::steady_timer> clean_shutdown_barrier_;
   std::optional<asio::steady_timer> test_cancel_timer_;

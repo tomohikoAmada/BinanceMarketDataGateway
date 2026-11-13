@@ -9,6 +9,28 @@ namespace binance_market_data::gateway::publication {
 
 namespace {
 
+[[nodiscard]] std::optional<std::size_t> reference_slot(
+    const protocol::market::ReferenceObservation &observation) noexcept {
+  switch (observation.source_kind()) {
+  case common_wire::REFERENCE_SOURCE_KIND_OPEN_INTEREST:
+    return 0U;
+  case common_wire::REFERENCE_SOURCE_KIND_TOP_LONG_SHORT_ACCOUNT_RATIO:
+    return 1U;
+  case common_wire::REFERENCE_SOURCE_KIND_TOP_LONG_SHORT_POSITION_RATIO:
+    return 2U;
+  case common_wire::REFERENCE_SOURCE_KIND_GLOBAL_LONG_SHORT_ACCOUNT_RATIO:
+    return 3U;
+  case common_wire::REFERENCE_SOURCE_KIND_TAKER_BUY_SELL_VOLUME:
+    return 4U;
+  case common_wire::REFERENCE_SOURCE_KIND_INSTRUMENT:
+    return 5U;
+  case common_wire::REFERENCE_SOURCE_KIND_DEPTH_BASELINE:
+    return 6U;
+  default:
+    return std::nullopt;
+  }
+}
+
 [[nodiscard]] std::shared_ptr<const EventPublicationRecord>
 make_accepted_record(const ValidatedEventSubscription &subscription,
                      const std::string &subscription_id,
@@ -36,7 +58,16 @@ normalized_event_stream(const protocol::NormalizedMarketEvent &event) noexcept {
   if (std::holds_alternative<protocol::market::AggTrade>(event)) {
     return common_wire::STREAM_AGG_TRADE;
   }
-  return common_wire::STREAM_BOOK_TICKER;
+  if (std::holds_alternative<protocol::market::BookTicker>(event)) {
+    return common_wire::STREAM_BOOK_TICKER;
+  }
+  if (std::holds_alternative<protocol::market::MarkPrice>(event)) {
+    return common_wire::STREAM_MARK_PRICE;
+  }
+  if (std::holds_alternative<protocol::market::Liquidation>(event)) {
+    return common_wire::STREAM_LIQUIDATION;
+  }
+  return common_wire::STREAM_REFERENCE_DATA;
 }
 
 EventSubscriberChannel::EventSubscriberChannel(
@@ -346,6 +377,9 @@ bool EventPublication::open_generation(std::uint64_t generation) noexcept {
   }
   source_generation_ = generation;
   source_state_ = EventSourceState::Open;
+  // A recovered product must obtain a fresh exchange depth baseline; stale
+  // bootstrap evidence is not replayed into the new generation.
+  reference_cache_[6U].reset();
   return true;
 }
 
@@ -428,6 +462,17 @@ EventPublication::admit(const ValidatedEventSubscription &subscription) {
     if (!channel->stage_accepted(std::move(accepted))) {
       return EventSubscriptionAdmissionError::InternalError;
     }
+    if (subscription.stream == common_wire::STREAM_REFERENCE_DATA) {
+      for (const auto &cached : reference_cache_) {
+        if (cached == nullptr) {
+          continue;
+        }
+        if (channel->admit_event(cached, *published_at) ==
+            EventAdmissionResult::AllocationFailure) {
+          return EventSubscriptionAdmissionError::InternalError;
+        }
+      }
+    }
     channels_.push_back(channel);
     ++next_subscription_id_;
     return AcceptedEventSubscription{std::move(channel)};
@@ -462,6 +507,18 @@ EventPublishResult EventPublication::publish(
     return EventPublishResult::InvariantFailure;
   }
   const auto stream = normalized_event_stream(*event);
+  if (stream == common_wire::STREAM_REFERENCE_DATA) {
+    const auto *reference =
+        std::get_if<protocol::market::ReferenceObservation>(event.get());
+    if (reference == nullptr) {
+      return EventPublishResult::InvariantFailure;
+    }
+    const auto slot = reference_slot(*reference);
+    if (!slot.has_value()) {
+      return EventPublishResult::InvariantFailure;
+    }
+    reference_cache_[*slot] = event;
+  }
   for (const auto &channel : channels_) {
     if (channel == nullptr || channel->stream() != stream ||
         channel->source_generation() != generation) {

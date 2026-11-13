@@ -594,6 +594,122 @@ void event_context_shutdown_race() {
   runtime.stop();
 }
 
+void usdm_side_and_reference_envelopes() {
+  publication::EventPublication publication{"gw-g5", fixed_clock()};
+  REQUIRE(publication.open_generation(1U));
+  const rt::MarketKey key{common::VENUE_BINANCE, common::MARKET_USD_M_PERPETUAL,
+                          "BTCUSDT"};
+
+  market::MarkPrice mark;
+  mark.mutable_metadata()->set_venue(common::VENUE_BINANCE);
+  mark.mutable_metadata()->set_market(common::MARKET_USD_M_PERPETUAL);
+  mark.mutable_metadata()->set_symbol("BTCUSDT");
+  mark.mutable_metadata()->set_stream(common::STREAM_MARK_PRICE);
+  mark.mutable_metadata()->set_schema_version(
+      publication::kMarkPriceEventSchema);
+  mark.mutable_metadata()->set_receive_time_utc_ns(10U);
+  mark.set_mark_price("11794.15");
+  mark.set_index_price("11784.62");
+  mark.set_estimated_settle_price("11784.25");
+  mark.set_funding_rate("-0.00038167");
+  mark.set_next_funding_time_ms(1562306400000U);
+
+  market::Liquidation liquidation;
+  liquidation.mutable_metadata()->set_venue(common::VENUE_BINANCE);
+  liquidation.mutable_metadata()->set_market(common::MARKET_USD_M_PERPETUAL);
+  liquidation.mutable_metadata()->set_symbol("BTCUSDT");
+  liquidation.mutable_metadata()->set_stream(common::STREAM_LIQUIDATION);
+  liquidation.mutable_metadata()->set_schema_version(
+      publication::kLiquidationEventSchema);
+  liquidation.set_side("SELL");
+  liquidation.set_order_type("LIMIT");
+  liquidation.set_time_in_force("IOC");
+  liquidation.set_original_quantity("0.014");
+  liquidation.set_price("9910");
+  liquidation.set_average_price("9910");
+  liquidation.set_order_status("FILLED");
+  liquidation.set_last_filled_quantity("0.014");
+  liquidation.set_accumulated_filled_quantity("0.014");
+  liquidation.set_order_trade_time_ms(1568014460893U);
+
+  market::ReferenceObservation reference;
+  reference.set_schema_version("reference-observation.v1");
+  reference.set_venue(common::VENUE_BINANCE);
+  reference.set_market(common::MARKET_USD_M_PERPETUAL);
+  reference.set_symbol("BTCUSDT");
+  reference.set_request_id("reference-1");
+  reference.set_source_kind(common::REFERENCE_SOURCE_KIND_OPEN_INTEREST);
+  reference.set_receive_time_utc_ns(30U);
+  reference.set_status(common::REFERENCE_OBSERVATION_STATUS_VALID);
+  reference.mutable_open_interest()->set_open_interest("12345.678");
+
+  const auto admit = [&publication](common::Stream stream, const char *schema,
+                                    const char *request_id) {
+    auto result = publication.admit({request_id, stream, schema});
+    REQUIRE(
+        std::holds_alternative<publication::AcceptedEventSubscription>(result));
+    return std::get<publication::AcceptedEventSubscription>(std::move(result))
+        .channel;
+  };
+  const auto mark_channel = admit(common::STREAM_MARK_PRICE,
+                                  publication::kMarkPriceEventSchema, "mark");
+  auto accepted = mark_channel->peek();
+  REQUIRE(accepted.has_value());
+  REQUIRE_EQ(mark_channel->acknowledge(accepted),
+             publication::EventAcknowledgeResult::Acknowledged);
+  REQUIRE_EQ(
+      publication.publish(
+          std::make_shared<const protocol::NormalizedMarketEvent>(mark), 1U),
+      publication::EventPublishResult::Published);
+  auto record = mark_channel->peek();
+  auto envelope = rpc::materialize_event_envelope(*mark_channel, record, key);
+  REQUIRE(envelope.has_mark_price());
+  REQUIRE_EQ(envelope.mark_price().funding_rate(), "-0.00038167");
+  REQUIRE_EQ(mark_channel->acknowledge(record),
+             publication::EventAcknowledgeResult::Acknowledged);
+
+  const auto liquidation_channel =
+      admit(common::STREAM_LIQUIDATION, publication::kLiquidationEventSchema,
+            "liquidation");
+  accepted = liquidation_channel->peek();
+  REQUIRE(accepted.has_value());
+  REQUIRE_EQ(liquidation_channel->acknowledge(accepted),
+             publication::EventAcknowledgeResult::Acknowledged);
+  REQUIRE_EQ(
+      publication.publish(
+          std::make_shared<const protocol::NormalizedMarketEvent>(liquidation),
+          1U),
+      publication::EventPublishResult::Published);
+  record = liquidation_channel->peek();
+  envelope = rpc::materialize_event_envelope(*liquidation_channel, record, key);
+  REQUIRE(envelope.has_liquidation());
+  REQUIRE_EQ(envelope.liquidation().order_status(), "FILLED");
+  REQUIRE_EQ(liquidation_channel->acknowledge(record),
+             publication::EventAcknowledgeResult::Acknowledged);
+
+  const auto reference_channel =
+      admit(common::STREAM_REFERENCE_DATA,
+            publication::kReferenceObservationSchema, "reference");
+  accepted = reference_channel->peek();
+  REQUIRE(accepted.has_value());
+  REQUIRE_EQ(reference_channel->acknowledge(accepted),
+             publication::EventAcknowledgeResult::Acknowledged);
+  REQUIRE_EQ(
+      publication.publish(
+          std::make_shared<const protocol::NormalizedMarketEvent>(reference),
+          1U),
+      publication::EventPublishResult::Published);
+  record = reference_channel->peek();
+  envelope = rpc::materialize_event_envelope(*reference_channel, record, key);
+  REQUIRE(envelope.has_reference_observation());
+  REQUIRE_EQ(envelope.reference_observation().source_kind(),
+             common::REFERENCE_SOURCE_KIND_OPEN_INTEREST);
+  REQUIRE_EQ(envelope.reference_observation().open_interest().open_interest(),
+             "12345.678");
+  REQUIRE_EQ(reference_channel->acknowledge(record),
+             publication::EventAcknowledgeResult::Acknowledged);
+}
+
 } // namespace
 
 int main() {
@@ -607,6 +723,7 @@ int main() {
       {"SLOW_EVENT_CONSUMER_DOES_NOT_STALL_G7",
        slow_event_consumer_does_not_stall_g7},
       {"EVENT_CONTEXT_SHUTDOWN_RACE", event_context_shutdown_race},
+      {"USDM_SIDE_AND_REFERENCE_ENVELOPES", usdm_side_and_reference_envelopes},
   };
   for (const auto &[name, test] : tests) {
     try {

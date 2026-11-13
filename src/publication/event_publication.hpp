@@ -9,6 +9,7 @@
 #include <binance_market_data/common/v1/enums.pb.h>
 #include <binance_market_data/gateway/v1/gateway_messages.pb.h>
 
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -38,6 +39,11 @@ inline constexpr char kEventSubscriptionAcceptedSchema[] =
 inline constexpr char kDepthEventSchema[] = "depth-update.v1";
 inline constexpr char kAggTradeEventSchema[] = "agg-trade.v1";
 inline constexpr char kBookTickerEventSchema[] = "book-ticker.v1";
+inline constexpr char kMarkPriceEventSchema[] = "mark-price.v1";
+inline constexpr char kLiquidationEventSchema[] = "liquidation.v1";
+inline constexpr char kReferenceObservationSchema[] =
+    "reference-observation.v1";
+inline constexpr std::size_t kReferenceSourceCount = 7U;
 
 struct EventPublicationLimits final {
   std::size_t maximum_active_subscriptions{kMaximumActiveEventSubscriptions};
@@ -282,6 +288,9 @@ private:
   std::optional<std::uint64_t> source_generation_;
   std::uint64_t next_subscription_id_{1U};
   std::vector<std::shared_ptr<EventSubscriberChannel>> channels_;
+  std::array<std::shared_ptr<const protocol::NormalizedMarketEvent>,
+             kReferenceSourceCount>
+      reference_cache_{};
 };
 
 [[nodiscard]] common_wire::Stream

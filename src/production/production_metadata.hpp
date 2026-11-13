@@ -1,6 +1,7 @@
 #pragma once
 
 #include "composition/multi_market_runtime.hpp"
+#include "production/reference_seed.hpp"
 #include "transport/spot_transport.hpp"
 #include "transport/usdm_transport.hpp"
 
@@ -31,6 +32,7 @@ struct ResolvedProductSpec final {
 
 struct ProductionMetadata final {
   std::vector<ResolvedProductSpec> products;
+  std::vector<UsdMReferenceSeed> usdm_references;
 };
 
 struct MetadataError final {
