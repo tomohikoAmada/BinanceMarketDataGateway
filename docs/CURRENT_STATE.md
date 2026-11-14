@@ -1,6 +1,6 @@
 # Current BMDG state
 
-Updated: 2026-11-13. Source tree reorganized by domain and renamed BMDG;
+Updated: 2026-11-14. Source tree reorganized by domain and renamed BMDG;
 historical G0-G11 / G12-A/B/C records archived. v0.4 G3-a, G3-b and M-G1.A are
 complete; plans G1 (Projection M-P2 production pin), G2 (persistent recoverable
 recovery) and G3 (runtime diagnostics + attach-only consumer) have Linux
@@ -34,14 +34,17 @@ PLAN_G1_PROJECTION_PIN=COMPLETE_LINUX_RELEASE_27/27
 PLAN_G2=PERSISTENT_RECOVERY_LINUX_RELEASE_27/27
 PLAN_G3=DIAGNOSTICS_CONSUMER_LINUX_RELEASE_27/27
 PLAN_G4=COMPLETE_VPS_2H_PASS_WITH_OBSERVATIONS
-M4_24H=STOPPED_EARLY_2026-11-12T14:13Z_NOT_PASSED
-C2_G5_G6=IMPLEMENTED_LOCAL_RELEASE_28/28_G5_G6_G7_G8ABD
-DEPLOYED_GATEWAY_RELEASE=5e47c59c0769de8b16b67f1aabdb095c3bacdf78
-DEPLOYED_GATEWAY_BINARY_SHA256=f57c1a13670f18a59f34c882c98532934f242d596e9e138852a35a78599c105f
-PLAN_G3C=OPEN_RESOURCE_LATENCY_BUDGET
+M4_24H=RAN_24H_UTC_ROLLOVER_VERIFIED_STOLEN_CPU_SPIKE_DROP_ATTRIBUTED
+C2_G5_G6=COMPLETE_CI_PASSED_43582864682
+G7_G8_ABCD=COMPLETE_CI_PASSED_43582864682
+DEPLOYED_GATEWAY_RELEASE=fa76a4caea0c9e146b1fd1f6f14ec6e2dc8306de
+DEPLOYED_GATEWAY_TOOLS_RELEASE=c2ecbcd99d7492b93576068231dc953445ccac16
+DEPLOYED_GATEWAY_BINARY_SHA256=39044638220204d287294b691ae3f3e530f42f56b789e23393cc23e3135aac03
+SAME_HOST_CONSUMER_PROBE=STOPPED_DISABLED_PER_OFF_HOST_POLICY
+PLAN_G3C=RELAXED_SHARED_VPS_FULL_LOAD_BUDGET_OFF_HOST_CLIENT
 DATA_PARITY_SPOT=ALIGNED
-DATA_PARITY_USDM=IMPLEMENTED_PENDING_R4_FIXTURE_PARITY
-DATA_PARITY_REST_SIDE_DATA=IMPLEMENTED_PENDING_R4_FIXTURE_PARITY
+DATA_PARITY_USDM=ALIGNED_R4_G7_PARITY_OK
+DATA_PARITY_REST_SIDE_DATA=ALIGNED_R4_G7_PARITY_OK
 ```
 
 ## Implemented
@@ -165,11 +168,34 @@ DATA_PARITY_REST_SIDE_DATA=IMPLEMENTED_PENDING_R4_FIXTURE_PARITY
   and reads `dropped_total`/queue/durability from the Recorder status logs.
   Tests pass locally; the consumer remains stopped and no 24h run has been
   restarted.
-- **BMDG/BMDR data parity**: Spot is aligned; USD-M bookTicker/aggTrade/
-  markPrice/forceOrder and REST side data are not yet live-provided. See
+- **G5–G8 / R4↔G7 closure (`325efee`, 2026-11-14):** `G8-c` removed
+  `TransportStopCutTestMode` / `start_stop_cut_test_transport` /
+  `test_cancel_timer_` from production transport constructors in favor of
+  `detail::TransportSeam`. `BMDG CI` run `43582864682` passed all jobs
+  (Foundation GCC/Clang, ASan/UBSan/TSan, clang-format, consumer probe tests,
+  and Linux Production Release 28/28). Independent `-Werror`
+  `gateway_parity_dump` verified `PARITY_OK` against Recorder R4 across 14
+  envelopes, L2 `OrderBook`, USD-M `pu` gap, and all 7 reference source kinds.
+- **VPS 5-pair / 45-stream 24h & post-fix checks (2026-11-13/14):** Gateway
+  `fa76a4c` (binary `39044638…`) ran 24.05 h (`2026-11-13T09:29:11Z -> 09:29:29Z`,
+  2,800 samples) alongside Recorder `1b3c9c95` and the 11-shard consumer with
+  `0` service restarts; natural `00:00Z` UTC rollover and R3 auto-migration
+  completed (`pending_migrate_partitions=0`, `migration_failures=0`), Spot
+  recorded `42,030,426` events (`0` drops), and USD-M recorded `160,992,397`
+  events (`345,081` drops = `0.214%`, localized exclusively to two hypervisor
+  CPU-steal storms peaking at `175%` and `281%`). After fixing probe bugs
+  in `0a8426b` (`seen_keys`, direct `cold_root` path, `1200s` source age,
+  `0.0s` clean resubscribe delay), a clean follow-up verification ran 32
+  samples (`976.8s`) with `ok=True`, `45/45` valid, `10/10` keys, `5/5`
+  reference streams, and `0` RPC/status/protocol errors. Per deployment policy
+  (clients will run off-host or optimized; shared-VPS full-load CPU limits are
+  relaxed), `bmdg-consumer.service` was stopped and disabled; an example client
+  lives under `examples/consumer/`.
+- **BMDG/BMDR data parity**: Spot and configured USD-M WS + REST streams
+  (excluding raw payload bytes) are aligned and `R4↔G7` parity-verified. See
   [DATA_PARITY](DATA_PARITY.md).
-- No approved multi-product performance/SLA budget. Twenty products is a
-  resource bound, not measured production capacity.
+- No approved standalone SLA for full-load same-VPS colocation; gateway clients
+  are expected to run off-host or further optimized.
 
 See [MILESTONES](MILESTONES.md), [EVIDENCE](EVIDENCE.md),
 [CODE_MAP](CODE_MAP.md) and [ARCHITECTURE](../ARCHITECTURE.md).

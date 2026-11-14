@@ -1,6 +1,6 @@
 # BMDG milestone plan
 
-Updated: 2026-11-12. Current work follows the BinanceMarketData v0.4 overall
+Updated: 2026-11-14. Current work follows the BinanceMarketData v0.4 overall
 and BMDG module plans. Historical G0-G11 / G12-A/B/C remain complete and
 archived; the v0.3/v0.4 G0-G3 labels do not reopen that history.
 
@@ -17,7 +17,9 @@ archived; the v0.3/v0.4 G0-G3 labels do not reopen that history.
 | M-G1 | Hot-path copy/logging cleanup and single startup parsing | Partly open |
 | M-G2 | Historical macros, duplicate types and boilerplate removal | Partly open |
 | G4 | Tokyo VPS co-located 20-key / 40-stream 2h acceptance | Complete 2026-11-12; PASS with observations |
-| G3-c | Shared VPS, real network, Recorder co-load, resource budget | **Open** |
+| G5–G6 | USD-M 5 WS families, typed `REFERENCE_DATA` & quarantine | Complete (`fa76a4c`, CI `433905...` + `43582864682` pass) |
+| G7 / G8 | 45-stream probe, 11 shards, `R4↔G7` parity, `G8-c` test-seam cleanup | Complete (`0a8426b` / `325efee`, CI `43582864682` pass) |
+| G3-c | Shared VPS, real network, Recorder co-load, resource budget | Mitigated / relaxed by deployment policy (off-host/optimized client) |
 
 ## Current design boundaries
 
@@ -35,7 +37,8 @@ archived; the v0.3/v0.4 G0-G3 labels do not reopen that history.
   destroying products.
 - Bounded queues, slow-client isolation, cancellation lifetime safety, source
   quiescence and async-safe signals are required.
-- Spot events: DIFF_DEPTH / AGG_TRADE / BOOK_TICKER; USD-M: DIFF_DEPTH.
+- Spot events: DIFF_DEPTH / AGG_TRADE / BOOK_TICKER; USD-M: DIFF_DEPTH /
+  AGG_TRADE / BOOK_TICKER / MARK_PRICE / LIQUIDATION / REFERENCE_DATA.
   Order-book publication is Projection-Applied; depth events are pre-Projection.
 - Insecure gRPC binds numeric loopback only. `SubscribeMarketState` remains
   unimplemented.
@@ -77,9 +80,9 @@ archived; the v0.3/v0.4 G0-G3 labels do not reopen that history.
   adapter fast path is implemented. P1's full-book-copy attribution is
   pre-optimization evidence. Re-measure the complete BMDG path on the target
   VPS in G3-c before claiming new CPU/RSS budgets.
-- BMDG/BMDR data parity: Spot streams are aligned; USD-M
-  bookTicker/aggTrade/markPrice/forceOrder are Phase 1 gaps. REST side data
-  (OI, long/short, taker) is explicitly research-only for Live Contract v1.
+- BMDG/BMDR data parity: Spot and configured USD-M WS/REST sources are aligned
+  and `R4↔G7` fixture parity verified (`PARITY_OK`). Only raw payload bytes
+  remain research-only; derived `SubscribeMarketState` remains unimplemented.
   See [DATA_PARITY](DATA_PARITY.md). Do not use a BMDR-only live-required field
   for production signals until BMDG provides it or it is marked research-only.
 - Consider BMDG hot-path cleanups only with before/after measurements; do

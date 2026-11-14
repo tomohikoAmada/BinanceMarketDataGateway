@@ -25,9 +25,9 @@ This is the current evidence index. Full historical records are in
 - `bmd-gatewayd` build symlink and installed symlink point to `bmdg`.
 - Old `BMD_GATEWAY_*` CMake options configure successfully as deprecated
   aliases.
-- Data parity: Spot depth/bookTicker/aggTrade aligned; USD-M
-  bookTicker/aggTrade/markPrice/forceOrder are Phase 1 gaps; REST side data is
-  explicitly research-only for Live Contract v1. See
+- Data parity: Spot depth/bookTicker/aggTrade and USD-M five WS + seven typed
+  REST reference source kinds are aligned (`R4↔G7` `PARITY_OK`). Only raw
+  payload bytes remain `research-only` for Live Contract v1. See
   [DATA_PARITY](DATA_PARITY.md).
 
 ## M-G1.A — protocol boundaries and startup metadata
@@ -43,9 +43,34 @@ This is the current evidence index. Full historical records are in
 - A 10 Spot + 10 USD-M startup metadata test resolves all 20 products and
   verifies each symbol's precision from one fetch count per market.
 
-## G5 / G6 / G7 / G8-a,b,d — USD-M five WS, typed reference data, quarantine & sharded acceptance tooling
+## G5 / G6 / G7 / G8-a,b,c,d — USD-M five WS, typed reference data, quarantine, G8-c cleanup & VPS 45-stream campaign
 
-Local verification completed on macOS Release; upstream Linux CI artifacts and joint 24h VPS deployment remain pending.
+- **CI & parity closure (`325efee`, 2026-11-14)**:
+  - `G8-c` (`a0132c8` + `325efee`) removed `TransportStopCutTestMode`,
+    `start_stop_cut_test_transport()`, and `test_cancel_timer_` from production
+    `SpotTransport` / `UsdMTransport` constructors (`detail::TransportSeam`
+    isolates test injection).
+  - Linux CI run [43582864682](https://github.com/tomohikoAmada/BinanceMarketDataGateway/actions/runs/43582864682)
+    passed all jobs (`Foundation gcc/clang`, `ASan/UBSan/TSan`, `clang-format`,
+    `consumer probe tests`, and `BMDG Production Release / four- and
+    twenty-product offline`).
+  - Cross-repo `R4 vs G7` parity (`gateway_parity_dump` `-Werror`) verified
+    `PARITY_OK` on 14 envelopes, L2 `OrderBook (update_id=103)`, USD-M `pu`
+    sequence gap, and all 7 reference source kinds.
+- **VPS 45-stream 24h run (`fa76a4c`, `2026-11-13T09:29:11Z -> 09:29:29Z`)**:
+  - 2,800 samples (`86,413.5 s`), 0 restarts across all 5 core units; R3
+    natural `00:00Z` partition rollover and cold metadata migration completed
+    with `pending_migrate_partitions=0`, `migration_failures=0`.
+  - Spot Recorder: `42,030,426` records, `0` drops. USD-M Recorder:
+    `160,992,397` records, `345,081` drops (`0.214%`), exclusively during two
+    hypervisor CPU-steal storms (`175%` and `281%`).
+- **Post-fix consumer verification (`0a8426b`, `2026-11-14T09:42:59Z -> 09:59:16Z`)**:
+  - Fixed probe telemetry bugs (`seen_keys` shadowing, direct `cold_root` lookup,
+    `1200s` periodic source age window, `0.0s` healthy resubscribe delay).
+  - 32 samples (`976.8s`): `ok=True`, `45/45` accepted/valid, `10/10` status keys,
+    `5/5` healthy reference streams, `0` RPC/status/protocol errors.
+  - Per deployment policy, `bmdg-consumer.service` was stopped and disabled;
+    standalone client example published in `examples/consumer/`.
 
 - Contracts source `24a209b1a415c4f4dd56d864eee9132135bc7237`;
   message C++ RREV `9739b82137e9d6437ef66bbbf81a9ddd`; gRPC C++ RREV

@@ -1,6 +1,6 @@
 # BMDG ↔ BMDR data parity
 
-Updated: 2026-11-13. This document defines the research/live data contract
+Updated: 2026-11-14. This document defines the research/live data contract
 between **BMDG** (Binance Market Data Gateway) and **BMDR** (Binance Market
 Data Recorder, Python) / **S-BMDR** (C++ rewrite).
 
@@ -30,21 +30,22 @@ Binance public streams/REST
 | Spot bookTicker | recorded | event | aligned |
 | Spot aggTrade | recorded | event | aligned |
 | USD-M depth@100ms | recorded | order book + depth event | aligned |
-| USD-M bookTicker | recorded | event | implemented; fixture/wire parity pending R4 |
-| USD-M aggTrade | recorded | event with optional `nq` | implemented; fixture/wire parity pending R4 |
-| USD-M markPrice@1s | recorded | event with next funding time and optional `ap` | implemented; fixture/wire parity pending R4 |
-| USD-M forceOrder | recorded | typed liquidation event | implemented; fixture/wire parity pending R4 |
-| exchangeInfo | raw REST recorded | typed instrument definition (24 h refresh) | implemented; fixture/wire parity pending R4 |
-| depth snapshot | raw REST recorded | typed depth-baseline reference observation | implemented; fixture/wire parity pending R4 |
-| OI / long-short ratios / taker volume | recorded | typed ReferenceObservation, 300 s polling | implemented; fixture/wire parity pending R4 |
+| USD-M bookTicker | recorded | event | aligned (`R4↔G7` parity verified) |
+| USD-M aggTrade | recorded | event with optional `nq` | aligned (`R4↔G7` parity verified) |
+| USD-M markPrice@1s | recorded | event with next funding time and optional `ap` | aligned (`R4↔G7` parity verified) |
+| USD-M forceOrder | recorded | typed liquidation event | aligned (`R4↔G7` parity verified; zero-event live tolerated) |
+| exchangeInfo | raw REST recorded | typed instrument definition (24 h refresh) | aligned (`R4↔G7` parity verified) |
+| depth snapshot | raw REST recorded | typed depth-baseline reference observation | aligned (`R4↔G7` parity verified) |
+| OI / long-short ratios / taker volume | recorded | typed ReferenceObservation, 300 s polling | aligned (`R4↔G7` parity verified) |
 | raw payload bytes | preserved | normalized protobuf only | research-only |
-| gap/capture flags | `capture_flags`, `sequence_gap`, chunk incomplete | Projection state, ConsumerGap, new generation | semantic mapping needed |
+| gap/capture flags | `capture_flags`, `sequence_gap`, chunk incomplete | Projection state, ConsumerGap, new generation | explicit operational mapping |
 
-BMDG now implements the five USD-M WS families plus the five periodic REST
-sources, exchangeInfo and depth-baseline observations. Raw payload bytes remain
-a Recorder-only capability; BMDG publishes normalized messages. G7 must still
-run the joint replay/live comparison before claiming full parity for every
-field.
+BMDG implements and delivers the five USD-M WS families plus the five periodic
+REST sources, `exchangeInfo` (with per-product quarantine on incompatible spec
+changes), and depth-baseline observations. Joint `R4 ↔ G7` same-input fixture
+comparison passed (`PARITY_OK` across 14 envelopes, L2 `OrderBook`, USD-M `pu`
+gap detection, and all 7 reference source kinds). Raw payload bytes remain a
+Recorder-only capability (`research-only`); BMDG publishes normalized messages.
 
 ## Contract parity
 
@@ -138,11 +139,12 @@ Full parity steps:
 
 ## Delivery phases
 
-- **Phase 1 (implemented)**: Contracts C2 and BMDG USD-M five-stream support.
-- **Phase 2 (implemented)**: BMDG periodic REST reference observations,
-  exchangeInfo refresh and depth baseline publication with explicit status.
-- **Phase 3**: G7 joint BMDR ↔ BMDG replay/live parity campaign on the target
-  VPS, including staleness and field-level comparison.
+- **Phase 1 (complete)**: Contracts C2 and BMDG USD-M five-stream support.
+- **Phase 2 (complete)**: BMDG periodic REST reference observations,
+  exchangeInfo refresh (with per-product quarantine) and depth baseline
+  publication with explicit `VALID`/`EMPTY`/`ERROR` status.
+- **Phase 3 (complete)**: G7 / R4 same-input fixture parity verified (`PARITY_OK`)
+  and 5-pair / 45-stream sharded consumer probe verified live on VPS.
 - **Phase 4**: only if required, add `MarketStateSnapshot` derived fields with
   an explicit exact-arithmetic/rounding policy.
 
