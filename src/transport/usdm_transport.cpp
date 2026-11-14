@@ -17,6 +17,10 @@ namespace {
 
 constexpr auto kStageTimeout = std::chrono::seconds{10};
 
+} // namespace
+
+namespace detail {
+
 [[nodiscard]] transport::detail::BinanceTransportConfig
 make_usdm_transport_config(std::string exact_symbol,
                            UsdMTransportOptions options) {
@@ -76,7 +80,7 @@ make_usdm_transport_config(std::string exact_symbol,
   return config;
 }
 
-} // namespace
+} // namespace detail
 
 std::optional<UsdMTransportRoutes>
 make_usdm_transport_routes(std::string_view exact_symbol) {
@@ -120,24 +124,22 @@ transport::ExchangeInfoResult fetch_usdm_exchange_info_https() {
        std::string{kUsdMTransportRoutes.exchange_info_target}, kStageTimeout});
 }
 
-UsdMTransport::UsdMTransport(
-    runtime::MarketRuntime &runtime, runtime::RuntimeClock clock,
-    std::uint64_t connection_generation, UsdMTransportOptions options,
-    transport::detail::TransportTestOptions test_options)
+UsdMTransport::UsdMTransport(runtime::MarketRuntime &runtime,
+                             runtime::RuntimeClock clock,
+                             std::uint64_t connection_generation,
+                             UsdMTransportOptions options)
     : UsdMTransport(runtime, std::move(clock), std::string{"BTCUSDT"},
-                    connection_generation, std::move(options),
-                    std::move(test_options)) {}
+                    connection_generation, std::move(options)) {}
 
-UsdMTransport::UsdMTransport(
-    runtime::MarketRuntime &runtime, runtime::RuntimeClock clock,
-    std::string exact_symbol, std::uint64_t connection_generation,
-    UsdMTransportOptions options,
-    transport::detail::TransportTestOptions test_options)
+UsdMTransport::UsdMTransport(runtime::MarketRuntime &runtime,
+                             runtime::RuntimeClock clock,
+                             std::string exact_symbol,
+                             std::uint64_t connection_generation,
+                             UsdMTransportOptions options)
     : transport_{std::make_unique<transport::detail::BinanceTransport>(
           runtime, std::move(clock), connection_generation,
-          make_usdm_transport_config(std::move(exact_symbol),
-                                     std::move(options)),
-          std::move(test_options))} {}
+          detail::make_usdm_transport_config(std::move(exact_symbol),
+                                             std::move(options)))} {}
 
 UsdMTransport::~UsdMTransport() = default;
 

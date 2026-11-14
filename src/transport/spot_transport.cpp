@@ -58,51 +58,6 @@ constexpr std::string_view kWebSocketHost = "stream.binance.com";
 constexpr std::string_view kWebSocketPort = "9443";
 constexpr auto kStageTimeout = std::chrono::seconds{10};
 
-[[nodiscard]] detail::BinanceTransportConfig
-spot_transport_config(std::string exact_symbol, SpotTransportOptions options) {
-  const auto routes = make_spot_transport_routes(exact_symbol);
-  if (!routes.has_value()) {
-    throw std::invalid_argument{
-        "Spot symbol cannot be represented by a Binance route"};
-  }
-  const auto combined =
-      options.profile == SpotTransportProfile::G9CombinedEvents;
-  const std::string symbol{exact_symbol};
-  detail::BinanceTransportConfig config;
-  config.rest_host = routes->rest_host;
-  config.rest_port = routes->rest_port;
-  config.depth_target = routes->depth_target;
-  config.websocket_host = routes->websocket_host;
-  config.websocket_port = routes->websocket_port;
-  config.websocket_target =
-      combined ? routes->combined_websocket_target : routes->websocket_target;
-  config.connection_id_prefix = routes->connection_id_prefix;
-  config.snapshot_request_id = routes->snapshot_request_id;
-  config.user_agent = "bmdg-spot/1.0.0";
-  config.profile = options.profile;
-  config.normalized_event_sink = std::move(options.normalized_event_sink);
-#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
-  config.performance_baseline = std::move(options.performance_baseline);
-#endif
-  config.depth_frame_parser = [symbol](std::string_view payload,
-                                       runtime::ClockSample received_at,
-                                       std::string_view connection_id) {
-    return parse_depth_frame(payload, received_at, connection_id, symbol);
-  };
-  config.combined_frame_parser = [symbol](std::string_view payload,
-                                          runtime::ClockSample received_at,
-                                          std::string_view connection_id) {
-    return parse_combined_event_frame(payload, received_at, connection_id,
-                                      symbol);
-  };
-  config.depth_snapshot_parser = [symbol](std::string_view payload,
-                                          runtime::ClockSample received_at,
-                                          std::string_view request_id) {
-    return parse_depth_snapshot(payload, received_at, request_id, symbol);
-  };
-  return config;
-}
-
 [[nodiscard]] NetworkError
 network_error(NetworkErrorCode code, std::string stage, std::string message,
               std::optional<unsigned> status = std::nullopt,
@@ -1318,12 +1273,29 @@ public:
     work_guard_.emplace(asio::make_work_guard(context_));
     network_thread_ = std::thread{[this] { context_.run(); }};
     asio::post(context_, [this] {
-      if (test_options_.stop_cut_mode ==
-          detail::TransportStopCutTestMode::None) {
+      if (!test_options_.start_operation) {
         start_websocket();
-      } else {
-        start_stop_cut_test_transport();
+        return;
       }
+      detail::TransportSeam seam;
+      seam.mark_ready = [this] {
+        {
+          std::lock_guard lock{mutex_};
+          observation_.tls_verified = true;
+          observation_.websocket_handshake = true;
+          if (!config_.market_websocket_target.empty()) {
+            observation_.market_websocket_handshake = true;
+          }
+          observation_.rest_depth_fetched = true;
+          observation_.depth_frame_count = 1U;
+          observation_.running = true;
+        }
+        condition_.notify_all();
+      };
+      seam.fail = [this](NetworkError failure, bool snapshot_failure) {
+        terminal_failure(std::move(failure), snapshot_failure);
+      };
+      test_operation_cancel_ = test_options_.start_operation(seam);
     });
     const auto require_market = !config_.market_websocket_target.empty();
     condition_.wait(lock, [this, require_market] {
@@ -1389,58 +1361,6 @@ public:
   }
 
 private:
-  void start_stop_cut_test_transport() {
-    test_cancel_timer_.emplace(context_);
-    test_cancel_timer_->expires_after(std::chrono::hours{24});
-    test_cancel_timer_->async_wait([this](const ErrorCode &error_code) {
-      if (is_clean_cancellation(error_code, network_clean_cancel_requested_)) {
-        return;
-      }
-      terminal_failure(error_from_code(NetworkErrorCode::Internal,
-                                       "test-clean-cancellation", error_code),
-                       false);
-    });
-    if (test_options_.stop_cut_mode ==
-        detail::TransportStopCutTestMode::StartPendingUntilStop) {
-      if (test_options_.start_pending) {
-        test_options_.start_pending();
-      }
-      return;
-    }
-    {
-      std::lock_guard lock{mutex_};
-      observation_.tls_verified = true;
-      observation_.websocket_handshake = true;
-      if (!config_.market_websocket_target.empty()) {
-        observation_.market_websocket_handshake = true;
-      }
-      observation_.rest_depth_fetched = true;
-      observation_.depth_frame_count = 1U;
-      observation_.running = true;
-    }
-    condition_.notify_all();
-
-    if (test_options_.stop_cut_mode !=
-        detail::TransportStopCutTestMode::PreexistingFailure) {
-      return;
-    }
-
-    {
-      std::unique_lock lock{mutex_};
-      condition_.wait(lock, [this] { return stop_requested_; });
-    }
-    // This models an I/O failure already ready at the stop boundary while
-    // deterministically exercising the adverse order: clean cancellation is
-    // established first in the network domain, then the genuine completion is
-    // delivered. terminal_failure() must still preserve it.
-    begin_clean_shutdown();
-    terminal_failure(
-        network_error(NetworkErrorCode::WebSocketRead,
-                      "test-preexisting-network-failure",
-                      "genuine failure was ready before the stop cut"),
-        false);
-  }
-
   void start_websocket() {
     WebSocketCallbacks callbacks;
     callbacks.tls_verified = [this] {
@@ -1899,8 +1819,8 @@ private:
     if (depth_request) {
       depth_request->cancel();
     }
-    if (test_cancel_timer_.has_value()) {
-      test_cancel_timer_->cancel();
+    if (auto cancel = std::exchange(test_operation_cancel_, {})) {
+      cancel();
     }
   }
 
@@ -1922,7 +1842,7 @@ private:
   std::shared_ptr<AsyncWebSocket> market_websocket_;
   std::shared_ptr<AsyncHttpsGet> depth_request_;
   std::optional<asio::steady_timer> clean_shutdown_barrier_;
-  std::optional<asio::steady_timer> test_cancel_timer_;
+  std::function<void()> test_operation_cancel_;
   std::thread network_thread_;
   detail::TransportTestOptions test_options_;
 
@@ -1934,76 +1854,114 @@ private:
   bool network_clean_cancel_requested_{false};
 };
 
-detail::BinanceTransport::BinanceTransport(runtime::MarketRuntime &runtime,
-                                           runtime::RuntimeClock clock,
-                                           std::uint64_t connection_generation,
-                                           BinanceTransportConfig config,
-                                           TransportTestOptions test_options)
+namespace detail {
+
+[[nodiscard]] BinanceTransportConfig
+spot_transport_config(std::string exact_symbol, SpotTransportOptions options) {
+  const auto routes = make_spot_transport_routes(exact_symbol);
+  if (!routes.has_value()) {
+    throw std::invalid_argument{
+        "Spot symbol cannot be represented by a Binance route"};
+  }
+  const auto combined =
+      options.profile == SpotTransportProfile::G9CombinedEvents;
+  const std::string symbol{exact_symbol};
+  BinanceTransportConfig config;
+  config.rest_host = routes->rest_host;
+  config.rest_port = routes->rest_port;
+  config.depth_target = routes->depth_target;
+  config.websocket_host = routes->websocket_host;
+  config.websocket_port = routes->websocket_port;
+  config.websocket_target =
+      combined ? routes->combined_websocket_target : routes->websocket_target;
+  config.connection_id_prefix = routes->connection_id_prefix;
+  config.snapshot_request_id = routes->snapshot_request_id;
+  config.user_agent = "bmdg-spot/1.0.0";
+  config.profile = options.profile;
+  config.normalized_event_sink = std::move(options.normalized_event_sink);
+#if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
+  config.performance_baseline = std::move(options.performance_baseline);
+#endif
+  config.depth_frame_parser = [symbol](std::string_view payload,
+                                       runtime::ClockSample received_at,
+                                       std::string_view connection_id) {
+    return parse_depth_frame(payload, received_at, connection_id, symbol);
+  };
+  config.combined_frame_parser = [symbol](std::string_view payload,
+                                          runtime::ClockSample received_at,
+                                          std::string_view connection_id) {
+    return parse_combined_event_frame(payload, received_at, connection_id,
+                                      symbol);
+  };
+  config.depth_snapshot_parser = [symbol](std::string_view payload,
+                                          runtime::ClockSample received_at,
+                                          std::string_view request_id) {
+    return parse_depth_snapshot(payload, received_at, request_id, symbol);
+  };
+  return config;
+}
+
+BinanceTransport::BinanceTransport(runtime::MarketRuntime &runtime,
+                                   runtime::RuntimeClock clock,
+                                   std::uint64_t connection_generation,
+                                   BinanceTransportConfig config,
+                                   TransportTestOptions test_options)
     : impl_{std::make_unique<Impl>(runtime, std::move(clock),
                                    connection_generation, std::move(config),
                                    std::move(test_options))} {}
 
-detail::BinanceTransport::~BinanceTransport() = default;
+BinanceTransport::~BinanceTransport() = default;
 
-TransportStartResult detail::BinanceTransport::start() {
-  return impl_->start();
-}
+TransportStartResult BinanceTransport::start() { return impl_->start(); }
 
-void detail::BinanceTransport::stop() noexcept { impl_->stop(); }
+void BinanceTransport::stop() noexcept { impl_->stop(); }
 
-TransportObservation detail::BinanceTransport::observe() const {
+TransportObservation BinanceTransport::observe() const {
   return impl_->observe();
 }
 
+} // namespace detail
+
 SpotTransport::SpotTransport(runtime::MarketRuntime &runtime,
-                             runtime::RuntimeClock clock,
-                             detail::TransportTestOptions test_options)
+                             runtime::RuntimeClock clock)
     : SpotTransport(runtime, std::move(clock), std::string{"BTCUSDT"}, 1U,
-                    SpotTransportOptions{}, test_options) {}
+                    SpotTransportOptions{}) {}
+
+SpotTransport::SpotTransport(runtime::MarketRuntime &runtime,
+                             runtime::RuntimeClock clock,
+                             std::uint64_t connection_generation)
+    : SpotTransport(runtime, std::move(clock), std::string{"BTCUSDT"},
+                    connection_generation, SpotTransportOptions{}) {}
 
 SpotTransport::SpotTransport(runtime::MarketRuntime &runtime,
                              runtime::RuntimeClock clock,
                              std::uint64_t connection_generation,
-                             detail::TransportTestOptions test_options)
+                             SpotTransportOptions options)
     : SpotTransport(runtime, std::move(clock), std::string{"BTCUSDT"},
-                    connection_generation, SpotTransportOptions{},
-                    test_options) {}
+                    connection_generation, std::move(options)) {}
 
 SpotTransport::SpotTransport(runtime::MarketRuntime &runtime,
                              runtime::RuntimeClock clock,
-                             std::uint64_t connection_generation,
-                             SpotTransportOptions options,
-                             detail::TransportTestOptions test_options)
-    : SpotTransport(runtime, std::move(clock), std::string{"BTCUSDT"},
-                    connection_generation, std::move(options),
-                    std::move(test_options)) {}
-
-SpotTransport::SpotTransport(runtime::MarketRuntime &runtime,
-                             runtime::RuntimeClock clock,
-                             std::string exact_symbol,
-                             detail::TransportTestOptions test_options)
+                             std::string exact_symbol)
     : SpotTransport(runtime, std::move(clock), std::move(exact_symbol), 1U,
-                    SpotTransportOptions{}, std::move(test_options)) {}
+                    SpotTransportOptions{}) {}
 
 SpotTransport::SpotTransport(runtime::MarketRuntime &runtime,
                              runtime::RuntimeClock clock,
                              std::string exact_symbol,
-                             std::uint64_t connection_generation,
-                             detail::TransportTestOptions test_options)
+                             std::uint64_t connection_generation)
     : SpotTransport(runtime, std::move(clock), std::move(exact_symbol),
-                    connection_generation, SpotTransportOptions{},
-                    std::move(test_options)) {}
+                    connection_generation, SpotTransportOptions{}) {}
 
 SpotTransport::SpotTransport(runtime::MarketRuntime &runtime,
                              runtime::RuntimeClock clock,
                              std::string exact_symbol,
                              std::uint64_t connection_generation,
-                             SpotTransportOptions options,
-                             detail::TransportTestOptions test_options)
+                             SpotTransportOptions options)
     : transport_{std::make_unique<detail::BinanceTransport>(
           runtime, std::move(clock), connection_generation,
-          spot_transport_config(std::move(exact_symbol), std::move(options)),
-          std::move(test_options))} {}
+          detail::spot_transport_config(std::move(exact_symbol),
+                                        std::move(options)))} {}
 
 SpotTransport::~SpotTransport() = default;
 

@@ -170,16 +170,14 @@ namespace detail {
 inline constexpr auto kWebSocketIdleTimeout = std::chrono::seconds{90};
 inline constexpr bool kWebSocketKeepAlivePings = false;
 
-enum class TransportStopCutTestMode : std::uint8_t {
-  None,
-  CleanCancellation,
-  PreexistingFailure,
-  StartPendingUntilStop,
+struct TransportSeam final {
+  std::function<void()> mark_ready;
+  std::function<void(NetworkError failure, bool snapshot_failure)> fail;
 };
 
 struct TransportTestOptions final {
-  TransportStopCutTestMode stop_cut_mode{TransportStopCutTestMode::None};
-  std::function<void()> start_pending;
+  std::function<std::function<void()>(const TransportSeam &seam)>
+      start_operation;
   std::function<void()> stop_winner_gate;
   std::function<void()> stop_waiter_entered;
 };
@@ -230,6 +228,9 @@ struct BinanceTransportConfig final {
 #endif
 };
 
+[[nodiscard]] BinanceTransportConfig
+spot_transport_config(std::string exact_symbol, SpotTransportOptions options);
+
 class BinanceTransport final {
 public:
   BinanceTransport(runtime::MarketRuntime &runtime, runtime::RuntimeClock clock,
@@ -262,25 +263,19 @@ live_acceptance_ready(const TransportObservation &transport,
 // coordinated by the same external lifecycle owner as MarketRuntime.
 class SpotTransport final {
 public:
+  SpotTransport(runtime::MarketRuntime &runtime, runtime::RuntimeClock clock);
   SpotTransport(runtime::MarketRuntime &runtime, runtime::RuntimeClock clock,
-                detail::TransportTestOptions test_options = {});
-  SpotTransport(runtime::MarketRuntime &runtime, runtime::RuntimeClock clock,
-                std::uint64_t connection_generation,
-                detail::TransportTestOptions test_options = {});
+                std::uint64_t connection_generation);
   SpotTransport(runtime::MarketRuntime &runtime, runtime::RuntimeClock clock,
                 std::uint64_t connection_generation,
-                SpotTransportOptions options,
-                detail::TransportTestOptions test_options = {});
+                SpotTransportOptions options);
   SpotTransport(runtime::MarketRuntime &runtime, runtime::RuntimeClock clock,
-                std::string exact_symbol,
-                detail::TransportTestOptions test_options = {});
+                std::string exact_symbol);
   SpotTransport(runtime::MarketRuntime &runtime, runtime::RuntimeClock clock,
-                std::string exact_symbol, std::uint64_t connection_generation,
-                detail::TransportTestOptions test_options = {});
+                std::string exact_symbol, std::uint64_t connection_generation);
   SpotTransport(runtime::MarketRuntime &runtime, runtime::RuntimeClock clock,
                 std::string exact_symbol, std::uint64_t connection_generation,
-                SpotTransportOptions options,
-                detail::TransportTestOptions test_options = {});
+                SpotTransportOptions options);
   ~SpotTransport();
 
   SpotTransport(const SpotTransport &) = delete;

@@ -71,13 +71,11 @@ class UsdMTransport final {
 public:
   UsdMTransport(runtime::MarketRuntime &runtime, runtime::RuntimeClock clock,
                 std::uint64_t connection_generation = 1U,
-                UsdMTransportOptions options = {},
-                transport::detail::TransportTestOptions test_options = {});
+                UsdMTransportOptions options = {});
   UsdMTransport(runtime::MarketRuntime &runtime, runtime::RuntimeClock clock,
                 std::string exact_symbol,
                 std::uint64_t connection_generation = 1U,
-                UsdMTransportOptions options = {},
-                transport::detail::TransportTestOptions test_options = {});
+                UsdMTransportOptions options = {});
   ~UsdMTransport();
 
   UsdMTransport(const UsdMTransport &) = delete;
@@ -92,5 +90,13 @@ public:
 private:
   std::unique_ptr<transport::detail::BinanceTransport> transport_;
 };
+
+namespace detail {
+
+[[nodiscard]] transport::detail::BinanceTransportConfig
+make_usdm_transport_config(std::string exact_symbol,
+                           UsdMTransportOptions options);
+
+} // namespace detail
 
 } // namespace binance_market_data::gateway::transport

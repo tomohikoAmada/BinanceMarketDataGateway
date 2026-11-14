@@ -296,10 +296,17 @@ clean_started_stop_has_no_false_failure(const rt::RuntimeClock &clock) {
   if (runtime.start() != rt::StartResult::Started) {
     return false;
   }
+  bool cancelled = false;
   transport::detail::TransportTestOptions options;
-  options.stop_cut_mode =
-      transport::detail::TransportStopCutTestMode::CleanCancellation;
-  transport::SpotTransport transport{runtime, clock, std::move(options)};
+  options.start_operation =
+      [&cancelled](const transport::detail::TransportSeam &seam) {
+        seam.mark_ready();
+        return [&cancelled] { cancelled = true; };
+      };
+  transport::detail::BinanceTransport transport{
+      runtime, clock, 1U,
+      transport::detail::spot_transport_config("BTCUSDT", {}),
+      std::move(options)};
   if (transport.start() != transport::TransportStartResult::Started) {
     transport.stop();
     runtime.stop();
@@ -310,7 +317,7 @@ clean_started_stop_has_no_false_failure(const rt::RuntimeClock &clock) {
   const auto observation = transport.observe();
   const auto runtime_observation = runtime.observe();
   runtime.stop();
-  return observation.stopped && !observation.running &&
+  return cancelled && observation.stopped && !observation.running &&
          !observation.terminal_error.has_value() &&
          !runtime_observation.fault_reason.has_value();
 }
@@ -322,9 +329,24 @@ preexisting_failure_survives_stop_cut(const rt::RuntimeClock &clock) {
     return false;
   }
   transport::detail::TransportTestOptions options;
-  options.stop_cut_mode =
-      transport::detail::TransportStopCutTestMode::PreexistingFailure;
-  transport::SpotTransport transport{runtime, clock, std::move(options)};
+  options.start_operation = [](const transport::detail::TransportSeam &seam) {
+    seam.mark_ready();
+    return [fail = seam.fail] {
+      // Models a genuine read failure delivered on the network domain after
+      // begin_clean_shutdown() has already established clean-cut state.
+      fail(
+          transport::NetworkError{
+              transport::NetworkErrorCode::WebSocketRead,
+              "test-preexisting-network-failure",
+              "genuine failure was ready before the stop cut", std::nullopt,
+              std::nullopt},
+          false);
+    };
+  };
+  transport::detail::BinanceTransport transport{
+      runtime, clock, 1U,
+      transport::detail::spot_transport_config("BTCUSDT", {}),
+      std::move(options)};
   if (transport.start() != transport::TransportStartResult::Started) {
     transport.stop();
     runtime.stop();
@@ -363,8 +385,10 @@ concurrent_stop_has_one_winner_and_waiter(const rt::RuntimeClock &clock) {
   std::promise<void> release_winner;
   auto release_future = release_winner.get_future().share();
   transport::detail::TransportTestOptions options;
-  options.stop_cut_mode =
-      transport::detail::TransportStopCutTestMode::CleanCancellation;
+  options.start_operation = [](const transport::detail::TransportSeam &seam) {
+    seam.mark_ready();
+    return std::function<void()>{};
+  };
   options.stop_winner_gate = [&winner_entered, release_future] {
     winner_entered.set_value();
     release_future.wait();
@@ -373,7 +397,10 @@ concurrent_stop_has_one_winner_and_waiter(const rt::RuntimeClock &clock) {
     waiter_entered.set_value();
   };
 
-  transport::SpotTransport transport{runtime, clock, std::move(options)};
+  transport::detail::BinanceTransport transport{
+      runtime, clock, 1U,
+      transport::detail::spot_transport_config("BTCUSDT", {}),
+      std::move(options)};
   if (transport.start() != transport::TransportStartResult::Started) {
     transport.stop();
     runtime.stop();
@@ -417,10 +444,15 @@ start_pending_is_woken_by_stop(const rt::RuntimeClock &clock) {
   std::promise<void> start_pending;
   auto pending_future = start_pending.get_future();
   transport::detail::TransportTestOptions options;
-  options.stop_cut_mode =
-      transport::detail::TransportStopCutTestMode::StartPendingUntilStop;
-  options.start_pending = [&start_pending] { start_pending.set_value(); };
-  transport::SpotTransport transport{runtime, clock, std::move(options)};
+  options.start_operation =
+      [&start_pending](const transport::detail::TransportSeam &) {
+        start_pending.set_value();
+        return std::function<void()>{};
+      };
+  transport::detail::BinanceTransport transport{
+      runtime, clock, 1U,
+      transport::detail::spot_transport_config("BTCUSDT", {}),
+      std::move(options)};
 
   std::promise<transport::TransportStartResult> start_result;
   auto result_future = start_result.get_future();

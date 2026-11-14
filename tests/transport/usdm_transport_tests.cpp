@@ -108,10 +108,15 @@ void clean_stop_preserves_shared_network_semantics() {
   REQUIRE(runtime.start() == rt::StartResult::Started);
 
   transport::detail::TransportTestOptions test_options;
-  test_options.stop_cut_mode =
-      transport::detail::TransportStopCutTestMode::CleanCancellation;
-  transport::UsdMTransport transport{
-      runtime, clock, 7U, {}, std::move(test_options)};
+  test_options.start_operation =
+      [](const transport::detail::TransportSeam &seam) {
+        seam.mark_ready();
+        return std::function<void()>{};
+      };
+  transport::detail::BinanceTransport transport{
+      runtime, clock, 7U,
+      transport::detail::make_usdm_transport_config("BTCUSDT", {}),
+      std::move(test_options)};
   REQUIRE(transport.start() == transport::TransportStartResult::Started);
   transport.stop();
   const auto observation = transport.observe();
@@ -134,8 +139,11 @@ void event_profile_is_dual_websocket_publication() {
   REQUIRE(runtime.start() == rt::StartResult::Started);
 
   transport::detail::TransportTestOptions test_options;
-  test_options.stop_cut_mode =
-      transport::detail::TransportStopCutTestMode::CleanCancellation;
+  test_options.start_operation =
+      [](const transport::detail::TransportSeam &seam) {
+        seam.mark_ready();
+        return std::function<void()>{};
+      };
   transport::UsdMTransportOptions options;
   options.normalized_event_sink =
       [](std::shared_ptr<const protocol::NormalizedMarketEvent>, std::uint64_t
@@ -144,8 +152,11 @@ void event_profile_is_dual_websocket_publication() {
          binance_market_data::gateway::performance::TraceToken
 #endif
       ) { return transport::NormalizedEventSinkResult::Continue; };
-  transport::UsdMTransport transport{runtime, clock, 2U, std::move(options),
-                                     std::move(test_options)};
+  transport::detail::BinanceTransport transport{
+      runtime, clock, 2U,
+      transport::detail::make_usdm_transport_config("BTCUSDT",
+                                                    std::move(options)),
+      std::move(test_options)};
   REQUIRE(transport.start() == transport::TransportStartResult::Started);
   const auto active = transport.observe();
   transport.stop();
@@ -168,10 +179,15 @@ void eth_transport_identity_is_deterministic() {
   REQUIRE(runtime.start() == rt::StartResult::Started);
 
   transport::detail::TransportTestOptions test_options;
-  test_options.stop_cut_mode =
-      transport::detail::TransportStopCutTestMode::CleanCancellation;
-  transport::UsdMTransport transport{runtime, clock, std::string{"ETHUSDT"},
-                                     9U,      {},    std::move(test_options)};
+  test_options.start_operation =
+      [](const transport::detail::TransportSeam &seam) {
+        seam.mark_ready();
+        return std::function<void()>{};
+      };
+  transport::detail::BinanceTransport transport{
+      runtime, clock, 9U,
+      transport::detail::make_usdm_transport_config("ETHUSDT", {}),
+      std::move(test_options)};
   REQUIRE(transport.start() == transport::TransportStartResult::Started);
   const auto observation = transport.observe();
   transport.stop();
