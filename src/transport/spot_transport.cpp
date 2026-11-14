@@ -1280,7 +1280,7 @@ public:
       detail::TransportSeam seam;
       seam.mark_ready = [this] {
         {
-          std::lock_guard lock{mutex_};
+          std::lock_guard guard{mutex_};
           observation_.tls_verified = true;
           observation_.websocket_handshake = true;
           if (!config_.market_websocket_target.empty()) {
