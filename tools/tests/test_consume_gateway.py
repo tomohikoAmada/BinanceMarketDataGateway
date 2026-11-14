@@ -609,8 +609,7 @@ def test_retry_backoff_resets_after_healthy_session_and_caps() -> None:
     assert consumer._retry_delay(9) == 4.0
 
 
-@pytest.mark.asyncio
-async def test_healthy_resubscribe_does_not_sleep_retry_delay(tmp_path: Path) -> None:
+def test_healthy_resubscribe_does_not_sleep_retry_delay(tmp_path: Path) -> None:
     stream = consumer_module.StreamSpec(
         enums_pb2.VENUE_BINANCE,
         consumer_module.MARKET_USD_M_PERPETUAL,
@@ -651,24 +650,28 @@ async def test_healthy_resubscribe_does_not_sleep_retry_delay(tmp_path: Path) ->
             return _Call()
 
     sleeps: list[float] = []
-    consumer = consumer_module.Consumer(
-        target="127.0.0.1:1",
-        streams=[stream],
-        output_path=tmp_path / "summary.json",
-        profile="test",
-        retry_delays=(5.0, 10.0),
-        install_signals=False,
-        enable_status=False,
-    )
-    consumer._stub = _FakeStub(consumer)
 
-    async def _record_sleep(delay: float) -> None:
-        sleeps.append(delay)
+    async def _run() -> None:
+        consumer = consumer_module.Consumer(
+            target="127.0.0.1:1",
+            streams=[stream],
+            output_path=tmp_path / "summary.json",
+            profile="test",
+            retry_delays=(5.0, 10.0),
+            install_signals=False,
+            enable_status=False,
+        )
+        consumer._stub = _FakeStub(consumer)
 
-    consumer._sleep_or_stop = _record_sleep  # type: ignore[method-assign]
-    await consumer._stream_loop(state)
-    assert consumer._stub.calls == 2
-    assert sleeps == [0.0]
+        async def _record_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        consumer._sleep_or_stop = _record_sleep  # type: ignore[method-assign]
+        await consumer._stream_loop(state)
+        assert consumer._stub.calls == 2
+        assert sleeps == [0.0]
+
+    asyncio.run(_run())
 
 
 def test_configured_profile_partitions_usdm_side_and_reference() -> None:
