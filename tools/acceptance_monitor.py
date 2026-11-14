@@ -42,21 +42,24 @@ def utc_now() -> str:
 
 
 def show(unit: str, properties: str) -> dict[str, str]:
-    try:
-        result = subprocess.run(
-            ["systemctl", "show", unit, f"--property={properties}"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return {}
     values: dict[str, str] = {}
-    for line in result.stdout.splitlines():
-        if "=" in line:
-            key, value = line.split("=", 1)
-            values[key] = value
+    for _ in range(2):
+        try:
+            result = subprocess.run(
+                ["systemctl", "show", unit, f"--property={properties}"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        for line in result.stdout.splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                values[key] = value
+        if values:
+            return values
     return values
 
 
@@ -239,11 +242,11 @@ def read_r3_backlog(
         if not partitions_dir.is_dir():
             continue
         cold_raw = cold_roots.get(market)
-        cold_partitions = (
-            Path(cold_raw) / "partitions"
-            if isinstance(cold_raw, str) and cold_raw
-            else None
-        )
+        cold_partitions: Path | None = None
+        if isinstance(cold_raw, str) and cold_raw:
+            cold_base = Path(cold_raw)
+            nested_cold = cold_base / "partitions"
+            cold_partitions = nested_cold if nested_cold.is_dir() else cold_base
         try:
             entries = sorted(partitions_dir.iterdir())
         except OSError:
@@ -365,21 +368,21 @@ def collect(
     recorder: dict[str, dict[str, Any]] = {}
     for unit in RECORDER_UNITS:
         values = show(unit, "ActiveState,SubState,MainPID,NRestarts")
-        status = read_last_jsonl(RECORDER_STATUS[unit])
+        recorder_status = read_last_jsonl(RECORDER_STATUS[unit])
         recorder[unit] = {
             "active": values.get("ActiveState", ""),
             "sub_state": values.get("SubState", ""),
             "main_pid": int(values.get("MainPID", "0") or 0),
             "n_restarts": int(values.get("NRestarts", "0") or 0),
-            "records": status.get("records"),
-            "dropped_total": status.get("dropped_total"),
-            "queued_records": status.get("queued_records"),
-            "queued_payload_bytes": status.get("queued_payload_bytes"),
-            "seal_queue_depth": status.get("seal_queue_depth"),
-            "max_durability_ns": status.get("max_durability_ns"),
-            "rss_bytes": status.get("rss_bytes"),
-            "cpu_percent": status.get("cpu_percent"),
-            "elapsed_seconds": status.get("elapsed_seconds"),
+            "records": recorder_status.get("records"),
+            "dropped_total": recorder_status.get("dropped_total"),
+            "queued_records": recorder_status.get("queued_records"),
+            "queued_payload_bytes": recorder_status.get("queued_payload_bytes"),
+            "seal_queue_depth": recorder_status.get("seal_queue_depth"),
+            "max_durability_ns": recorder_status.get("max_durability_ns"),
+            "rss_bytes": recorder_status.get("rss_bytes"),
+            "cpu_percent": recorder_status.get("cpu_percent"),
+            "elapsed_seconds": recorder_status.get("elapsed_seconds"),
         }
     archive = show(
         ARCHIVE_UNIT,
@@ -514,18 +517,38 @@ def final_verdict(
         reasons.append("gateway is not active")
     if last["consumer"]["active"] != "active":
         reasons.append("consumer is not active")
-    if len({sample["gateway"]["main_pid"] for sample in samples}) != 1:
+    gateway_pids = {
+        sample["gateway"]["main_pid"]
+        for sample in samples
+        if sample["gateway"].get("main_pid")
+    }
+    if len(gateway_pids) != 1 or not last["gateway"].get("main_pid"):
         reasons.append("gateway main PID changed")
-    if len({sample["consumer"]["main_pid"] for sample in samples}) != 1:
+    elif any(not sample["gateway"].get("main_pid") for sample in samples):
+        warnings.append("transient systemctl timeout reading gateway main_pid")
+    consumer_pids = {
+        sample["consumer"]["main_pid"]
+        for sample in samples
+        if sample["consumer"].get("main_pid")
+    }
+    if len(consumer_pids) != 1 or not last["consumer"].get("main_pid"):
         reasons.append("consumer main PID changed")
+    elif any(not sample["consumer"].get("main_pid") for sample in samples):
+        warnings.append("transient systemctl timeout reading consumer main_pid")
     if any(sample["gateway"]["n_restarts"] for sample in samples):
         reasons.append("gateway restarted")
     if any(sample["consumer"]["n_restarts"] for sample in samples):
         reasons.append("consumer restarted")
     for unit in RECORDER_UNITS:
-        pids = {sample["recorder"][unit]["main_pid"] for sample in samples}
-        if len(pids) != 1 or 0 in pids:
+        pids = {
+            sample["recorder"][unit]["main_pid"]
+            for sample in samples
+            if sample["recorder"][unit].get("main_pid")
+        }
+        if len(pids) != 1 or not last["recorder"][unit].get("main_pid"):
             reasons.append(f"{unit} PID changed or is zero")
+        elif any(not sample["recorder"][unit].get("main_pid") for sample in samples):
+            warnings.append(f"transient systemctl timeout reading {unit} main_pid")
         if any(sample["recorder"][unit]["n_restarts"] for sample in samples):
             reasons.append(f"{unit} restarted")
         if any(

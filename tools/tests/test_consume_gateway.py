@@ -609,6 +609,68 @@ def test_retry_backoff_resets_after_healthy_session_and_caps() -> None:
     assert consumer._retry_delay(9) == 4.0
 
 
+@pytest.mark.asyncio
+async def test_healthy_resubscribe_does_not_sleep_retry_delay(tmp_path: Path) -> None:
+    stream = consumer_module.StreamSpec(
+        enums_pb2.VENUE_BINANCE,
+        consumer_module.MARKET_USD_M_PERPETUAL,
+        "BTCUSDT",
+        "book_ticker",
+    )
+    state = consumer_module.StreamState(stream)
+
+    class _FakeStub:
+        def __init__(self, c: consumer_module.Consumer) -> None:
+            self.calls = 0
+            self.consumer = c
+
+        def SubscribeEvents(self, request):  # noqa: N802
+            self.calls += 1
+            attempt = self.calls
+            sub_id = f"sub-{attempt}"
+
+            async def _gen():
+                yield _accepted_event(request, sub_id)
+                yield _event(request, sub_id, 2)
+
+                if attempt == 1:
+                    gap = gateway_messages_pb2.GatewayEventEnvelope()
+                    _delivery(gap, sub_id, 3)
+                    gap.consumer_gap.reason = enums_pb2.CONSUMER_GAP_REASON_SLOW_CONSUMER
+                    yield gap
+                else:
+                    self.consumer.stop_event.set()
+
+            class _Call:
+                def __aiter__(self):
+                    return _gen()
+
+                def cancel(self):
+                    pass
+
+            return _Call()
+
+    sleeps: list[float] = []
+    consumer = consumer_module.Consumer(
+        target="127.0.0.1:1",
+        streams=[stream],
+        output_path=tmp_path / "summary.json",
+        profile="test",
+        retry_delays=(5.0, 10.0),
+        install_signals=False,
+        enable_status=False,
+    )
+    consumer._stub = _FakeStub(consumer)
+
+    async def _record_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    consumer._sleep_or_stop = _record_sleep  # type: ignore[method-assign]
+    await consumer._stream_loop(state)
+    assert consumer._stub.calls == 2
+    assert sleeps == [0.0]
+
+
 def test_configured_profile_partitions_usdm_side_and_reference() -> None:
     spot = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
     usdm = list(spot)
@@ -818,7 +880,8 @@ def test_reference_coverage_error_empty_and_staleness(tmp_path: Path) -> None:
         is False
     )
 
-    # Restore VALID OI with old source bucket (> 600s) -> fails ok (stale source age)
+    # Restore fresh OI, then validate 5m settled bucket within source age limit
+    # (850s <= 1200s) stays ok while receive age is fresh
     state.consume(
         _make_reference_envelope(
             "ref-sub",
@@ -826,7 +889,32 @@ def test_reference_coverage_error_empty_and_staleness(tmp_path: Path) -> None:
             enums_pb2.REFERENCE_SOURCE_KIND_OPEN_INTEREST,
             enums_pb2.REFERENCE_OBSERVATION_STATUS_VALID,
             receive_ns=now_ns,
-            source_time_ms=now_ms - 605_000,
+            source_time_ms=now_ms,
+        )
+    )
+    seq += 1
+    state.consume(
+        _make_reference_envelope(
+            "ref-sub",
+            seq,
+            enums_pb2.REFERENCE_SOURCE_KIND_TAKER_BUY_SELL_VOLUME,
+            enums_pb2.REFERENCE_OBSERVATION_STATUS_VALID,
+            receive_ns=now_ns,
+            source_time_ms=now_ms - 850_000,
+        )
+    )
+    seq += 1
+    assert consumer._compute_ok(current_ns=now_ns) is True
+
+    # Restore VALID OI with genuinely stale source bucket (> 1200s) -> fails ok
+    state.consume(
+        _make_reference_envelope(
+            "ref-sub",
+            seq,
+            enums_pb2.REFERENCE_SOURCE_KIND_OPEN_INTEREST,
+            enums_pb2.REFERENCE_OBSERVATION_STATUS_VALID,
+            receive_ns=now_ns,
+            source_time_ms=now_ms - 1_205_000,
         )
     )
     seq += 1

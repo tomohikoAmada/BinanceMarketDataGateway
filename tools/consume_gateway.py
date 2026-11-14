@@ -94,6 +94,10 @@ EMPTY_ALLOWED_REFERENCE_SOURCES: frozenset[int] = frozenset(
     }
 )
 PERIODIC_REFERENCE_MAX_AGE_SECONDS = 600.0
+# Binance 5m settled bars report bucket-open source_time_ms; with up to ~300s
+# bar close + settlement lag plus a 300s poll cadence, source age legitimately
+# reaches ~850-900s while receive_age stays <= 300s.
+PERIODIC_REFERENCE_MAX_SOURCE_AGE_SECONDS = 1200.0
 INSTRUMENT_REFERENCE_MAX_RECEIVE_AGE_SECONDS = 48.0 * 3600.0
 
 RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
@@ -715,7 +719,7 @@ def evaluate_reference_source_states(
             elif (
                 status == "VALID"
                 and src_age is not None
-                and src_age > PERIODIC_REFERENCE_MAX_AGE_SECONDS
+                and src_age > PERIODIC_REFERENCE_MAX_SOURCE_AGE_SECONDS
             ):
                 source_issue = f"{kind_name}:stale_source_age={src_age:.1f}s"
         elif kind == enums_pb2.REFERENCE_SOURCE_KIND_INSTRUMENT:
@@ -1047,9 +1051,12 @@ class Consumer:
             consecutive_failures = self._next_failure_count(
                 consecutive_failures, healthy_session
             )
-            await self._sleep_or_stop(
-                self._retry_delay(consecutive_failures)
+            delay = (
+                0.0
+                if completed and resubscribe_requested and healthy_session
+                else self._retry_delay(consecutive_failures)
             )
+            await self._sleep_or_stop(delay)
 
     def _next_failure_count(
         self, consecutive_failures: int, healthy_session: bool

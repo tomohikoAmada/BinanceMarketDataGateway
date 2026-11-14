@@ -175,3 +175,114 @@ def test_read_r3_backlog_counts_pending_partitions(tmp_path: Path) -> None:
     assert backlog["migration_failures"] == 0
     assert backlog["cold_metadata_bytes"] == 6
     assert backlog["hot_metadata_bytes"] > 5
+
+    # Production migrate_metadata layout places <partition_id> directly under cold_root
+    direct_cold = tmp_path / "direct_cold_spot"
+    (direct_cold / "2026-11-11" / "state").mkdir(parents=True)
+    (direct_cold / "2026-11-11" / "partition.json").write_text("{}", encoding="utf-8")
+    (direct_cold / "2026-11-11" / "state" / "catalog.sqlite").write_bytes(b"1234567")
+    meta_roots.write_text(json.dumps({"spot": str(direct_cold)}), encoding="utf-8")
+    direct_backlog = monitor.read_r3_backlog(
+        archive_log=archive_log,
+        roots_path=roots,
+        metadata_roots_path=meta_roots,
+        now_seconds=1300.0,
+    )
+    assert direct_backlog["pending_migrate_partitions"] == 1
+    assert direct_backlog["cold_metadata_bytes"] == 7
+
+
+def test_collect_preserves_gateway_status_and_recorder_metrics(monkeypatch) -> None:
+    monkeypatch.setattr(
+        monitor,
+        "read_cpu",
+        lambda: {"total": 200, "idle": 100, "steal": 10},
+    )
+    monkeypatch.setattr(monitor, "read_meminfo", lambda: {"MemAvailable": 2048, "SwapFree": 1024})
+    monkeypatch.setattr(
+        monitor.shutil,
+        "disk_usage",
+        lambda _path: type("Disk", (), {"free": 100_000})(),
+    )
+    monkeypatch.setattr(
+        monitor,
+        "read_summary",
+        lambda: {
+            "elapsed_seconds": 60.0,
+            "ok": True,
+            "exit_reason": "running",
+            "gateway_instance_id": "gw-1",
+            "totals": {"streams": 45, "accepted": 45, "valid": 45},
+            "status": {
+                "errors": 0,
+                "timeouts": 0,
+                "identity_mismatches": 0,
+                "seen_keys": [f"k{i}" for i in range(10)],
+                "missing_keys": [],
+                "total_active_subscriptions": 45,
+                "markets": {"k0": {"state": "STREAM_LIFECYCLE_STATE_LIVE"}},
+            },
+            "streams": [],
+        },
+    )
+    monkeypatch.setattr(
+        monitor,
+        "read_r3_backlog",
+        lambda: {
+            "pending_migrate_partitions": 0,
+            "oldest_pending_age_seconds": None,
+            "migration_failures": 0,
+            "last_archive_finish_utc_seconds": 100.0,
+            "last_archive_failed": False,
+            "hot_metadata_bytes": 10,
+            "cold_metadata_bytes": 0,
+        },
+    )
+    monkeypatch.setattr(
+        monitor,
+        "show",
+        lambda unit, _props: (
+            {
+                "ActiveState": "active",
+                "SubState": "running",
+                "MainPID": "123",
+                "NRestarts": "0",
+                "MemoryCurrent": "1024",
+                "MemoryPeak": "2048",
+                "CPUUsageNSec": "100",
+                "Result": "success",
+                "ExecMainStatus": "0",
+                "LastTriggerUSec": "now",
+            }
+            if unit
+            else {}
+        ),
+    )
+    monkeypatch.setattr(monitor, "children", lambda _pid: [])
+    monkeypatch.setattr(
+        monitor,
+        "read_last_jsonl",
+        lambda path: {
+            "records": 999 if "spot" in str(path) else 1999,
+            "dropped_total": 0,
+            "queued_records": 0,
+            "queued_payload_bytes": 0,
+            "seal_queue_depth": 0,
+            "max_durability_ns": 1000,
+            "rss_bytes": 4096,
+            "cpu_percent": 5.0,
+            "elapsed_seconds": 60.0,
+        },
+    )
+    sample, _cpu = monitor.collect(
+        1, 100.0, {"total": 100, "idle": 50, "steal": 0}
+    )
+    assert sample["consumer"]["seen_keys"] == 10
+    assert sample["consumer"]["missing_keys"] == 0
+    assert sample["consumer"]["status_errors"] == 0
+    assert sample["consumer"]["status_timeouts"] == 0
+    assert sample["consumer"]["identity_mismatches"] == 0
+    assert sample["consumer"]["active_subscriptions"] == 45
+    assert sample["recorder"]["sbmdr-recorder@spot"]["records"] == 999
+    assert sample["recorder"]["sbmdr-recorder@usdm"]["records"] == 1999
+    assert sample["recorder"]["sbmdr-recorder@spot"]["dropped_total"] == 0
