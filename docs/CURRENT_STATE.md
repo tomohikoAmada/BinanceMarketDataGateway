@@ -191,6 +191,15 @@ DATA_PARITY_REST_SIDE_DATA=ALIGNED_R4_G7_PARITY_OK
   (clients will run off-host or optimized; shared-VPS full-load CPU limits are
   relaxed), `bmdg-consumer.service` was stopped and disabled; an example client
   lives under `examples/consumer/`.
+- **G9 consumer acceptance probe fixes (2026-11-15):** updated
+  `tools/consume_gateway.py` to key `StreamState.bids`/`asks` by exact
+  `Decimal` (`_parse_price`, matching `examples/consumer/minimal_client.py`)
+  so equivalent string representations (`67362.8` vs `67362.80`) update and
+  zero-delete cleanly (`G9-a`), and cleared `reference_sources` /
+  `reference_source_states` inside `StreamState.reset_session()` while
+  retaining cumulative counts so reconnected sessions cannot pass coverage
+  before fresh session observations arrive (`G9-b`). `pytest tools/tests -q`:
+  **33 passed**.
 - **BMDG/BMDR data parity**: Spot and configured USD-M WS + REST streams
   (excluding raw payload bytes) are aligned and `R4↔G7` parity-verified. See
   [DATA_PARITY](DATA_PARITY.md).

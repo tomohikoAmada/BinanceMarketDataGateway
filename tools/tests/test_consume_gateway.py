@@ -5,6 +5,7 @@ import importlib.util
 import json
 import sys
 import time
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -535,8 +536,8 @@ def test_stream_state_eof_clears_book_and_validity() -> None:
     )
     state.current_valid = True
     state.snapshot_seen = True
-    state.bids["100.00"] = "1.000"
-    state.asks["101.00"] = "2.000"
+    state.bids[Decimal("100.00")] = "1.000"
+    state.asks[Decimal("101.00")] = "2.000"
     state.on_eof()
     assert state.current_valid is False
     assert state.snapshot_seen is False
@@ -556,14 +557,14 @@ def test_live_stream_status_does_not_clear_ask_side() -> None:
     state.session_accepted = True
     state.current_valid = True
     state.last_session_sequence = 1
-    state.bids["100.00"] = "1.000"
-    state.asks["101.00"] = "2.000"
+    state.bids[Decimal("100.00")] = "1.000"
+    state.asks[Decimal("101.00")] = "2.000"
 
     live = gateway_messages_pb2.GatewayEventEnvelope()
     _delivery(live, "ev-test", 2)
     live.stream_status.state = enums_pb2.STREAM_LIFECYCLE_STATE_LIVE
     assert state.consume(live) == "continue"
-    assert state.asks == {"101.00": "2.000"}
+    assert state.asks == {Decimal("101.00"): "2.000"}
 
     closed = gateway_messages_pb2.GatewayEventEnvelope()
     _delivery(closed, "ev-test", 3)
@@ -587,15 +588,15 @@ def test_bid_and_ask_sides_do_not_delete_each_other() -> None:
         value.quantity = quantity
         return value
 
-    state.bids["100.00"] = "1.000"
-    state.asks["101.00"] = "2.000"
+    state.bids[Decimal("100.00")] = "1.000"
+    state.asks[Decimal("101.00")] = "2.000"
     consumer_module._apply_levels(state.bids, [level("101.00", "3.000")])
     consumer_module._apply_levels(
         state.asks,
         [level("101.00", "0"), level("102.00", "4.000")],
     )
-    assert state.bids == {"100.00": "1.000", "101.00": "3.000"}
-    assert state.asks == {"102.00": "4.000"}
+    assert state.bids == {Decimal("100.00"): "1.000", Decimal("101.00"): "3.000"}
+    assert state.asks == {Decimal("102.00"): "4.000"}
     assert state.book_levels == 3
 
 
@@ -988,3 +989,166 @@ def test_zero_force_orders_does_not_fail_liquidation_stream(tmp_path: Path) -> N
         )
         is True
     )
+
+
+def test_order_book_decimal_price_keys_update_and_delete_across_representations() -> None:
+    request = gateway_messages_pb2.OrderBookSubscriptionRequest(
+        venue=enums_pb2.VENUE_BINANCE, market=USDM, symbol="BTCUSDT"
+    )
+    state = consumer_module.StreamState(
+        consumer_module.StreamSpec(
+            enums_pb2.VENUE_BINANCE, USDM, "BTCUSDT", "order_book"
+        )
+    )
+    state.subscription_id = "ob-sub"
+    state.gateway_instance_id = GATEWAY_INSTANCE_ID
+    state.session_accepted = True
+    state.last_session_sequence = 1
+
+    snap = _snapshot(request, "ob-sub", sequence=2)
+    snap.snapshot.ClearField("bids")
+    snap.snapshot.ClearField("asks")
+    b0 = snap.snapshot.bids.add()
+    b0.price = "67362.8"
+    b0.quantity = "1.000"
+    a0 = snap.snapshot.asks.add()
+    a0.price = "67363.50"
+    a0.quantity = "2.000"
+    assert state.consume(snap) == "continue"
+    assert state.bids == {Decimal("67362.8"): "1.000"}
+    assert state.asks == {Decimal("67363.50"): "2.000"}
+
+    # Update with different trailing-zero representation -> must update in-place without duplicating.
+    upd1 = _depth(request, "ob-sub", sequence=3, first_update_id=101, final_update_id=101)
+    upd1.depth_update.ClearField("bids")
+    upd1.depth_update.ClearField("asks")
+    b1 = upd1.depth_update.bids.add()
+    b1.price = "67362.80"
+    b1.quantity = "3.500"
+    a1 = upd1.depth_update.asks.add()
+    a1.price = "67363.5"
+    a1.quantity = "4.000"
+    assert state.consume(upd1) == "continue"
+    assert state.bids == {Decimal("67362.8"): "3.500"}
+    assert state.asks == {Decimal("67363.5"): "4.000"}
+    assert state.book_levels == 2
+
+    # Delete with yet another trailing-zero representation -> zero residual levels.
+    upd2 = _depth(request, "ob-sub", sequence=4, first_update_id=102, final_update_id=102)
+    upd2.depth_update.ClearField("bids")
+    upd2.depth_update.ClearField("asks")
+    b2 = upd2.depth_update.bids.add()
+    b2.price = "67362.800"
+    b2.quantity = "0.000"
+    a2 = upd2.depth_update.asks.add()
+    a2.price = "67363.500"
+    a2.quantity = "0"
+    assert state.consume(upd2) == "continue"
+    assert state.bids == {}
+    assert state.asks == {}
+    assert state.book_levels == 0
+
+    with pytest.raises(consumer_module.ProtocolViolation):
+        consumer_module._apply_levels(
+            state.bids, [type("Lvl", (), {"price": "NaN", "quantity": "1"})()]
+        )
+
+
+def test_reference_data_reconnect_clears_prior_session_reference_states(
+    tmp_path: Path,
+) -> None:
+    now_ns = time.time_ns()
+    now_ms = now_ns // 1_000_000
+    state = _new_reference_state()
+    kinds = sorted(consumer_module.REFERENCE_SOURCE_PAYLOADS)
+    for idx, kind in enumerate(kinds, start=2):
+        assert (
+            state.consume(
+                _make_reference_envelope(
+                    "ref-sub",
+                    idx,
+                    kind,
+                    enums_pb2.REFERENCE_OBSERVATION_STATUS_VALID,
+                    receive_ns=now_ns,
+                    source_time_ms=now_ms,
+                )
+            )
+            == "continue"
+        )
+    assert len(state.reference_sources) == 7
+
+    consumer = consumer_module.Consumer(
+        target="127.0.0.1:1",
+        streams=[state.spec],
+        output_path=tmp_path / "summary.json",
+        profile="test",
+        install_signals=False,
+        enable_status=False,
+    )
+    consumer.states = [state]
+    assert consumer._compute_ok(current_ns=now_ns) is True
+
+    # Simulate reconnect starting a fresh session.
+    state.reset_session()
+    assert state.event_count == 7
+    assert state.accepted_count == 1
+    assert state.reference_sources == set()
+    assert state.reference_source_states == {}
+
+    state.subscription_id = "ref-sub-2"
+    state.session_accepted = True
+    state.accepted_count += 1
+    state.last_session_sequence = 1
+    # Accepted-only new session must NOT inherit prior session reference states.
+    assert consumer._compute_ok(current_ns=now_ns) is False
+    _, issues = consumer_module.evaluate_reference_source_states(
+        state.reference_source_states, now_ns
+    )
+    assert len(issues) == 7
+
+    # One ERROR-only observation or 6/7 VALID still fails coverage.
+    for idx, kind in enumerate(kinds[:6], start=2):
+        assert (
+            state.consume(
+                _make_reference_envelope(
+                    "ref-sub-2",
+                    idx,
+                    kind,
+                    enums_pb2.REFERENCE_OBSERVATION_STATUS_VALID,
+                    receive_ns=now_ns,
+                    source_time_ms=now_ms,
+                )
+            )
+            == "continue"
+        )
+    assert (
+        state.consume(
+            _make_reference_envelope(
+                "ref-sub-2",
+                8,
+                kinds[6],
+                enums_pb2.REFERENCE_OBSERVATION_STATUS_ERROR,
+                receive_ns=now_ns,
+                source_time_ms=now_ms,
+                error_code="HTTP_500",
+            )
+        )
+        == "continue"
+    )
+    assert consumer._compute_ok(current_ns=now_ns) is False
+
+    # Receiving the 7th VALID observation in the new session makes it ready.
+    assert (
+        state.consume(
+            _make_reference_envelope(
+                "ref-sub-2",
+                9,
+                kinds[6],
+                enums_pb2.REFERENCE_OBSERVATION_STATUS_VALID,
+                receive_ns=now_ns,
+                source_time_ms=now_ms,
+            )
+        )
+        == "continue"
+    )
+    assert consumer._compute_ok(current_ns=now_ns) is True

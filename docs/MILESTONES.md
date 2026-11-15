@@ -19,6 +19,7 @@ archived; the v0.3/v0.4 G0-G3 labels do not reopen that history.
 | G4 | Tokyo VPS co-located 20-key / 40-stream 2h acceptance | Complete 2026-11-12; PASS with observations |
 | G5–G6 | USD-M 5 WS families, typed `REFERENCE_DATA` & quarantine | Complete (`fa76a4c`, CI `433905...` + `43582864682` pass) |
 | G7 / G8 | 45-stream probe, 11 shards, `R4↔G7` parity, `G8-c` test-seam cleanup | Complete (`0a8426b` / `325efee`, CI `43582864682` pass) |
+| G9 | `consume_gateway.py` `Decimal` price keys (`G9-a`) & session-reset reference state cleanup (`G9-b`) | Complete locally (`tools/tests` 33/33) |
 | G3-c | Shared VPS, real network, Recorder co-load, resource budget | Mitigated / relaxed by deployment policy (off-host/optimized client) |
 
 ## Current design boundaries

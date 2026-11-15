@@ -22,6 +22,7 @@ import os
 import signal
 import sys
 import time
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -263,11 +264,21 @@ def _quantity_is_zero(quantity: str) -> bool:
     return not nonzero
 
 
-def _apply_levels(book: dict[str, str], levels: Iterable[Any]) -> None:
+def _parse_price(price: str) -> Decimal:
+    if not price:
+        raise ProtocolViolation("empty price")
+    try:
+        value = Decimal(price)
+    except InvalidOperation as exc:
+        raise ProtocolViolation(f"invalid price {price!r}") from exc
+    if not value.is_finite():
+        raise ProtocolViolation(f"non-finite price {price!r}")
+    return value
+
+
+def _apply_levels(book: dict[Decimal, str], levels: Iterable[Any]) -> None:
     for level in levels:
-        price = level.price
-        if not price:
-            raise ProtocolViolation("empty price")
+        price = _parse_price(level.price)
         if _quantity_is_zero(level.quantity):
             book.pop(price, None)
         else:
@@ -299,8 +310,8 @@ class StreamState:
     last_error: str = ""
     first_snapshot_utc: str = ""
     last_event_utc_ns: int = 0
-    bids: dict[str, str] = dataclasses.field(default_factory=dict)
-    asks: dict[str, str] = dataclasses.field(default_factory=dict)
+    bids: dict[Decimal, str] = dataclasses.field(default_factory=dict)
+    asks: dict[Decimal, str] = dataclasses.field(default_factory=dict)
     receive_to_publish: LatencyStats = dataclasses.field(
         default_factory=LatencyStats
     )
@@ -325,6 +336,8 @@ class StreamState:
         self.last_payload = ""
         self.bids.clear()
         self.asks.clear()
+        self.reference_sources.clear()
+        self.reference_source_states.clear()
 
     def _record_publish_latency(
         self, delivery: Any, source_receive_ns: int
