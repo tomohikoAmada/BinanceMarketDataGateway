@@ -18,4 +18,11 @@ inline constexpr auto kPlannedRotationAge =
       kPlannedRotationAge)};
 }
 
+[[nodiscard]] constexpr recovery::PlannedRotationPolicy
+production_policy(std::size_t product_index) {
+  const auto staggered = std::chrono::hours{23} + std::chrono::minutes{30} +
+                         std::chrono::minutes{2U * (product_index % 12U)};
+  return {std::chrono::duration_cast<std::chrono::nanoseconds>(staggered)};
+}
+
 } // namespace binance_market_data::gateway::recovery

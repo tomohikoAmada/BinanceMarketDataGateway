@@ -69,12 +69,14 @@ parse_strict_json(const std::string &contents) {
 [[nodiscard]] std::optional<DaemonConfigError> validate_keys(const Json &root) {
   static const std::set<std::string> required{"grpc_listen", "spot_symbols",
                                               "usdm_symbols"};
+  static const std::set<std::string> optional{"spot_streams", "usdm_streams",
+                                              "symbol_streams"};
   if (!root.is_object()) {
     return error("config root must be an object");
   }
   for (const auto &[key, unused] : root.items()) {
     static_cast<void>(unused);
-    if (!required.contains(key)) {
+    if (!required.contains(key) && !optional.contains(key)) {
       return error("unknown top-level key: " + key);
     }
   }
@@ -84,6 +86,51 @@ parse_strict_json(const std::string &contents) {
     }
   }
   return std::nullopt;
+}
+
+[[nodiscard]] std::variant<runtime::EnabledStreams, DaemonConfigError>
+parse_stream_list(const Json &value, runtime::common_wire::Market market,
+                  std::string_view field_name) {
+  if (!value.is_array()) {
+    return error(std::string{field_name} + " must be an array of strings");
+  }
+  const bool is_usdm =
+      market == runtime::common_wire::MARKET_USD_M_PERPETUAL;
+  runtime::EnabledStreams result{false, false, false, false, false, false, false};
+  std::set<std::string> seen;
+  for (const auto &entry : value) {
+    if (!entry.is_string()) {
+      return error(std::string{field_name} + " must be an array of strings");
+    }
+    const auto name = entry.get<std::string>();
+    if (!seen.insert(name).second) {
+      return error(std::string{field_name} + " contains duplicate stream: " +
+                   name);
+    }
+    if (name == "orderbook") {
+      result.orderbook = true;
+    } else if (name == "diff_depth") {
+      result.diff_depth = true;
+    } else if (name == "agg_trade") {
+      result.agg_trade = true;
+    } else if (name == "book_ticker") {
+      result.book_ticker = true;
+    } else if (is_usdm && name == "mark_price") {
+      result.mark_price = true;
+    } else if (is_usdm && name == "liquidation") {
+      result.liquidation = true;
+    } else if (name == "reference_data") {
+      result.reference_data = true;
+    } else {
+      return error(std::string{field_name} + " contains unsupported stream: " +
+                   name);
+    }
+  }
+  if (!result.uses_public_ws(is_usdm) && !result.uses_market_ws(is_usdm)) {
+    return error(std::string{field_name} +
+                 " must enable at least one WebSocket stream");
+  }
+  return result;
 }
 
 [[nodiscard]] std::variant<std::vector<std::string>, DaemonConfigError>
@@ -195,7 +242,73 @@ DaemonConfigResult load_daemon_config(std::string_view config_path) {
   if (std::adjacent_find(keys.begin(), keys.end()) != keys.end()) {
     return error("configured products contain a duplicate exact MarketKey");
   }
-  return DaemonConfig{std::move(listen), std::move(keys)};
+
+  auto spot_default =
+      runtime::EnabledStreams::all_for(runtime::common_wire::MARKET_SPOT);
+  if (root.contains("spot_streams")) {
+    auto parsed_spot = parse_stream_list(root.at("spot_streams"),
+                                         runtime::common_wire::MARKET_SPOT,
+                                         "spot_streams");
+    if (const auto *failure = std::get_if<DaemonConfigError>(&parsed_spot)) {
+      return *failure;
+    }
+    spot_default = std::get<runtime::EnabledStreams>(parsed_spot);
+  }
+  auto usdm_default = runtime::EnabledStreams::all_for(
+      runtime::common_wire::MARKET_USD_M_PERPETUAL);
+  if (root.contains("usdm_streams")) {
+    auto parsed_usdm = parse_stream_list(
+        root.at("usdm_streams"),
+        runtime::common_wire::MARKET_USD_M_PERPETUAL, "usdm_streams");
+    if (const auto *failure = std::get_if<DaemonConfigError>(&parsed_usdm)) {
+      return *failure;
+    }
+    usdm_default = std::get<runtime::EnabledStreams>(parsed_usdm);
+  }
+  StreamSwitchMap stream_switches;
+  for (const auto &key : keys) {
+    stream_switches.emplace(
+        key, key.market == runtime::common_wire::MARKET_SPOT ? spot_default
+                                                             : usdm_default);
+  }
+  if (root.contains("symbol_streams")) {
+    const auto &overrides = root.at("symbol_streams");
+    if (!overrides.is_object()) {
+      return error("symbol_streams must be an object");
+    }
+    for (const auto &[raw_key, val] : overrides.items()) {
+      std::optional<runtime::common_wire::Market> target_market;
+      std::string sym = raw_key;
+      if (raw_key.rfind("spot:", 0U) == 0U) {
+        target_market = runtime::common_wire::MARKET_SPOT;
+        sym = raw_key.substr(5U);
+      } else if (raw_key.rfind("usdm:", 0U) == 0U) {
+        target_market = runtime::common_wire::MARKET_USD_M_PERPETUAL;
+        sym = raw_key.substr(5U);
+      }
+      bool matched = false;
+      for (const auto &key : keys) {
+        if (key.symbol == sym &&
+            (!target_market.has_value() || key.market == *target_market)) {
+          auto parsed_symbol = parse_stream_list(val, key.market,
+                                                 "symbol_streams." + raw_key);
+          if (const auto *failure =
+                  std::get_if<DaemonConfigError>(&parsed_symbol)) {
+            return *failure;
+          }
+          stream_switches[key] =
+              std::get<runtime::EnabledStreams>(parsed_symbol);
+          matched = true;
+        }
+      }
+      if (!matched) {
+        return error("symbol_streams key does not match any configured product: " +
+                     raw_key);
+      }
+    }
+  }
+  return DaemonConfig{std::move(listen), std::move(keys),
+                      std::move(stream_switches)};
 }
 
 void print_daemon_usage(std::ostream &output) {

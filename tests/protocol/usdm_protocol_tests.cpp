@@ -586,6 +586,19 @@ void usdm_public_and_market_event_payloads() {
   REQUIRE_EQ(order.average_price(), "9910");
   REQUIRE_EQ(order.order_trade_time_ms(), 1568014460893U);
   REQUIRE_EQ(order.metadata().exchange_event_time_ms(), 1568014460893U);
+  REQUIRE(order.metadata().has_exchange_trade_time_ms());
+  REQUIRE_EQ(order.metadata().exchange_trade_time_ms(), 1568014460893U);
+
+  // C8.5: Zero settle_price ("0") and negative-zero funding_rate ("-0.00000000")
+  // must parse cleanly with normalized funding_rate "0".
+  const auto zero_mark = protocol::parse_usdm_market_event_frame(
+      R"json({"stream":"btcusdt@markPrice@1s","data":{"e":"markPriceUpdate","E":1562305380000,"s":"BTCUSDT","p":"11794.15000000","i":"11784.62659091","P":"0","r":"-0.00000000","T":1562306400000}})json",
+      received, "usdm-market", "BTCUSDT");
+  REQUIRE(std::holds_alternative<protocol::NormalizedMarketEvent>(zero_mark));
+  const auto &zero_price = std::get<protocol::market::MarkPrice>(
+      std::get<protocol::NormalizedMarketEvent>(zero_mark));
+  REQUIRE_EQ(zero_price.estimated_settle_price(), "0");
+  REQUIRE_EQ(zero_price.funding_rate(), "0");
 
   const auto wrong_stream = protocol::parse_usdm_market_event_frame(
       R"json({"stream":"btcusdt@bookTicker","data":{"e":"bookTicker","u":1,"s":"BTCUSDT","b":"1","B":"1","a":"2","A":"1","T":1,"E":1}})json",

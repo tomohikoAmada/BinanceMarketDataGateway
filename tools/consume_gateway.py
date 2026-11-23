@@ -947,7 +947,6 @@ class Consumer:
         return {
             (spec.venue, spec.market, spec.symbol)
             for spec in self.streams
-            if spec.is_order_book
         }
 
     def _next_request_id(self, spec: StreamSpec, stream: str) -> str:

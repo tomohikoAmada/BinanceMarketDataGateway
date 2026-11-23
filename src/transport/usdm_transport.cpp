@@ -13,12 +13,6 @@ using protocol::parse_usdm_market_event_frame;
 using protocol::parse_usdm_public_event_frame;
 using protocol::usdm_stream_symbol;
 
-namespace {
-
-constexpr auto kStageTimeout = std::chrono::seconds{10};
-
-} // namespace
-
 namespace detail {
 
 [[nodiscard]] transport::detail::BinanceTransportConfig
@@ -40,12 +34,56 @@ make_usdm_transport_config(std::string exact_symbol,
   config.connection_id_prefix = routes->connection_id_prefix;
   config.snapshot_request_id = routes->snapshot_request_id;
   config.user_agent = "bmdg-usdm/1.0.0";
+  config.websocket_idle_timeout = std::chrono::seconds{240};
+  config.use_keep_alive_pings = true;
+  config.defer_depth_request = options.defer_depth_request;
   if (options.normalized_event_sink) {
     config.profile = transport::BinanceTransportProfile::UsdMCombinedEvents;
-    config.websocket_target = routes->websocket_target;
-    config.market_websocket_host = routes->websocket_host;
-    config.market_websocket_port = routes->websocket_port;
-    config.market_websocket_target = routes->market_websocket_target;
+    const auto &streams = options.enabled_streams;
+    config.market_only = !streams.orderbook;
+    if (streams.orderbook || streams.diff_depth || streams.book_ticker) {
+      std::string target = "/public/stream?streams=";
+      bool first = true;
+      auto append = [&](const std::string &name) {
+        if (!first) {
+          target += '/';
+        }
+        first = false;
+        target += name;
+      };
+      if (streams.orderbook || streams.diff_depth) {
+        append(routes->diff_depth_stream);
+      }
+      if (streams.book_ticker) {
+        append(routes->book_ticker_stream);
+      }
+      config.websocket_target = std::move(target);
+    } else {
+      config.websocket_target.clear();
+    }
+    if (streams.agg_trade || streams.mark_price || streams.liquidation) {
+      config.market_websocket_host = routes->websocket_host;
+      config.market_websocket_port = routes->websocket_port;
+      std::string market_target = "/market/stream?streams=";
+      bool first = true;
+      auto append = [&](const std::string &name) {
+        if (!first) {
+          market_target += '/';
+        }
+        first = false;
+        market_target += name;
+      };
+      if (streams.agg_trade) {
+        append(routes->agg_trade_stream);
+      }
+      if (streams.mark_price) {
+        append(routes->mark_price_stream);
+      }
+      if (streams.liquidation) {
+        append(routes->force_order_stream);
+      }
+      config.market_websocket_target = std::move(market_target);
+    }
     config.combined_frame_parser = [symbol](std::string_view payload,
                                             runtime::ClockSample received_at,
                                             std::string_view connection_id) {
@@ -118,10 +156,28 @@ make_usdm_transport_routes(std::string_view exact_symbol) {
 }
 
 transport::ExchangeInfoResult fetch_usdm_exchange_info_https() {
-  return transport::detail::fetch_exchange_info_https(
-      {std::string{kUsdMTransportRoutes.rest_host},
-       std::string{kUsdMTransportRoutes.rest_port},
-       std::string{kUsdMTransportRoutes.exchange_info_target}, kStageTimeout});
+  return fetch_usdm_exchange_info_https_cancellable({});
+}
+
+transport::ExchangeInfoResult
+fetch_usdm_exchange_info_https_cancellable(std::stop_token stop_token) {
+  auto fetched = transport::fetch_https_json_cancellable(
+      std::string{kUsdMTransportRoutes.rest_host},
+      std::string{kUsdMTransportRoutes.rest_port},
+      std::string{kUsdMTransportRoutes.exchange_info_target},
+      "bmdg-usdm/1.0.0", stop_token);
+  if (const auto *failure = std::get_if<transport::NetworkError>(&fetched)) {
+    return *failure;
+  }
+  auto ok = std::get<transport::HttpsJsonResponse>(std::move(fetched));
+  if (!ok.tls_verified) {
+    return transport::NetworkError{transport::NetworkErrorCode::HttpStatus,
+                                   "exchange-info-http-status",
+                                   "Binance exchangeInfo returned non-200",
+                                   std::nullopt, std::nullopt};
+  }
+  return transport::ExchangeInfoResponse{std::move(ok.body), true,
+                                         ok.received_at};
 }
 
 UsdMTransport::UsdMTransport(runtime::MarketRuntime &runtime,
@@ -145,6 +201,10 @@ UsdMTransport::~UsdMTransport() = default;
 
 transport::TransportStartResult UsdMTransport::start() {
   return transport_->start();
+}
+
+void UsdMTransport::begin_depth_bootstrap() {
+  transport_->begin_depth_bootstrap();
 }
 
 void UsdMTransport::stop() noexcept { transport_->stop(); }

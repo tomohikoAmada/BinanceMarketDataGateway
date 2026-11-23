@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -53,7 +54,10 @@ using ProductionMetadataResult =
 acquire_production_metadata(const std::vector<runtime::MarketKey> &market_keys,
                             MetadataSources sources = {});
 [[nodiscard]] std::vector<composition::ProductRuntimeSpec>
-make_product_runtime_specs(ProductionMetadata metadata);
+make_product_runtime_specs(
+    ProductionMetadata metadata,
+    const std::map<runtime::MarketKey, runtime::EnabledStreams,
+                   runtime::MarketKeyLess> *stream_switches = nullptr);
 [[nodiscard]] std::string_view to_string(MetadataStage stage) noexcept;
 
 } // namespace binance_market_data::gateway::production

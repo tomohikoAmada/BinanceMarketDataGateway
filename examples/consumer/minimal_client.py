@@ -93,9 +93,12 @@ async def consume_order_book(
         attempt += 1
         bids: dict[Decimal, str] = {}
         asks: dict[Decimal, str] = {}
+        best_bid_price: Decimal | None = None
+        best_ask_price: Decimal | None = None
         valid = False
         resubscribe = False
         req = build_order_book_request(market, symbol, f"ex-ob-{symbol}-{attempt}")
+        call = None
         try:
             call = stub.SubscribeOrderBook(req)
             async for item in call:
@@ -113,20 +116,39 @@ async def consume_order_book(
                     asks.clear()
                     apply_levels(bids, item.snapshot.bids)
                     apply_levels(asks, item.snapshot.asks)
+                    best_bid_price = max(bids) if bids else None
+                    best_ask_price = min(asks) if asks else None
                     valid = item.snapshot.synchronized
                     stats["book_snapshots"] += 1
                 elif payload == "depth_update" and valid:
                     apply_levels(bids, item.depth_update.bids)
+                    for lvl in item.depth_update.bids:
+                        p = Decimal(lvl.price)
+                        if lvl.quantity == "0":
+                            if best_bid_price is not None and p == best_bid_price:
+                                best_bid_price = max(bids) if bids else None
+                        elif best_bid_price is None or p > best_bid_price:
+                            best_bid_price = p
                     apply_levels(asks, item.depth_update.asks)
+                    for lvl in item.depth_update.asks:
+                        p = Decimal(lvl.price)
+                        if lvl.quantity == "0":
+                            if best_ask_price is not None and p == best_ask_price:
+                                best_ask_price = min(asks) if asks else None
+                        elif best_ask_price is None or p < best_ask_price:
+                            best_ask_price = p
                     stats["book_updates"] += 1
-                if bids and asks:
-                    stats["best_bid"] = str(max(bids))
-                    stats["best_ask"] = str(min(asks))
+                if best_bid_price is not None and best_ask_price is not None:
+                    stats["best_bid"] = str(best_bid_price)
+                    stats["best_ask"] = str(best_ask_price)
                 if stop.is_set():
                     break
         except grpc.aio.AioRpcError as exc:
             stats["rpc_errors"] += 1
             print(f"[order_book] rpc error {exc.code().name}: {exc.details()}")
+        finally:
+            if call is not None:
+                call.cancel()
         if not stop.is_set() and not resubscribe:
             await asyncio.sleep(1.0)
 
@@ -147,8 +169,10 @@ async def consume_events(
             market, symbol, stream_name, f"ex-{stream_name}-{symbol}-{attempt}"
         )
         resubscribe = False
+        call = None
         try:
-            async for item in stub.SubscribeEvents(req):
+            call = stub.SubscribeEvents(req)
+            async for item in call:
                 payload = item.WhichOneof("payload")
                 if payload == "subscription_accepted":
                     stats["accepted_streams"].add(stream_name)
@@ -177,7 +201,7 @@ async def consume_events(
                                 if ref.HasField("source_time_ms")
                                 else None
                             ),
-                            "stale": _is_reference_stale(ref, time.time_ns()),
+                            "_ref": ref,
                         }
                     stats["events"][stream_name] = (
                         stats["events"].get(stream_name, 0) + 1
@@ -191,6 +215,9 @@ async def consume_events(
         except grpc.aio.AioRpcError as exc:
             stats["rpc_errors"] += 1
             print(f"[{stream_name}] rpc error {exc.code().name}: {exc.details()}")
+        finally:
+            if call is not None:
+                call.cancel()
         if not stop.is_set() and not resubscribe:
             await asyncio.sleep(1.0)
 
@@ -260,6 +287,11 @@ async def run_client(
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+    now_ns = time.time_ns()
+    for entry in stats["reference_last_ok"].values():
+        ref = entry.pop("_ref", None)
+        if ref is not None:
+            entry["stale"] = _is_reference_stale(ref, now_ns)
     return stats
 
 

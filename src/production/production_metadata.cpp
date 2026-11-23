@@ -35,7 +35,18 @@ acquire_production_metadata(const std::vector<runtime::MarketKey> &market_keys,
         [market](const auto &key) { return key.market == market; });
   };
   if (!sources.spot_fetch) {
-    sources.spot_fetch = transport::fetch_spot_exchange_info_set_https;
+    std::vector<std::string> spot_symbols;
+    for (const auto &key : market_keys) {
+      if (key.market == runtime::common_wire::MARKET_SPOT) {
+        spot_symbols.push_back(key.symbol);
+      }
+    }
+    sources.spot_fetch = [spot_symbols = std::move(spot_symbols)]() {
+      return spot_symbols.empty()
+                 ? transport::fetch_spot_exchange_info_set_https()
+                 : transport::fetch_spot_exchange_info_for_symbols_https(
+                       spot_symbols);
+    };
   }
   if (!sources.usdm_fetch) {
     sources.usdm_fetch = transport::fetch_usdm_exchange_info_https;
@@ -197,16 +208,29 @@ acquire_production_metadata(const std::vector<runtime::MarketKey> &market_keys,
 }
 
 std::vector<composition::ProductRuntimeSpec>
-make_product_runtime_specs(ProductionMetadata metadata) {
+make_product_runtime_specs(
+    ProductionMetadata metadata,
+    const std::map<runtime::MarketKey, runtime::EnabledStreams,
+                   runtime::MarketKeyLess> *stream_switches) {
   std::sort(metadata.products.begin(), metadata.products.end(),
             [](const auto &left, const auto &right) {
               return runtime::MarketKeyLess{}(left.key, right.key);
             });
   std::vector<composition::ProductRuntimeSpec> specifications;
   specifications.reserve(metadata.products.size());
-  for (auto &product : metadata.products) {
+  for (std::size_t index = 0U; index < metadata.products.size(); ++index) {
+    auto &product = metadata.products[index];
+    composition::ProductRuntimeOptions options;
+    options.runtime_limits.bootstrap_capacity = 1024U;
+    options.planned_rotation = recovery::production_policy(index);
+    if (stream_switches != nullptr) {
+      if (const auto found = stream_switches->find(product.key);
+          found != stream_switches->end()) {
+        options.enabled_streams = found->second;
+      }
+    }
     specifications.push_back({std::move(product.key), product.numeric_spec,
-                              composition::ProductRuntimeOptions{}});
+                              std::move(options)});
   }
   return specifications;
 }

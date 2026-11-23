@@ -33,14 +33,17 @@ struct RuntimeLimits final {
   constexpr RuntimeLimits(
       std::size_t ingress_capacity_value = 64U,
       std::size_t bootstrap_capacity_value = 64U,
-      publication::PublicationLimits publication_value = {}) noexcept
+      publication::PublicationLimits publication_value = {},
+      bool market_only_value = false) noexcept
       : ingress_capacity{ingress_capacity_value},
         bootstrap_capacity{bootstrap_capacity_value},
-        publication{publication_value} {}
+        publication{publication_value},
+        market_only{market_only_value} {}
 
   std::size_t ingress_capacity;
   std::size_t bootstrap_capacity;
   publication::PublicationLimits publication;
+  bool market_only{false};
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   std::shared_ptr<performance::ProductTraceBuffer> performance_baseline;
 #endif
@@ -263,6 +266,8 @@ public:
                   SourceProvenance provenance);
   [[nodiscard]] AdmissionResult submit_transport_failure();
   [[nodiscard]] AdmissionResult submit_snapshot_failure();
+  [[nodiscard]] AdmissionResult
+  submit_market_only_ready(SourceProvenance provenance = {});
 
   // Observations establish a FIFO barrier behind earlier admitted events and
   // return owning copies. Timeout/cancellation never reports stale Live state.

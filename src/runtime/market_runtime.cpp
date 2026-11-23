@@ -41,8 +41,12 @@ struct SnapshotInput final {
   SourceProvenance provenance;
 };
 
+struct MarketOnlyReadyInput final {
+  SourceProvenance provenance;
+};
+
 using RuntimeInput =
-    std::variant<DepthUpdateInput, SnapshotInput, InjectedFailure>;
+    std::variant<DepthUpdateInput, SnapshotInput, MarketOnlyReadyInput, InjectedFailure>;
 
 struct IngressItem final {
   std::uint64_t ticket;
@@ -139,6 +143,7 @@ public:
     accepting_ = true;
     publication_admission_open_ = !publication_shutdown_completed_;
     observation_.publication_admission_open = publication_admission_open_;
+    WaitGuard wait_guard{state_waiters_};
     condition_.wait(lock, [this] { return owner_ready_; });
     return StartResult::Started;
   }
@@ -167,6 +172,7 @@ public:
         observation_.state = RuntimeState::Stopping;
       }
     }
+    owner_condition_.notify_one();
     condition_.notify_all();
 
     if (owner_.joinable()) {
@@ -213,7 +219,7 @@ public:
 #endif
       accepting_ = false;
       pending_fault_ = FaultReason::IngressOverflow;
-      condition_.notify_all();
+      owner_condition_.notify_one();
       return AdmissionResult::Full;
     }
 
@@ -227,7 +233,7 @@ public:
       }
     }
 #endif
-    condition_.notify_all();
+    owner_condition_.notify_one();
     return AdmissionResult::Accepted;
   }
 
@@ -238,8 +244,9 @@ public:
     if (stop_token.stop_requested()) {
       return std::nullopt;
     }
-    if (started_ && !stopped_) {
+    if (started_ && !stopped_ && processed_ticket_ < last_admitted_ticket_) {
       const auto target = last_admitted_ticket_;
+      WaitGuard wait_guard{state_waiters_};
       const auto ready =
           condition_.wait_until(lock, stop_token, deadline, [this, target] {
             return processed_ticket_ >= target || stopped_;
@@ -273,7 +280,8 @@ public:
     }
 
     reset_request_.emplace(last_admitted_ticket_, ResetKind::Recovery);
-    condition_.notify_all();
+    owner_condition_.notify_one();
+    WaitGuard wait_guard{state_waiters_};
     condition_.wait(lock, [this] {
       return reset_request_->result.has_value() || stopped_;
     });
@@ -283,7 +291,6 @@ public:
     }
     const auto result = *reset_request_->result;
     reset_request_.reset();
-    condition_.notify_all();
     return result;
   }
 
@@ -300,8 +307,9 @@ public:
       return PlannedRebootstrapResetResult::Stopping;
     }
     if (observation_.state != RuntimeState::Live ||
-        observation_.projection_status !=
-            core::ProjectionStatus::Synchronized ||
+        (!limits_.market_only &&
+         observation_.projection_status !=
+             core::ProjectionStatus::Synchronized) ||
         observation_.fault_reason.has_value()) {
       return PlannedRebootstrapResetResult::InvalidState;
     }
@@ -310,7 +318,8 @@ public:
     }
 
     reset_request_.emplace(last_admitted_ticket_, ResetKind::Planned);
-    condition_.notify_all();
+    owner_condition_.notify_one();
+    WaitGuard wait_guard{state_waiters_};
     condition_.wait(lock, [this] {
       return reset_request_->result.has_value() || stopped_;
     });
@@ -320,13 +329,13 @@ public:
     }
     const auto result = to_planned_reset_result(*reset_request_->result);
     reset_request_.reset();
-    condition_.notify_all();
     return result;
   }
 
   [[nodiscard]] std::optional<RuntimeObservation>
   wait_until_live_or_recovery_required(std::stop_token stop_token) {
     std::unique_lock lock{mutex_};
+    WaitGuard wait_guard{state_waiters_};
     const auto ready = condition_.wait(lock, stop_token, [this] {
       return observation_.state == RuntimeState::Live ||
              recovery_required_locked() || stop_requested_ || stopped_;
@@ -341,6 +350,7 @@ public:
   [[nodiscard]] std::optional<RuntimeObservation>
   wait_until_recovery_required(std::stop_token stop_token) {
     std::unique_lock lock{mutex_};
+    WaitGuard wait_guard{state_waiters_};
     const auto ready = condition_.wait(lock, stop_token, [this] {
       return recovery_required_locked() || stop_requested_ || stopped_;
     });
@@ -355,6 +365,7 @@ public:
   wait_until_recovery_required_for(std::stop_token stop_token,
                                    std::chrono::nanoseconds duration) {
     std::unique_lock lock{mutex_};
+    WaitGuard wait_guard{state_waiters_};
     const auto ready = condition_.wait_for(lock, stop_token, duration, [this] {
       return recovery_required_locked() || stop_requested_ || stopped_;
     });
@@ -385,7 +396,8 @@ public:
     }
 
     snapshot_request_.emplace(last_admitted_ticket_);
-    condition_.notify_all();
+    owner_condition_.notify_one();
+    WaitGuard wait_guard{state_waiters_};
     condition_.wait(lock, [this] {
       return snapshot_request_->result.has_value() || stopped_;
     });
@@ -395,7 +407,6 @@ public:
     }
     auto result = std::move(*snapshot_request_->result);
     snapshot_request_.reset();
-    condition_.notify_all();
     return result;
   }
 
@@ -440,7 +451,8 @@ public:
         // Test instrumentation must not affect owner-mailbox correctness.
       }
     }
-    condition_.notify_all();
+    owner_condition_.notify_one();
+    WaitGuard wait_guard{state_waiters_};
     condition_.wait(lock, [&request, this] {
       return request->result.has_value() || stopped_;
     });
@@ -455,7 +467,7 @@ public:
       std::lock_guard lock{mutex_};
       publication_removal_pending_ = true;
     }
-    condition_.notify_all();
+    owner_condition_.notify_one();
   }
 
   void close_publication_admission() noexcept {
@@ -484,7 +496,8 @@ public:
       return PublicationShutdownResult::NotStarted;
     }
     publication_shutdown_requested_ = true;
-    condition_.notify_all();
+    owner_condition_.notify_one();
+    WaitGuard wait_guard{state_waiters_};
     condition_.wait(
         lock, [this] { return publication_shutdown_completed_ || stopped_; });
     return publication_shutdown_completed_ ? PublicationShutdownResult::ShutDown
@@ -501,7 +514,7 @@ public:
       std::lock_guard lock{mutex_};
       owner_paused_ = false;
     }
-    condition_.notify_all();
+    owner_condition_.notify_one();
   }
 
   void pause_owner_for_testing() noexcept {
@@ -512,6 +525,20 @@ public:
   }
 
 private:
+  struct WaitGuard final {
+    std::size_t &waiters;
+    explicit WaitGuard(std::size_t &count) noexcept : waiters{count} {
+      ++waiters;
+    }
+    ~WaitGuard() { --waiters; }
+  };
+
+  void notify_state_waiters_locked() noexcept {
+    if (state_waiters_ > 0U) {
+      condition_.notify_all();
+    }
+  }
+
   enum class ResetKind : std::uint8_t {
     Recovery,
     Planned,
@@ -597,7 +624,7 @@ private:
       std::optional<FaultReason> pending_fault;
       {
         std::unique_lock lock{mutex_};
-        condition_.wait(lock, [this] {
+        owner_condition_.wait(lock, [this] {
           if (stop_requested_) {
             return true;
           }
@@ -965,10 +992,12 @@ private:
       const bool valid_recovery =
           observation_.state == RuntimeState::Faulted ||
           observation_.state == RuntimeState::NeedsResync;
-      const bool valid_planned = observation_.state == RuntimeState::Live &&
-                                 observation_.projection_status ==
-                                     core::ProjectionStatus::Synchronized &&
-                                 !observation_.fault_reason.has_value();
+      const bool valid_planned =
+          observation_.state == RuntimeState::Live &&
+          (limits_.market_only ||
+           observation_.projection_status ==
+               core::ProjectionStatus::Synchronized) &&
+          !observation_.fault_reason.has_value();
       if ((reset_kind == ResetKind::Recovery && !valid_recovery) ||
           (reset_kind == ResetKind::Planned && !valid_planned)) {
         reset_request_->result = RebootstrapResetResult::InvalidState;
@@ -1031,6 +1060,8 @@ private:
             process_depth_update(value);
           } else if constexpr (std::is_same_v<Value, SnapshotInput>) {
             process_snapshot(value);
+          } else if constexpr (std::is_same_v<Value, MarketOnlyReadyInput>) {
+            process_market_only_ready(value);
           } else {
             transition_to_fault(value == InjectedFailure::Transport
                                     ? FaultReason::TransportFailure
@@ -1039,6 +1070,21 @@ private:
           }
         },
         input);
+  }
+
+  void process_market_only_ready(const MarketOnlyReadyInput &input) {
+    current_projection_generation_ = input.provenance.connection_generation;
+    {
+      std::lock_guard lock{mutex_};
+      observation_.current_projection_generation =
+          current_projection_generation_;
+      if (observation_.state != RuntimeState::Faulted &&
+          observation_.state != RuntimeState::Stopping &&
+          observation_.state != RuntimeState::Stopped) {
+        observation_.state = RuntimeState::Live;
+      }
+      notify_state_waiters_locked();
+    }
   }
 
   void process_depth_update(const DepthUpdateInput &input) {
@@ -1064,7 +1110,7 @@ private:
     }
 
     const auto installed =
-        std::get<adapter::AdaptedBookBaseline>(adapted).install_into(
+        std::get<adapter::AdaptedBookBaseline>(adapted).install_into_trusted(
             projection_);
     if (std::holds_alternative<adapter::AdapterError>(installed)) {
       transition_to_fault(FaultReason::AdapterError,
@@ -1135,7 +1181,8 @@ private:
     }
 #endif
     const auto applied =
-        std::get<adapter::AdaptedDepthBatch>(adapted).apply_to(projection_);
+        std::get<adapter::AdaptedDepthBatch>(adapted).apply_to_trusted(
+            projection_);
     if (std::holds_alternative<adapter::AdapterError>(applied)) {
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       if (limits_.performance_baseline != nullptr) {
@@ -1305,12 +1352,10 @@ private:
   }
 
   void finish_ticket(std::uint64_t ticket) noexcept {
-    {
-      std::lock_guard lock{mutex_};
-      processed_ticket_ = std::max(processed_ticket_, ticket);
-      observation_.bootstrap_occupancy = bootstrap_.size();
-    }
-    condition_.notify_all();
+    std::lock_guard lock{mutex_};
+    processed_ticket_ = std::max(processed_ticket_, ticket);
+    observation_.bootstrap_occupancy = bootstrap_.size();
+    notify_state_waiters_locked();
   }
 
   void perform_snapshot_request() noexcept {
@@ -1374,7 +1419,9 @@ private:
   std::uint64_t next_subscription_id_{1U};
 
   mutable std::mutex mutex_;
+  std::condition_variable owner_condition_;
   std::condition_variable_any condition_;
+  std::size_t state_waiters_{0U};
   std::deque<IngressItem> ingress_;
   std::deque<std::shared_ptr<AdmissionRequest>> admission_requests_;
   std::optional<FaultReason> pending_fault_;
@@ -1463,6 +1510,11 @@ AdmissionResult MarketRuntime::submit_transport_failure() {
 
 AdmissionResult MarketRuntime::submit_snapshot_failure() {
   return impl_->submit(InjectedFailure::Snapshot);
+}
+
+AdmissionResult
+MarketRuntime::submit_market_only_ready(SourceProvenance provenance) {
+  return impl_->submit(MarketOnlyReadyInput{std::move(provenance)});
 }
 
 RuntimeObservation MarketRuntime::observe() {

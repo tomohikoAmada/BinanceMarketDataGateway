@@ -59,7 +59,7 @@ public:
         retry_after.data(), retry_after.data() + retry_after.size(), parsed);
     if (result.ec == std::errc{} &&
         result.ptr == retry_after.data() + retry_after.size()) {
-      seconds = parsed;
+      seconds = std::max<std::uint64_t>(1U, parsed);
     }
     const auto maximum = std::chrono::duration_cast<std::chrono::seconds>(
                              Clock::time_point::max() - now)

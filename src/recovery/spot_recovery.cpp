@@ -26,6 +26,10 @@ public:
     return transport_.start();
   }
 
+  void begin_depth_bootstrap() override {
+    transport_.begin_depth_bootstrap();
+  }
+
   void stop() noexcept override { transport_.stop(); }
 
   [[nodiscard]] transport::TransportObservation observe() const override {
@@ -103,13 +107,14 @@ classify_failure(const runtime::RuntimeObservation &runtime,
   const auto status = *error.http_status;
   if (status == 429U || status == 418U) {
     const auto retry_after = detail::parse_retry_after(error.retry_after);
-    if (!retry_after.has_value()) {
-      return {};
-    }
     decision.recoverable = true;
     decision.cause =
         status == 429U ? RecoveryCause::Http429 : RecoveryCause::Http418;
-    decision.minimum_delay = retry_after;
+    decision.minimum_delay = std::chrono::seconds{
+        std::max<std::chrono::seconds::rep>(
+            1, retry_after.has_value()
+                   ? retry_after->count()
+                   : (status == 418U ? 86400 : 60))};
     return decision;
   }
   if (status >= 500U && status <= 599U) {
@@ -133,6 +138,7 @@ classify_failure(const runtime::RuntimeObservation &runtime,
 [[nodiscard]] RecoveryCoordinatorOptions
 spot_coordinator_options(RecoveryOptions options) {
   RecoveryCoordinatorOptions coordinator;
+  options.transport.defer_depth_request = true;
   coordinator.attempt_factory = [transport_options =
                                      std::move(options.transport)](
                                     runtime::MarketRuntime &attempt_runtime,
@@ -188,6 +194,9 @@ public:
         planned_rotation_{planned_rotation},
         source_generation_lifecycle_{
             std::move(options.source_generation_lifecycle)},
+        require_orderbook_projection_{options.require_orderbook_projection},
+        require_public_ws_{options.require_public_ws},
+        require_market_ws_{options.require_market_ws},
         attempt_factory_{std::move(test_options.attempt_factory)},
         backoff_waiter_{std::move(test_options.backoff_waiter)},
         rotation_waiter_{std::move(test_options.rotation_waiter)},
@@ -271,6 +280,10 @@ public:
       observation_.in_backoff = false;
     }
     condition_.notify_all();
+    {
+      std::lock_guard backoff_lock{backoff_mutex_};
+      backoff_stop_requested_ = true;
+    }
     coordinator_.request_stop();
     backoff_condition_.notify_all();
 
@@ -412,6 +425,10 @@ public:
       // coordinator and let its concurrent quiescence clear active_attempt_.
     }
     condition_.notify_all();
+    {
+      std::lock_guard backoff_lock{backoff_mutex_};
+      backoff_stop_requested_ = true;
+    }
     coordinator_.request_stop();
     backoff_condition_.notify_all();
 
@@ -516,16 +533,24 @@ private:
         bool planned_rotation_due = false;
         std::optional<runtime::RuntimeObservation> runtime_observation;
         if (start_result == transport::TransportStartResult::Started) {
-          open_source_generation(attempt->observe(), generation);
-          runtime_observation =
-              runtime_.wait_until_live_or_recovery_required(stop_token);
-          if (!runtime_observation.has_value()) {
+          if (open_source_generation(attempt->observe(), generation)) {
+            attempt->begin_depth_bootstrap();
+            runtime_observation =
+                runtime_.wait_until_live_or_recovery_required(stop_token);
+            if (!runtime_observation.has_value()) {
+              static_cast<void>(quiesce_attempt(attempt));
+              close_source_generation(
+                  SourceGenerationCloseOutcome::GlobalShutdown);
+              break;
+            }
+          } else if (stop_token.stop_requested() || shutdown_requested()) {
             static_cast<void>(quiesce_attempt(attempt));
             close_source_generation(
                 SourceGenerationCloseOutcome::GlobalShutdown);
             break;
           }
-          if (runtime_observation->state == runtime::RuntimeState::Live) {
+          if (runtime_observation.has_value() &&
+              runtime_observation->state == runtime::RuntimeState::Live) {
             // terminal_failure() publishes the transport error before admitting
             // the runtime fault. The FIFO barrier covers every earlier runtime
             // admission; the following transport observation covers a terminal
@@ -841,19 +866,34 @@ private:
     return transport;
   }
 
-  void open_source_generation(const transport::TransportObservation &transport,
-                              std::uint64_t expected_generation) {
+  [[nodiscard]] bool
+  open_source_generation(const transport::TransportObservation &transport,
+                         std::uint64_t expected_generation) {
+    if (shutdown_requested()) {
+      return false;
+    }
+    if (!transport.running || transport.stopped ||
+        transport.terminal_error.has_value()) {
+      return false;
+    }
     if (!source_generation_lifecycle_.open) {
-      return;
+      return true;
     }
     if (source_generation_open_.has_value() || source_generation_quiesced_ ||
-        !transport.started || !transport.running || transport.stopped ||
-        !transport.websocket_handshake ||
-        transport.connection_generation != expected_generation ||
-        !source_generation_lifecycle_.open(expected_generation)) {
+        !transport.started ||
+        (require_public_ws_ && !transport.websocket_handshake) ||
+        (require_market_ws_ && !transport.market_websocket_handshake) ||
+        transport.connection_generation != expected_generation) {
+      throw std::runtime_error{"G9 source generation open invariant failed"};
+    }
+    if (!source_generation_lifecycle_.open(expected_generation)) {
+      if (shutdown_requested()) {
+        return false;
+      }
       throw std::runtime_error{"G9 source generation open invariant failed"};
     }
     source_generation_open_ = expected_generation;
+    return true;
   }
 
   void close_source_generation(SourceGenerationCloseOutcome outcome) {
@@ -937,10 +977,13 @@ private:
                 const transport::TransportObservation &transport,
                 std::uint64_t expected_generation, std::stop_token stop_token) {
     if (runtime.state != runtime::RuntimeState::Live ||
-        runtime.projection_status != core::ProjectionStatus::Synchronized ||
+        (require_orderbook_projection_ &&
+         runtime.projection_status != core::ProjectionStatus::Synchronized) ||
         runtime.fault_reason.has_value() || !transport.running ||
         transport.stopped || transport.terminal_error.has_value() ||
-        !transport.websocket_handshake || !transport.rest_depth_fetched ||
+        (require_public_ws_ && !transport.websocket_handshake) ||
+        (require_market_ws_ && !transport.market_websocket_handshake) ||
+        (require_orderbook_projection_ && !transport.rest_depth_fetched) ||
         transport.connection_generation != expected_generation ||
         stop_token.stop_requested()) {
       return false;
@@ -967,9 +1010,11 @@ private:
       return backoff_waiter_(delay, stop_token) && !stop_token.stop_requested();
     }
     std::unique_lock lock{backoff_mutex_};
-    static_cast<void>(backoff_condition_.wait_for(lock, stop_token, delay,
-                                                  [] { return false; }));
-    return !stop_token.stop_requested();
+    static_cast<void>(backoff_condition_.wait_for(
+        lock, stop_token, delay, [this, &stop_token] {
+          return backoff_stop_requested_ || stop_token.stop_requested();
+        }));
+    return !backoff_stop_requested_ && !stop_token.stop_requested();
   }
 
   void set_terminal(RecoveryCause cause, transport::NetworkError error,
@@ -996,6 +1041,9 @@ private:
   runtime::RuntimeClock clock_;
   std::optional<PlannedRotationPolicy> planned_rotation_;
   SourceGenerationLifecycle source_generation_lifecycle_;
+  bool require_orderbook_projection_{true};
+  bool require_public_ws_{true};
+  bool require_market_ws_{false};
   std::optional<std::uint64_t> source_generation_open_;
   bool source_generation_quiesced_{false};
   detail::AttemptFactory attempt_factory_;
@@ -1017,6 +1065,7 @@ private:
   std::shared_ptr<detail::RecoveryAttempt> active_attempt_;
   std::mutex backoff_mutex_;
   std::condition_variable_any backoff_condition_;
+  bool backoff_stop_requested_{false};
 };
 
 RecoveryCoordinator::RecoveryCoordinator(

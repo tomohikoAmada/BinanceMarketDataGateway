@@ -9,8 +9,10 @@
 #include <chrono>
 #include <cstddef>
 #include <exception>
+#include <iostream>
 #include <limits>
 #include <optional>
+#include <stop_token>
 #include <unordered_map>
 #include <utility>
 
@@ -179,7 +181,13 @@ void append_filters(const Json &symbol_json,
       set("minQty", &market::InstrumentFilter::set_min_quantity);
       set("maxQty", &market::InstrumentFilter::set_max_quantity);
     } else if (*type == "MIN_NOTIONAL" || *type == "NOTIONAL") {
-      set("notional", &market::InstrumentFilter::set_notional);
+      if (const auto value = string_field(filter, "notional");
+          value.has_value()) {
+        item->set_notional(std::string{*value});
+      } else if (const auto min_value = string_field(filter, "minNotional");
+                 min_value.has_value()) {
+        item->set_notional(std::string{*min_value});
+      }
     } else if (*type == "MAX_NUM_ORDERS" || *type == "MAX_NUM_ALGO_ORDERS") {
       const auto value = non_negative_integer_field(filter, "limit");
       if (value.has_value()) {
@@ -572,7 +580,9 @@ struct UsdMReferenceService::Impl final {
        UsdMReferenceOptions options, UsdMReferenceSources sources)
       : products_{std::move(products)}, seeds_{std::move(seeds)},
         clock_{std::move(clock)}, options_{std::move(options)},
-        sources_{std::move(sources)}, baseline_precisions_(products_.size()),
+        sources_{std::move(sources)},
+        http_client_{"fapi.binance.com", "443", options_.user_agent},
+        baseline_precisions_(products_.size()),
         quarantined_(products_.size(), false) {
     if (!clock_) {
       throw std::invalid_argument{"reference service clock is required"};
@@ -582,14 +592,22 @@ struct UsdMReferenceService::Impl final {
       throw std::invalid_argument{"reference periods must be positive"};
     }
     if (!sources_.fetch) {
-      sources_.fetch = [user_agent =
-                            options_.user_agent](std::string_view target) {
-        return fetch_https_json("fapi.binance.com", "443", std::string{target},
-                                user_agent);
+      sources_.fetch = [this](std::string_view target) {
+        return http_client_.get(std::string{target}, stop_source_.get_token());
       };
     }
     if (!sources_.exchange_info_fetch) {
-      sources_.exchange_info_fetch = fetch_usdm_exchange_info_https;
+      sources_.exchange_info_fetch = [this] {
+        return fetch_usdm_exchange_info_https_cancellable(
+            stop_source_.get_token());
+      };
+    }
+    if (!sources_.spot_exchange_info_fetch) {
+      sources_.spot_exchange_info_fetch =
+          [this](std::span<const std::string> symbols) {
+            return fetch_spot_exchange_info_for_symbols_https(
+                symbols, stop_source_.get_token());
+          };
     }
   }
 
@@ -602,9 +620,12 @@ struct UsdMReferenceService::Impl final {
     }
     observation_.running = true;
     stop_requested_ = false;
+    stop_source_ = std::stop_source{};
     thread_ = std::thread{[this] { run(); }};
     return true;
   }
+
+  void publish_seeds() { publish_seed_instruments(); }
 
   void stop() noexcept {
     {
@@ -615,6 +636,7 @@ struct UsdMReferenceService::Impl final {
       stop_requested_ = true;
       observation_.running = false;
     }
+    stop_source_.request_stop();
     condition_.notify_all();
     if (thread_.joinable()) {
       try {
@@ -700,6 +722,13 @@ private:
   }
 
   void publish_seed_instruments() {
+    {
+      std::lock_guard lock{mutex_};
+      if (seeds_published_) {
+        return;
+      }
+      seeds_published_ = true;
+    }
     struct PendingSeed final {
       std::size_t product_index{0U};
       const UsdMReferenceSeed *seed{nullptr};
@@ -786,6 +815,10 @@ private:
       return;
     }
     const auto &product = products_[index];
+    if (product.key.market != common_wire::MARKET_USD_M_PERPETUAL ||
+        !product.enable_periodic_reference) {
+      return;
+    }
     const auto request_id = next_request_id(kind, product.key.symbol);
     const auto target = usdm_reference_target(kind, product.key.symbol);
     const auto response = sources_.fetch(target);
@@ -820,38 +853,133 @@ private:
   }
 
   void execute_exchange_info_refresh() {
-    if (products_.empty()) {
+    execute_usdm_exchange_info_refresh();
+    execute_spot_exchange_info_refresh();
+  }
+
+  void execute_spot_exchange_info_refresh() {
+    std::vector<std::size_t> spot_indices;
+    std::vector<std::string> spot_symbols;
+    for (std::size_t i = 0; i < products_.size(); ++i) {
+      if (products_[i].key.market == common_wire::MARKET_SPOT &&
+          !is_quarantined(i)) {
+        spot_indices.push_back(i);
+        spot_symbols.push_back(products_[i].key.symbol);
+      }
+    }
+    if (spot_indices.empty()) {
+      return;
+    }
+    const auto response = sources_.spot_exchange_info_fetch(spot_symbols);
+    if (const auto *failure = std::get_if<NetworkError>(&response)) {
+      const auto now = clock_();
+      const auto err_code = network_error_code(*failure);
+      for (const auto idx : spot_indices) {
+        if (products_[idx].enable_periodic_reference) {
+          auto error_obs = make_error_observation(
+              UsdMReferenceKind::Instrument, now,
+              next_request_id(UsdMReferenceKind::Instrument,
+                              products_[idx].key.symbol),
+              products_[idx].key.symbol, err_code);
+          error_obs.set_market(common_wire::MARKET_SPOT);
+          static_cast<void>(publish(products_[idx], std::move(error_obs)));
+        }
+        record_request(true, false);
+      }
+      return;
+    }
+    const auto &body = std::get<ExchangeInfoResponse>(response);
+    std::vector<std::string_view> requested;
+    requested.reserve(spot_symbols.size());
+    for (const auto &sym : spot_symbols) {
+      requested.push_back(sym);
+    }
+    const auto parsed_batch =
+        protocol::parse_exchange_info_batch(body.body, requested);
+    if (std::holds_alternative<protocol::ProtocolError>(parsed_batch)) {
+      for (std::size_t i = 0; i < spot_indices.size(); ++i) {
+        record_request(true, false);
+      }
+      return;
+    }
+    const auto &entries =
+        std::get<protocol::SpotMetadataBatch>(parsed_batch).symbols;
+    for (std::size_t offset = 0; offset < spot_indices.size(); ++offset) {
+      const auto product_index = spot_indices[offset];
+      const auto &product = products_[product_index];
+      const auto &entry = entries[offset];
+      std::optional<std::string> incompatibility;
+      if (const auto *failure = std::get_if<protocol::ProtocolError>(&entry)) {
+        incompatibility = "spot_instrument_error:" + failure->field;
+      } else if (product.baseline_numeric_spec.has_value()) {
+        const auto &meta = std::get<protocol::SpotMetadata>(entry);
+        if (meta.numeric_spec != *product.baseline_numeric_spec) {
+          incompatibility = "numeric_spec_changed";
+        }
+      }
+      if (incompatibility.has_value()) {
+        {
+          std::lock_guard lock{mutex_};
+          quarantined_[product_index] = true;
+        }
+        std::cerr << "reference_quarantine market=SPOT symbol="
+                  << product.key.symbol << " reason=" << *incompatibility
+                  << '\n';
+        auto error_obs = make_error_observation(
+            UsdMReferenceKind::Instrument,
+            body.received_at.utc_ns == 0U ? clock_() : body.received_at,
+            next_request_id(UsdMReferenceKind::Instrument, product.key.symbol),
+            product.key.symbol, "incompatible:" + *incompatibility);
+        error_obs.set_market(common_wire::MARKET_SPOT);
+        static_cast<void>(publish(product, std::move(error_obs)));
+        record_request(true, false);
+        if (product.on_incompatible_definition) {
+          product.on_incompatible_definition(*incompatibility);
+        }
+        continue;
+      }
+      record_request(false, false);
+    }
+  }
+
+  void execute_usdm_exchange_info_refresh() {
+    std::vector<std::size_t> active_indices;
+    std::vector<std::string> request_ids;
+    std::vector<UsdMInstrumentBatchRequest> requests;
+    for (std::size_t i = 0; i < products_.size(); ++i) {
+      if (products_[i].key.market == common_wire::MARKET_USD_M_PERPETUAL &&
+          !is_quarantined(i)) {
+        active_indices.push_back(i);
+        request_ids.push_back(next_request_id(UsdMReferenceKind::Instrument,
+                                              products_[i].key.symbol));
+      }
+    }
+    if (active_indices.empty()) {
       return;
     }
     const auto response = sources_.exchange_info_fetch();
     if (const auto *failure = std::get_if<NetworkError>(&response)) {
-      // A failed refresh keeps the last published definitions and their
-      // timestamps. It never fabricates a replacement observation.
-      static_cast<void>(failure);
-      record_request(true, false);
+      const auto now = clock_();
+      const auto err_code = network_error_code(*failure);
+      for (std::size_t offset = 0; offset < active_indices.size(); ++offset) {
+        const auto &product = products_[active_indices[offset]];
+        auto observation =
+            make_error_observation(UsdMReferenceKind::Instrument, now,
+                                   request_ids[offset], product.key.symbol,
+                                   err_code);
+        static_cast<void>(publish(product, std::move(observation)));
+        record_request(true, false);
+      }
       return;
     }
     const auto &body = std::get<ExchangeInfoResponse>(response);
     const auto received_at =
         body.received_at.utc_ns == 0U ? clock_() : body.received_at;
 
-    std::vector<std::size_t> active_indices;
-    std::vector<std::string> request_ids;
-    std::vector<UsdMInstrumentBatchRequest> requests;
-    active_indices.reserve(products_.size());
-    request_ids.reserve(products_.size());
-    requests.reserve(products_.size());
-    for (std::size_t i = 0; i < products_.size(); ++i) {
-      if (is_quarantined(i)) {
-        continue;
-      }
-      active_indices.push_back(i);
-      request_ids.push_back(next_request_id(UsdMReferenceKind::Instrument,
-                                            products_[i].key.symbol));
-      requests.push_back({products_[i].key.symbol, request_ids.back()});
-    }
-    if (requests.empty()) {
-      return;
+    requests.reserve(active_indices.size());
+    for (std::size_t offset = 0; offset < active_indices.size(); ++offset) {
+      requests.push_back(
+          {products_[active_indices[offset]].key.symbol, request_ids[offset]});
     }
 
     const auto batch_result = parse_usdm_instrument_definitions_batch(
@@ -879,6 +1007,8 @@ private:
             std::lock_guard lock{mutex_};
             quarantined_[product_index] = true;
           }
+          std::cerr << "reference_quarantine market=USD_M_PERPETUAL symbol="
+                    << product.key.symbol << " reason=" << *reason << '\n';
           auto error_observation = make_error_observation(
               UsdMReferenceKind::Instrument, received_at, request_ids[offset],
               product.key.symbol, "incompatible:" + *reason);
@@ -904,10 +1034,13 @@ private:
   void run() {
     publish_seed_instruments();
     std::vector<Task> tasks;
-    tasks.reserve(products_.size() * kPeriodicKinds.size());
     const auto started = std::chrono::steady_clock::now();
     std::size_t ordinal = 0U;
     for (std::size_t product = 0; product < products_.size(); ++product) {
+      if (products_[product].key.market != common_wire::MARKET_USD_M_PERPETUAL ||
+          !products_[product].enable_periodic_reference) {
+        continue;
+      }
       for (const auto kind : kPeriodicKinds) {
         tasks.push_back(
             {product, kind, started + options_.initial_spacing * ordinal});
@@ -921,7 +1054,8 @@ private:
                                        [](const auto &left, const auto &right) {
                                          return left.due < right.due;
                                        });
-      const auto exchange_info_first = exchange_info_due < selected->due;
+      const auto exchange_info_first =
+          tasks.empty() || exchange_info_due < selected->due;
       const auto due = exchange_info_first ? exchange_info_due : selected->due;
       if (condition_.wait_until(lock, due,
                                 [this] { return stop_requested_; })) {
@@ -949,6 +1083,8 @@ private:
   const runtime::RuntimeClock clock_;
   const UsdMReferenceOptions options_;
   UsdMReferenceSources sources_;
+  KeepAliveHttpsClient http_client_;
+  std::stop_source stop_source_;
 
   std::vector<std::optional<std::pair<std::int32_t, std::int32_t>>>
       baseline_precisions_;
@@ -959,6 +1095,7 @@ private:
   std::uint64_t next_request_sequence_{1U};
   std::thread thread_;
   bool stop_requested_{false};
+  bool seeds_published_{false};
 };
 
 UsdMReferenceService::UsdMReferenceService(
@@ -972,6 +1109,8 @@ UsdMReferenceService::UsdMReferenceService(
 UsdMReferenceService::~UsdMReferenceService() = default;
 
 bool UsdMReferenceService::start() { return impl_->start(); }
+
+void UsdMReferenceService::publish_seeds() { impl_->publish_seeds(); }
 
 void UsdMReferenceService::stop() noexcept { impl_->stop(); }
 

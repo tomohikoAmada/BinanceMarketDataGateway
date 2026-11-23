@@ -136,6 +136,7 @@ enum class Action {
   AdapterFailure,
   Http429,
   Http429Long,
+  Http429Zero,
   Http429Missing,
   Http429Malformed,
   Http418,
@@ -240,6 +241,8 @@ public:
       return http_failure(429U, std::string{"17"});
     case Action::Http429Long:
       return http_failure(429U, std::string{"1234"});
+    case Action::Http429Zero:
+      return http_failure(429U, std::string{"0"});
     case Action::Http429Missing:
       return http_failure(429U, std::nullopt);
     case Action::Http429Malformed:
@@ -856,6 +859,14 @@ void rate_limit_policy() {
            {Action::Http429, std::chrono::seconds{17},
             recovery::RecoveryCause::Http429},
            {Action::Http418, std::chrono::seconds{19},
+            recovery::RecoveryCause::Http418},
+           {Action::Http429Missing, std::chrono::seconds{60},
+            recovery::RecoveryCause::Http429},
+           {Action::Http429Malformed, std::chrono::seconds{60},
+            recovery::RecoveryCause::Http429},
+           {Action::Http429Zero, std::chrono::seconds{1},
+            recovery::RecoveryCause::Http429},
+           {Action::Http418Overflow, std::chrono::seconds{86400},
             recovery::RecoveryCause::Http418}}) {
     auto script = make_script({action, Action::Live});
     rt::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
@@ -884,9 +895,8 @@ void rate_limit_policy() {
 }
 
 void terminal_http_and_bad_retry_after() {
-  for (const auto action : {Action::Http429Missing, Action::Http429Malformed,
-                            Action::Http418Overflow, Action::Http403,
-                            Action::Http404, Action::AdapterFailure}) {
+  for (const auto action :
+       {Action::Http403, Action::Http404, Action::AdapterFailure}) {
     auto script = make_script({action, Action::Live});
     rt::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
     recovery::SpotRecovery recovery{runtime, fixed_clock(),
@@ -902,6 +912,27 @@ void terminal_http_and_bad_retry_after() {
     }
     recovery.stop();
   }
+}
+
+void stop_during_418_long_backoff_exits_fast() {
+  auto script = make_script({Action::Http418Overflow, Action::Live});
+  auto options = script_options(script);
+  options.backoff_waiter = {};
+  rt::MarketRuntime runtime{{8U, 8U}, fixed_clock(), numeric_spec()};
+  recovery::SpotRecovery recovery{runtime, fixed_clock(), std::move(options)};
+  REQUIRE_EQ(recovery.start(), recovery::RecoveryStartResult::Started);
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds{2};
+  while (recovery.observe().state != recovery::RecoveryState::Backoff) {
+    REQUIRE(std::chrono::steady_clock::now() < deadline);
+    std::this_thread::sleep_for(std::chrono::milliseconds{2});
+  }
+  const auto stop_started = std::chrono::steady_clock::now();
+  recovery.stop();
+  const auto stop_elapsed =
+      std::chrono::steady_clock::now() - stop_started;
+  REQUIRE(stop_elapsed < std::chrono::seconds{2});
+  REQUIRE_EQ(recovery.observe().state, recovery::RecoveryState::Stopped);
 }
 
 void stop_during_backoff() {
@@ -1064,6 +1095,8 @@ int main() {
       {"BAD_RETRY_AFTER_HTTP_4XX_INTERNAL_FAIL_CLOSED",
        terminal_http_and_bad_retry_after},
       {"STOP_DURING_BACKOFF", stop_during_backoff},
+      {"STOP_DURING_418_LONG_BACKOFF_EXITS_FAST",
+       stop_during_418_long_backoff_exits_fast},
       {"STOP_DURING_ACTIVE_CONNECTION", stop_during_active_connection},
       {"EVENT_GENERATION_TWO_PHASE_RECOVERY_AND_PERMANENT_CUT",
        event_generation_two_phase_recovery_and_permanent_cut},

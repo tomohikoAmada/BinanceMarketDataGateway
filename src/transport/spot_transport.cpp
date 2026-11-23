@@ -15,6 +15,7 @@
 #include <openssl/ssl.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -24,6 +25,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -209,15 +211,6 @@ private:
   }
 
   void write_request() {
-    const auto delay = detail::shared_public_api_budget().admit(
-        detail::is_usdm_host(endpoint_.host), false,
-        detail::public_rest_weight(endpoint_.host, endpoint_.target));
-    if (delay > std::chrono::steady_clock::duration::zero()) {
-      finish(network_error(
-          NetworkErrorCode::RuntimeAdmission, "exchange-info-api-budget",
-          "metadata request exceeds the current IP share or cooldown"));
-      return;
-    }
     arm_timeout("exchange-info-http-write");
     http::async_write(
         stream_, request_,
@@ -346,6 +339,38 @@ public:
   }
 
   void start() {
+    if (!admitted_) {
+      const auto delay = detail::shared_public_api_budget().admit(
+          detail::is_usdm_host(host_), false,
+          detail::public_rest_weight(host_, request_.target()));
+      if (delay > std::chrono::steady_clock::duration::zero()) {
+        timer_pending_ = true;
+        timer_.expires_after(delay);
+        timer_.async_wait([self = shared_from_this()](const ErrorCode &error) {
+          self->timer_pending_ = false;
+          if (self->done_) {
+            return;
+          }
+          if (self->cancel_requested_) {
+            if (!error || is_clean_cancellation(error, self->cancel_requested_)) {
+              self->complete_cancelled_piece();
+            } else {
+              self->finish(error_from_code(NetworkErrorCode::Internal,
+                                           "depth-api-budget-timer", error));
+            }
+            return;
+          }
+          if (error) {
+            self->finish(error_from_code(NetworkErrorCode::Internal,
+                                         "depth-api-budget-timer", error));
+            return;
+          }
+          self->start();
+        });
+        return;
+      }
+      admitted_ = true;
+    }
 
     stream_.set_verify_callback(ssl::host_name_verification(host_));
     if (const auto failure =
@@ -447,28 +472,6 @@ private:
   }
 
   void write_request() {
-    const auto delay = detail::shared_public_api_budget().admit(
-        detail::is_usdm_host(host_), false,
-        detail::public_rest_weight(host_, request_.target()));
-    if (delay > std::chrono::steady_clock::duration::zero()) {
-      timer_pending_ = true;
-      timer_.expires_after(delay);
-      timer_.async_wait([self = shared_from_this()](const ErrorCode &error) {
-        self->timer_pending_ = false;
-        if (self->done_) {
-          return;
-        }
-        if (self->cancel_requested_) {
-          self->complete_cancelled_piece();
-          return;
-        }
-        if (!error) {
-          self->write_request();
-        }
-      });
-      return;
-    }
-
     arm_timeout("depth-http-write");
     io_pending_ = true;
     http::async_write(
@@ -658,6 +661,7 @@ private:
   bool io_pending_{false};
   bool timer_pending_{false};
   bool cancel_requested_{false};
+  bool admitted_{false};
   bool done_{false};
 };
 
@@ -675,11 +679,14 @@ public:
   AsyncWebSocket(asio::io_context &context, ssl::context &tls_context,
                  runtime::RuntimeClock clock, std::string host,
                  std::string port, std::string target, std::string user_agent,
-                 WebSocketCallbacks callbacks)
+                 WebSocketCallbacks callbacks,
+                 std::chrono::seconds idle_timeout = detail::kWebSocketIdleTimeout,
+                 bool keep_alive_pings = detail::kWebSocketKeepAlivePings)
       : resolver_{context}, stream_{context, tls_context}, timer_{context},
         clock_{std::move(clock)}, host_{std::move(host)},
         port_{std::move(port)}, target_{std::move(target)},
-        user_agent_{std::move(user_agent)}, callbacks_{std::move(callbacks)} {}
+        user_agent_{std::move(user_agent)}, callbacks_{std::move(callbacks)},
+        idle_timeout_{idle_timeout}, keep_alive_pings_{keep_alive_pings} {}
 
   void start() {
     const auto delay = detail::shared_public_api_budget().admit(
@@ -693,12 +700,20 @@ public:
           return;
         }
         if (self->cancel_requested_) {
-          self->complete_cancelled_piece();
+          if (!error || is_clean_cancellation(error, self->cancel_requested_)) {
+            self->complete_cancelled_piece();
+          } else {
+            self->fail(error_from_code(NetworkErrorCode::Internal,
+                                         "websocket-api-budget-timer", error));
+          }
           return;
         }
-        if (!error) {
-          self->start();
+        if (error) {
+          self->fail(error_from_code(NetworkErrorCode::Internal,
+                                       "websocket-api-budget-timer", error));
+          return;
         }
+        self->start();
       });
       return;
     }
@@ -808,8 +823,8 @@ private:
   void websocket_handshake() {
     websocket::stream_base::timeout timeouts;
     timeouts.handshake_timeout = kStageTimeout;
-    timeouts.idle_timeout = detail::kWebSocketIdleTimeout;
-    timeouts.keep_alive_pings = detail::kWebSocketKeepAlivePings;
+    timeouts.idle_timeout = idle_timeout_;
+    timeouts.keep_alive_pings = keep_alive_pings_;
     stream_.set_option(timeouts);
     stream_.set_option(websocket::stream_base::decorator(
         [user_agent = user_agent_](websocket::request_type &request) {
@@ -1021,6 +1036,8 @@ private:
   std::string target_;
   std::string user_agent_;
   WebSocketCallbacks callbacks_;
+  std::chrono::seconds idle_timeout_;
+  bool keep_alive_pings_;
   asio::cancellation_signal read_cancellation_;
   std::uint64_t timeout_generation_{0U};
   std::size_t cancellation_completions_pending_{0U};
@@ -1087,6 +1104,19 @@ runtime::ClockSample sample_real_clock() noexcept {
 
 HttpsJsonResult fetch_https_json(std::string host, std::string port,
                                  std::string target, std::string user_agent) {
+  return fetch_https_json_cancellable(std::move(host), std::move(port),
+                                      std::move(target), std::move(user_agent),
+                                      {});
+}
+
+HttpsJsonResult fetch_https_json_cancellable(std::string host, std::string port,
+                                             std::string target,
+                                             std::string user_agent,
+                                             std::stop_token stop_token) {
+  if (stop_token.stop_requested()) {
+    return network_error(NetworkErrorCode::Internal, "reference-http-stopped",
+                         "reference HTTP request cancelled before start");
+  }
   asio::io_context context;
   ssl::context tls_context{ssl::context::tls_client};
   configure_ssl_context(tls_context);
@@ -1096,6 +1126,9 @@ HttpsJsonResult fetch_https_json(std::string host, std::string port,
       std::move(user_agent), [&completion](AsyncHttpsGet::Result result) {
         completion.emplace(std::move(result));
       });
+  std::stop_callback stop_cb(stop_token, [&context, &request] {
+    asio::post(context, [&request] { request->cancel(); });
+  });
   try {
     request->start();
     context.run();
@@ -1108,7 +1141,9 @@ HttpsJsonResult fetch_https_json(std::string host, std::string port,
   }
   if (!completion.has_value()) {
     return network_error(NetworkErrorCode::Internal, "reference-http",
-                         "reference HTTP request produced no completion");
+                         stop_token.stop_requested()
+                             ? "reference HTTP request cancelled"
+                             : "reference HTTP request produced no completion");
   }
   if (const auto *failure = std::get_if<NetworkError>(&*completion)) {
     return *failure;
@@ -1118,6 +1153,245 @@ HttpsJsonResult fetch_https_json(std::string host, std::string port,
       std::move(*completion));
   return HttpsJsonResponse{std::move(response.body()), received_at,
                            response.result() == http::status::ok};
+}
+
+class KeepAliveHttpsClient::Impl final {
+public:
+  Impl(std::string host, std::string port, std::string user_agent)
+      : host_{std::move(host)}, port_{std::move(port)},
+        user_agent_{std::move(user_agent)}, tls_context_{ssl::context::tls_client} {
+    configure_ssl_context(tls_context_);
+  }
+
+  ~Impl() { close_socket(); }
+
+  [[nodiscard]] HttpsJsonResult get(std::string target,
+                                    std::stop_token stop_token) {
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      if (stop_token.stop_requested()) {
+        return network_error(NetworkErrorCode::Internal,
+                             "reference-http-stopped",
+                             "reference HTTP request cancelled");
+      }
+      const auto delay = detail::shared_public_api_budget().admit(
+          detail::is_usdm_host(host_), false,
+          detail::public_rest_weight(host_, target));
+      if (delay > std::chrono::steady_clock::duration::zero()) {
+        asio::io_context sleep_ctx;
+        asio::steady_timer timer{sleep_ctx, delay};
+        bool cancelled = false;
+        std::stop_callback stop_cb(stop_token, [&timer, &cancelled] {
+          cancelled = true;
+          timer.cancel();
+        });
+        timer.async_wait([&](const ErrorCode &) {});
+        sleep_ctx.run();
+        if (cancelled || stop_token.stop_requested()) {
+          return network_error(NetworkErrorCode::Internal,
+                               "reference-http-stopped",
+                               "reference HTTP request cancelled during cooldown");
+        }
+        continue;
+      }
+
+      const bool reused = stream_ != nullptr;
+      if (!stream_) {
+        auto err = connect(stop_token);
+        if (err.has_value()) {
+          return *err;
+        }
+      }
+
+      context_.restart();
+      http::request<http::empty_body> request{http::verb::get, target, 11};
+      request.set(http::field::host, host_);
+      request.set(http::field::user_agent, user_agent_);
+      request.set(http::field::accept, "application/json");
+      request.set(http::field::connection, "keep-alive");
+
+      beast::flat_buffer buffer;
+      http::response_parser<http::string_body> parser;
+      parser.body_limit(16U * 1024U * 1024U);
+      ErrorCode io_error;
+      bool timed_out = false;
+      bool completed = false;
+      asio::steady_timer timer{context_, kStageTimeout};
+      std::stop_callback stop_cb(stop_token, [this, &timer] {
+        asio::post(context_, [this, &timer] {
+          timer.cancel();
+          close_socket();
+        });
+      });
+
+      timer.async_wait([this, &timed_out, &completed](const ErrorCode &ec) {
+        if (!ec && !completed) {
+          timed_out = true;
+          close_socket();
+        }
+      });
+
+      http::async_write(*stream_, request, [&](const ErrorCode &ec, std::size_t) {
+        if (ec) {
+          io_error = ec;
+          completed = true;
+          timer.cancel();
+          return;
+        }
+        http::async_read(*stream_, buffer, parser,
+                         [&](const ErrorCode &read_ec, std::size_t) {
+                           io_error = read_ec;
+                           completed = true;
+                           timer.cancel();
+                         });
+      });
+
+      context_.run();
+      if (stop_token.stop_requested()) {
+        close_socket();
+        return network_error(NetworkErrorCode::Internal,
+                             "reference-http-stopped",
+                             "reference HTTP request cancelled");
+      }
+      if (timed_out) {
+        close_socket();
+        return network_error(NetworkErrorCode::Timeout, "reference-http-timeout",
+                             "keep-alive HTTP request timed out");
+      }
+      if (io_error) {
+        close_socket();
+        if (reused && attempt == 0) {
+          continue;
+        }
+        return error_from_code(NetworkErrorCode::HttpRead, "reference-http",
+                               io_error);
+      }
+
+      auto received_at = sample_real_clock();
+      auto response = parser.release();
+      if (!response.keep_alive()) {
+        close_socket();
+      }
+      if (response.result_int() != 200) {
+        detail::shared_public_api_budget().reject(
+            detail::is_usdm_host(host_), response.result_int(),
+            retry_after_from(response).value_or(""));
+        return network_error(NetworkErrorCode::HttpStatus,
+                             "reference-http-status",
+                             "Binance HTTP request returned non-200",
+                             response.result_int(), retry_after_from(response));
+      }
+      return HttpsJsonResponse{std::move(response.body()), received_at, true};
+    }
+    return network_error(NetworkErrorCode::Internal, "reference-http",
+                         "keep-alive HTTP retries exhausted");
+  }
+
+private:
+  [[nodiscard]] std::optional<NetworkError> connect(std::stop_token stop_token) {
+    context_.restart();
+    tcp::resolver resolver{context_};
+    auto sock = std::make_unique<beast::ssl_stream<beast::tcp_stream>>(
+        context_, tls_context_);
+    sock->set_verify_callback(ssl::host_name_verification(host_));
+    if (const auto failure =
+            configure_tls_stream(sock->native_handle(), host_)) {
+      return *failure;
+    }
+
+    ErrorCode op_error;
+    bool timed_out = false;
+    bool finished = false;
+    asio::steady_timer timer{context_, kStageTimeout};
+    std::stop_callback stop_cb(stop_token, [&] {
+      asio::post(context_, [&] {
+        timer.cancel();
+        resolver.cancel();
+        ErrorCode ignored;
+        beast::get_lowest_layer(*sock).socket().cancel(ignored);
+        beast::get_lowest_layer(*sock).socket().close(ignored);
+      });
+    });
+
+    timer.async_wait([&](const ErrorCode &ec) {
+      if (!ec && !finished) {
+        timed_out = true;
+        resolver.cancel();
+        ErrorCode ignored;
+        beast::get_lowest_layer(*sock).socket().cancel(ignored);
+        beast::get_lowest_layer(*sock).socket().close(ignored);
+      }
+    });
+
+    resolver.async_resolve(
+        host_, port_,
+        [&](const ErrorCode &ec, tcp::resolver::results_type results) {
+          if (ec) {
+            op_error = ec;
+            finished = true;
+            timer.cancel();
+            return;
+          }
+          beast::get_lowest_layer(*sock).async_connect(
+              results, [&](const ErrorCode &conn_ec, const tcp::endpoint &) {
+                if (conn_ec) {
+                  op_error = conn_ec;
+                  finished = true;
+                  timer.cancel();
+                  return;
+                }
+                sock->async_handshake(
+                    ssl::stream_base::client, [&](const ErrorCode &tls_ec) {
+                      op_error = tls_ec;
+                      finished = true;
+                      timer.cancel();
+                    });
+              });
+        });
+
+    context_.run();
+    if (stop_token.stop_requested()) {
+      return network_error(NetworkErrorCode::Internal, "reference-http-stopped",
+                           "reference HTTP connect cancelled");
+    }
+    if (timed_out) {
+      return network_error(NetworkErrorCode::Timeout, "reference-connect-timeout",
+                           "reference HTTP connect timed out");
+    }
+    if (op_error) {
+      return error_from_code(NetworkErrorCode::Tls, "reference-tls", op_error);
+    }
+    stream_ = std::move(sock);
+    return std::nullopt;
+  }
+
+  void close_socket() noexcept {
+    if (!stream_) {
+      return;
+    }
+    ErrorCode ignored;
+    beast::get_lowest_layer(*stream_).socket().cancel(ignored);
+    beast::get_lowest_layer(*stream_).socket().close(ignored);
+    stream_.reset();
+  }
+
+  std::string host_;
+  std::string port_;
+  std::string user_agent_;
+  asio::io_context context_;
+  ssl::context tls_context_;
+  std::unique_ptr<beast::ssl_stream<beast::tcp_stream>> stream_;
+};
+
+KeepAliveHttpsClient::KeepAliveHttpsClient(std::string host, std::string port,
+                                           std::string user_agent)
+    : impl_{std::make_unique<Impl>(std::move(host), std::move(port),
+                                   std::move(user_agent))} {}
+
+KeepAliveHttpsClient::~KeepAliveHttpsClient() = default;
+
+HttpsJsonResult KeepAliveHttpsClient::get(std::string target,
+                                          std::stop_token stop_token) {
+  return impl_->get(std::move(target), stop_token);
 }
 
 ExchangeInfoResult
@@ -1182,6 +1456,37 @@ ExchangeInfoResult fetch_spot_exchange_info_set_https() {
       detail::spot_exchange_info_set_endpoint());
 }
 
+ExchangeInfoResult fetch_spot_exchange_info_for_symbols_https(
+    std::span<const std::string> symbols, std::stop_token stop_token) {
+  if (symbols.empty()) {
+    return fetch_spot_exchange_info_set_https();
+  }
+  std::string target = "/api/v3/exchangeInfo?symbols=%5B";
+  for (std::size_t index = 0U; index < symbols.size(); ++index) {
+    if (index > 0U) {
+      target += "%2C";
+    }
+    target += "%22";
+    target += symbols[index];
+    target += "%22";
+  }
+  target += "%5D";
+  auto fetched = fetch_https_json_cancellable(
+      std::string{kRestHost}, std::string{kRestPort}, std::move(target),
+      "bmdg-spot/1.0.0", stop_token);
+  if (const auto *failure = std::get_if<NetworkError>(&fetched)) {
+    return *failure;
+  }
+  auto ok = std::get<HttpsJsonResponse>(std::move(fetched));
+  if (!ok.tls_verified) {
+    return NetworkError{NetworkErrorCode::HttpStatus,
+                        "exchange-info-http-status",
+                        "Binance Spot exchangeInfo returned non-200",
+                        std::nullopt, std::nullopt};
+  }
+  return ExchangeInfoResponse{std::move(ok.body), true, ok.received_at};
+}
+
 bool detail::live_acceptance_ready(
     const TransportObservation &transport,
     const runtime::RuntimeObservation &runtime) noexcept {
@@ -1211,34 +1516,45 @@ public:
     if (connection_generation == 0U) {
       throw std::invalid_argument{"G4 connection generation must be nonzero"};
     }
-    if (config_.rest_host.empty() || config_.rest_port.empty() ||
-        config_.depth_target.empty() || config_.websocket_host.empty() ||
-        config_.websocket_port.empty() || config_.websocket_target.empty() ||
-        config_.connection_id_prefix.empty() ||
-        config_.snapshot_request_id.empty() || config_.user_agent.empty() ||
-        !config_.depth_frame_parser || !config_.depth_snapshot_parser) {
+    const bool has_public_websocket = !config_.websocket_host.empty() ||
+                                      !config_.websocket_port.empty() ||
+                                      !config_.websocket_target.empty();
+    const bool has_market_websocket = !config_.market_websocket_host.empty() ||
+                                      !config_.market_websocket_port.empty() ||
+                                      !config_.market_websocket_target.empty();
+    if (!has_public_websocket && !has_market_websocket) {
+      throw std::invalid_argument{
+          "Binance transport requires at least one WebSocket route"};
+    }
+    if (has_public_websocket &&
+        (config_.websocket_host.empty() || config_.websocket_port.empty() ||
+         config_.websocket_target.empty())) {
+      throw std::invalid_argument{
+          "public WebSocket requires complete host, port, and target"};
+    }
+    if (config_.connection_id_prefix.empty() || config_.user_agent.empty()) {
+      throw std::invalid_argument{
+          "Binance transport connection prefix and user agent are required"};
+    }
+    if (!config_.market_only &&
+        (config_.rest_host.empty() || config_.rest_port.empty() ||
+         config_.depth_target.empty() || config_.snapshot_request_id.empty() ||
+         !config_.depth_frame_parser || !config_.depth_snapshot_parser)) {
       throw std::invalid_argument{
           "Binance transport routes and depth parsers must be configured"};
     }
-    if (config_.profile == BinanceTransportProfile::SpotCombinedEvents &&
+    if (has_public_websocket &&
+        config_.profile != BinanceTransportProfile::DepthOnly &&
         !config_.combined_frame_parser) {
       throw std::invalid_argument{
-          "Spot combined transport requires a combined parser"};
+          "Spot/USD-M combined public transport requires a combined parser"};
     }
-    const auto has_market_websocket = !config_.market_websocket_host.empty() ||
-                                      !config_.market_websocket_port.empty() ||
-                                      !config_.market_websocket_target.empty();
     if (has_market_websocket && (config_.market_websocket_host.empty() ||
                                  config_.market_websocket_port.empty() ||
                                  config_.market_websocket_target.empty() ||
                                  !config_.market_frame_parser)) {
       throw std::invalid_argument{
           "secondary market WebSocket requires complete routes and a parser"};
-    }
-    if (config_.profile == BinanceTransportProfile::UsdMCombinedEvents &&
-        !has_market_websocket) {
-      throw std::invalid_argument{
-          "USD-M combined transport requires the market WebSocket route"};
     }
     if (config_.profile != BinanceTransportProfile::DepthOnly &&
         !config_.normalized_event_sink) {
@@ -1249,13 +1565,15 @@ public:
     const auto opened_at = clock_();
     observation_.connection_generation = connection_generation;
     observation_.profile = config_.profile;
-    observation_.connection_id = config_.connection_id_prefix +
-                                 std::to_string(connection_generation) + "-" +
-                                 std::to_string(opened_at.utc_ns);
+    connection_id_ = config_.connection_id_prefix +
+                     std::to_string(connection_generation) + "-" +
+                     std::to_string(opened_at.utc_ns);
+    observation_.connection_id = connection_id_;
     if (!config_.market_websocket_target.empty()) {
-      observation_.market_connection_id =
+      market_connection_id_ =
           config_.connection_id_prefix + std::to_string(connection_generation) +
           "-market-" + std::to_string(opened_at.utc_ns);
+      observation_.market_connection_id = market_connection_id_;
     }
   }
 
@@ -1282,13 +1600,18 @@ public:
         {
           std::lock_guard guard{mutex_};
           observation_.tls_verified = true;
-          observation_.websocket_handshake = true;
+          if (!config_.websocket_target.empty()) {
+            observation_.websocket_handshake = true;
+          }
           if (!config_.market_websocket_target.empty()) {
             observation_.market_websocket_handshake = true;
           }
-          observation_.rest_depth_fetched = true;
-          observation_.depth_frame_count = 1U;
+          if (!config_.market_only) {
+            observation_.rest_depth_fetched = true;
+            observation_.depth_frame_count = 1U;
+          }
           observation_.running = true;
+          ws_ready_for_bootstrap_ = true;
         }
         condition_.notify_all();
       };
@@ -1297,9 +1620,10 @@ public:
       };
       test_operation_cancel_ = test_options_.start_operation(seam);
     });
+    const auto require_public = !config_.websocket_target.empty();
     const auto require_market = !config_.market_websocket_target.empty();
-    condition_.wait(lock, [this, require_market] {
-      return (observation_.websocket_handshake &&
+    condition_.wait(lock, [this, require_public, require_market] {
+      return ((!require_public || observation_.websocket_handshake) &&
               (!require_market || observation_.market_websocket_handshake)) ||
              observation_.terminal_error.has_value() || observation_.stopped ||
              stop_requested_;
@@ -1307,10 +1631,29 @@ public:
     if (observation_.stopped || stop_requested_) {
       return TransportStartResult::Stopped;
     }
-    return observation_.websocket_handshake &&
-                   (!require_market || observation_.market_websocket_handshake)
+    return (!require_public || observation_.websocket_handshake) &&
+                   (!require_market ||
+                    observation_.market_websocket_handshake) &&
+                   observation_.running &&
+                   !observation_.terminal_error.has_value()
                ? TransportStartResult::Started
                : TransportStartResult::Failed;
+  }
+
+  void begin_depth_bootstrap() {
+    bootstrap_triggered_.store(true, std::memory_order_release);
+    bool ready = false;
+    {
+      std::lock_guard lock{mutex_};
+      ready = ws_ready_for_bootstrap_ && !stop_requested_ && !bootstrap_started_ &&
+              !observation_.terminal_error.has_value();
+      if (ready) {
+        bootstrap_started_ = true;
+      }
+    }
+    if (ready) {
+      perform_depth_or_market_only_bootstrap();
+    }
   }
 
   void stop() noexcept {
@@ -1362,6 +1705,10 @@ public:
 
 private:
   void start_websocket() {
+    if (config_.websocket_target.empty()) {
+      start_market_websocket();
+      return;
+    }
     WebSocketCallbacks callbacks;
     callbacks.tls_verified = [this] {
       std::lock_guard lock{mutex_};
@@ -1383,7 +1730,8 @@ private:
     websocket_ = std::make_shared<AsyncWebSocket>(
         context_, tls_context_, clock_, config_.websocket_host,
         config_.websocket_port, config_.websocket_target, config_.user_agent,
-        std::move(callbacks));
+        std::move(callbacks), config_.websocket_idle_timeout,
+        config_.use_keep_alive_pings);
     websocket_->start();
   }
 
@@ -1401,7 +1749,7 @@ private:
       start_market_websocket();
       return;
     }
-    start_depth_request();
+    maybe_trigger_bootstrap();
   }
 
   void start_market_websocket() {
@@ -1426,7 +1774,8 @@ private:
     market_websocket_ = std::make_shared<AsyncWebSocket>(
         context_, tls_context_, clock_, config_.market_websocket_host,
         config_.market_websocket_port, config_.market_websocket_target,
-        config_.user_agent, std::move(callbacks));
+        config_.user_agent, std::move(callbacks),
+        config_.websocket_idle_timeout, config_.use_keep_alive_pings);
     market_websocket_->start();
   }
 
@@ -1440,7 +1789,39 @@ private:
       observation_.running = true;
     }
     condition_.notify_all();
-    start_depth_request();
+    maybe_trigger_bootstrap();
+  }
+
+  void maybe_trigger_bootstrap() {
+    bool ready = false;
+    {
+      std::lock_guard lock{mutex_};
+      const bool has_pub = !config_.websocket_target.empty();
+      const bool has_mkt = !config_.market_websocket_target.empty();
+      if ((!has_pub || observation_.websocket_handshake) &&
+          (!has_mkt || observation_.market_websocket_handshake) &&
+          !stop_requested_) {
+        ws_ready_for_bootstrap_ = true;
+        if ((!config_.defer_depth_request ||
+             bootstrap_triggered_.load(std::memory_order_acquire)) &&
+            !bootstrap_started_) {
+          bootstrap_started_ = true;
+          ready = true;
+        }
+      }
+    }
+    if (ready) {
+      perform_depth_or_market_only_bootstrap();
+    }
+  }
+
+  void perform_depth_or_market_only_bootstrap() {
+    if (config_.market_only) {
+      static_cast<void>(runtime_.submit_market_only_ready(
+          runtime::SourceProvenance{connection_generation_}));
+      return;
+    }
+    asio::post(context_, [this] { start_depth_request(); });
   }
 
   void start_depth_request() {
@@ -1473,7 +1854,7 @@ private:
     if (config_.profile == BinanceTransportProfile::DepthOnly ||
         config_.profile == BinanceTransportProfile::DepthWithEvents) {
       auto parsed = config_.depth_frame_parser(payload, received_at,
-                                               observe().connection_id);
+                                               connection_id_);
       if (std::holds_alternative<ServerShutdown>(parsed)) {
         receive_server_shutdown();
         return false;
@@ -1520,7 +1901,7 @@ private:
     }
 
     auto parsed = config_.combined_frame_parser(payload, received_at,
-                                                observe().connection_id);
+                                                connection_id_);
     return handle_combined_frame(std::move(parsed), received_at);
   }
 
@@ -1528,7 +1909,7 @@ private:
   receive_market_websocket_message(std::string payload,
                                    runtime::ClockSample received_at) {
     auto parsed = config_.market_frame_parser(payload, received_at,
-                                              observe().market_connection_id);
+                                              market_connection_id_);
     return handle_combined_frame(std::move(parsed), received_at);
   }
 
@@ -1714,6 +2095,8 @@ private:
       observation.set_status(common_wire::REFERENCE_OBSERVATION_STATUS_VALID);
       if (snapshot.has_exchange_event_time_ms()) {
         observation.set_source_time_ms(snapshot.exchange_event_time_ms());
+      } else if (snapshot.has_exchange_transaction_time_ms()) {
+        observation.set_source_time_ms(snapshot.exchange_transaction_time_ms());
       }
       *observation.mutable_depth_baseline() = snapshot;
       std::shared_ptr<const NormalizedMarketEvent> event;
@@ -1849,6 +2232,11 @@ private:
   mutable std::mutex mutex_;
   std::condition_variable condition_;
   TransportObservation observation_;
+  std::string connection_id_;
+  std::string market_connection_id_;
+  std::atomic<bool> bootstrap_triggered_{false};
+  bool ws_ready_for_bootstrap_{false};
+  bool bootstrap_started_{false};
   bool stop_requested_{false};
   bool stop_in_progress_{false};
   bool network_clean_cancel_requested_{false};
@@ -1872,12 +2260,36 @@ spot_transport_config(std::string exact_symbol, SpotTransportOptions options) {
   config.depth_target = routes->depth_target;
   config.websocket_host = routes->websocket_host;
   config.websocket_port = routes->websocket_port;
-  config.websocket_target =
-      combined ? routes->combined_websocket_target : routes->websocket_target;
+  if (combined) {
+    std::string target = "/stream?streams=";
+    bool first = true;
+    auto append = [&](const std::string &name) {
+      if (!first) {
+        target += '/';
+      }
+      first = false;
+      target += name;
+    };
+    const auto &streams = options.enabled_streams;
+    if (streams.orderbook || streams.diff_depth) {
+      append(routes->diff_depth_stream);
+    }
+    if (streams.agg_trade) {
+      append(routes->agg_trade_stream);
+    }
+    if (streams.book_ticker) {
+      append(routes->book_ticker_stream);
+    }
+    config.websocket_target = std::move(target);
+    config.market_only = !streams.orderbook;
+  } else {
+    config.websocket_target = routes->websocket_target;
+  }
   config.connection_id_prefix = routes->connection_id_prefix;
   config.snapshot_request_id = routes->snapshot_request_id;
   config.user_agent = "bmdg-spot/1.0.0";
   config.profile = options.profile;
+  config.defer_depth_request = options.defer_depth_request;
   config.normalized_event_sink = std::move(options.normalized_event_sink);
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   config.performance_baseline = std::move(options.performance_baseline);
@@ -1913,6 +2325,10 @@ BinanceTransport::BinanceTransport(runtime::MarketRuntime &runtime,
 BinanceTransport::~BinanceTransport() = default;
 
 TransportStartResult BinanceTransport::start() { return impl_->start(); }
+
+void BinanceTransport::begin_depth_bootstrap() {
+  impl_->begin_depth_bootstrap();
+}
 
 void BinanceTransport::stop() noexcept { impl_->stop(); }
 
@@ -1966,6 +2382,10 @@ SpotTransport::SpotTransport(runtime::MarketRuntime &runtime,
 SpotTransport::~SpotTransport() = default;
 
 TransportStartResult SpotTransport::start() { return transport_->start(); }
+
+void SpotTransport::begin_depth_bootstrap() {
+  transport_->begin_depth_bootstrap();
+}
 
 void SpotTransport::stop() noexcept { transport_->stop(); }
 

@@ -175,6 +175,8 @@ public:
     observation_.running = true;
     observation_.tls_verified = true;
     observation_.websocket_handshake = true;
+    observation_.market_websocket_handshake =
+        key_.market == common::MARKET_USD_M_PERPETUAL;
     observation_.rest_depth_fetched = true;
     observation_.depth_frame_count = 1U;
     observation_.last_event_utc_ns = 1'700'000'000'002'000'000U + generation_;
@@ -1384,6 +1386,154 @@ void one_faulted_market_still_returns_two_status_rows() {
   products.stop();
 }
 
+void channel_switch_gating_and_status_capabilities() {
+  const auto clock = test_clock();
+  const rt::MarketKey spot_btc = rt::spot_btcusdt_key();
+  const rt::MarketKey usdm_btc = rt::usdm_btcusdt_key();
+
+  rt::EnabledStreams usdm_market_only{false, false, true, false,
+                                          true,  true,  true};
+  rt::EnabledStreams spot_book_only{true,  true,  false, false,
+                                        false, false, true};
+
+  const auto make_spec = [&](rt::MarketKey key, rt::EnabledStreams streams) {
+    composition::ProductRuntimeOptions options;
+    options.enabled_streams = streams;
+    options.recovery_test = recovery_options(key);
+    if (!streams.orderbook && !streams.diff_depth) {
+      // Market-only attempts report market_websocket_handshake without REST depth.
+      options.recovery_test.attempt_factory =
+          [key](rt::MarketRuntime &runtime, const rt::RuntimeClock &,
+                std::uint64_t generation) {
+            class MarketOnlyAttempt final
+                : public recovery::detail::RecoveryAttempt {
+            public:
+              MarketOnlyAttempt(rt::MarketRuntime &rt_ref,
+                                std::uint64_t gen)
+                  : runtime_{rt_ref}, generation_{gen} {
+                obs_.connection_generation = gen;
+                obs_.connection_id = "usdm-market-only-g" + std::to_string(gen);
+              }
+              transport::TransportStartResult start() override {
+                if (runtime_.submit_market_only_ready({generation_}) !=
+                    rt::AdmissionResult::Accepted) {
+                  return transport::TransportStartResult::Failed;
+                }
+                std::lock_guard lock{mutex_};
+                obs_.started = true;
+                obs_.running = true;
+                obs_.tls_verified = true;
+                obs_.market_websocket_handshake = true;
+                obs_.last_event_utc_ns = 1'700'000'000'002'000'000U;
+                return transport::TransportStartResult::Started;
+              }
+              void stop() noexcept override {
+                std::lock_guard lock{mutex_};
+                obs_.running = false;
+                obs_.stopped = true;
+              }
+              transport::TransportObservation observe() const override {
+                std::lock_guard lock{mutex_};
+                return obs_;
+              }
+
+            private:
+              rt::MarketRuntime &runtime_;
+              std::uint64_t generation_;
+              mutable std::mutex mutex_;
+              transport::TransportObservation obs_;
+            };
+            return std::make_unique<MarketOnlyAttempt>(runtime, generation);
+          };
+    }
+    return composition::ProductRuntimeSpec{std::move(key), numeric_spec(),
+                                           std::move(options)};
+  };
+
+  std::vector<composition::ProductRuntimeSpec> specs;
+  specs.push_back(make_spec(spot_btc, spot_book_only));
+  specs.push_back(make_spec(usdm_btc, usdm_market_only));
+  composition::ConfiguredProductRuntimeSet products{std::move(specs), clock,
+                                                    "gw-c10-channels"};
+  for (const auto &start : products.start()) {
+    REQUIRE_EQ(start.result, recovery::RecoveryStartResult::Started);
+    REQUIRE_EQ(products.find(start.key)->recovery().wait_for_generation_live(1U).state,
+               recovery::RecoveryState::Live);
+  }
+
+  rpc::OrderBookGrpcServer server{products.registry(), clock, "gw-c10-channels"};
+  REQUIRE(server.start("127.0.0.1:0"));
+  auto stub = make_stub(server.selected_port());
+
+  // Check GetGatewayStatus reports enabled_streams per market
+  wire::GatewayStatusRequest status_req;
+  status_req.set_request_id("c10-status");
+  status_req.set_schema_version(status::kStatusRequestSchema);
+  wire::GatewayStatusSnapshot status_resp;
+  ::grpc::ClientContext status_ctx;
+  REQUIRE(stub->GetGatewayStatus(&status_ctx, status_req, &status_resp).ok());
+  REQUIRE_EQ(status_resp.markets_size(), 2);
+  const auto has_stream = [](const wire::EnabledStreamCapabilities &caps,
+                             common::Stream target) {
+    for (int i = 0; i < caps.streams_size(); ++i) {
+      if (caps.streams(i) == target) {
+        return true;
+      }
+    }
+    return false;
+  };
+  REQUIRE(status_resp.markets(0).has_enabled_streams());
+  REQUIRE(status_resp.markets(0).enabled_streams().orderbook_rpc_enabled());
+  REQUIRE(has_stream(status_resp.markets(0).enabled_streams(),
+                     common::STREAM_DIFF_DEPTH));
+  REQUIRE(!has_stream(status_resp.markets(0).enabled_streams(),
+                      common::STREAM_AGG_TRADE));
+  REQUIRE(status_resp.markets(1).has_enabled_streams());
+  REQUIRE(!status_resp.markets(1).enabled_streams().orderbook_rpc_enabled());
+  REQUIRE(has_stream(status_resp.markets(1).enabled_streams(),
+                     common::STREAM_AGG_TRADE));
+  REQUIRE(has_stream(status_resp.markets(1).enabled_streams(),
+                     common::STREAM_MARK_PRICE));
+  REQUIRE(has_stream(status_resp.markets(1).enabled_streams(),
+                     common::STREAM_LIQUIDATION));
+
+  // Disabled SubscribeOrderBook on market-only USD-M -> FAILED_PRECONDITION
+  ::grpc::ClientContext dis_book_ctx;
+  set_deadline(dis_book_ctx);
+  auto dis_book = stub->SubscribeOrderBook(
+      &dis_book_ctx, order_book_request(usdm_btc, "disabled-book"));
+  wire::OrderBookStreamItem book_item;
+  REQUIRE(!dis_book->Read(&book_item));
+  REQUIRE_EQ(dis_book->Finish().error_code(),
+             ::grpc::StatusCode::FAILED_PRECONDITION);
+
+  // Disabled SubscribeEvents(STREAM_AGG_TRADE) on book-only Spot -> FAILED_PRECONDITION
+  ::grpc::ClientContext dis_ev_ctx;
+  set_deadline(dis_ev_ctx);
+  auto dis_ev = stub->SubscribeEvents(
+      &dis_ev_ctx,
+      event_request(spot_btc, common::STREAM_AGG_TRADE, "disabled-agg"));
+  wire::GatewayEventEnvelope ev_item;
+  REQUIRE(!dis_ev->Read(&ev_item));
+  REQUIRE_EQ(dis_ev->Finish().error_code(),
+             ::grpc::StatusCode::FAILED_PRECONDITION);
+
+  // Enabled SubscribeEvents(STREAM_AGG_TRADE) on market-only USD-M -> ACCEPTED
+  ::grpc::ClientContext ok_ev_ctx;
+  set_deadline(ok_ev_ctx);
+  auto ok_ev = stub->SubscribeEvents(
+      &ok_ev_ctx,
+      event_request(usdm_btc, common::STREAM_AGG_TRADE, "enabled-agg"));
+  require_event_head(*ok_ev, "ev-1");
+  ok_ev_ctx.TryCancel();
+  while (ok_ev->Read(&ev_item)) {
+  }
+  static_cast<void>(ok_ev->Finish());
+
+  server.shutdown();
+  products.stop();
+}
+
 } // namespace
 
 int main() {
@@ -1403,6 +1553,8 @@ int main() {
        adverse_global_shutdown_is_bounded_and_joined},
       {"ONE_FAULTED_MARKET_STILL_RETURNS_TWO_STATUS_ROWS",
        one_faulted_market_still_returns_two_status_rows},
+      {"CHANNEL_SWITCH_GATING_AND_STATUS_CAPABILITIES",
+       channel_switch_gating_and_status_capabilities},
   };
   for (const auto &[name, test] : tests) {
     try {

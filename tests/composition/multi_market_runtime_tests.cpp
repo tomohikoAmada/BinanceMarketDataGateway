@@ -162,6 +162,8 @@ public:
     observation_.running = true;
     observation_.tls_verified = true;
     observation_.websocket_handshake = true;
+    observation_.market_websocket_handshake =
+        key_.market == binance_market_data::common::v1::MARKET_USD_M_PERPETUAL;
     observation_.rest_depth_fetched = true;
     observation_.depth_frame_count = 1U;
     observation_.last_event_utc_ns = 1700000000002000000ULL + generation_;

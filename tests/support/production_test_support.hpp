@@ -166,6 +166,8 @@ public:
       observation_.running = mode_ != AttemptMode::Terminal;
       observation_.tls_verified = true;
       observation_.websocket_handshake = true;
+      observation_.market_websocket_handshake =
+          key_.market == common::MARKET_USD_M_PERPETUAL;
     }
     if (mode_ == AttemptMode::Terminal) {
       std::lock_guard lock{mutex_};

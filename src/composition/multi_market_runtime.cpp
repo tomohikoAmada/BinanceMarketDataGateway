@@ -17,14 +17,15 @@ public:
   SpotProductAttempt(
       runtime::MarketRuntime &runtime, const runtime::RuntimeClock &clock,
       std::uint64_t generation, std::string exact_symbol,
-      publication::EventPublication &publication
+      publication::EventPublication &publication,
+      runtime::EnabledStreams enabled_streams
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
 #endif
       )
       : transport_{runtime, clock, std::move(exact_symbol), generation,
-                   make_options(publication
+                   make_options(publication, enabled_streams
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                 ,
                                 std::move(performance_baseline)
@@ -36,6 +37,10 @@ public:
     return transport_.start();
   }
 
+  void begin_depth_bootstrap() override {
+    transport_.begin_depth_bootstrap();
+  }
+
   void stop() noexcept override { transport_.stop(); }
 
   [[nodiscard]] transport::TransportObservation observe() const override {
@@ -44,7 +49,8 @@ public:
 
 private:
   [[nodiscard]] static transport::SpotTransportOptions make_options(
-      publication::EventPublication &publication
+      publication::EventPublication &publication,
+      runtime::EnabledStreams enabled_streams
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
@@ -52,6 +58,8 @@ private:
   ) {
     transport::SpotTransportOptions options;
     options.profile = transport::SpotTransportProfile::G9CombinedEvents;
+    options.enabled_streams = enabled_streams;
+    options.defer_depth_request = true;
     options.normalized_event_sink =
         [&publication](
             std::shared_ptr<const protocol::NormalizedMarketEvent> event,
@@ -85,14 +93,15 @@ public:
   UsdMProductAttempt(
       runtime::MarketRuntime &runtime, const runtime::RuntimeClock &clock,
       std::uint64_t generation, std::string exact_symbol,
-      publication::EventPublication &publication
+      publication::EventPublication &publication,
+      runtime::EnabledStreams enabled_streams
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
 #endif
       )
       : transport_{runtime, clock, std::move(exact_symbol), generation,
-                   make_options(publication
+                   make_options(publication, enabled_streams
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                 ,
                                 std::move(performance_baseline)
@@ -104,6 +113,10 @@ public:
     return transport_.start();
   }
 
+  void begin_depth_bootstrap() override {
+    transport_.begin_depth_bootstrap();
+  }
+
   void stop() noexcept override { transport_.stop(); }
 
   [[nodiscard]] transport::TransportObservation observe() const override {
@@ -112,13 +125,16 @@ public:
 
 private:
   [[nodiscard]] static UsdMTransportOptions make_options(
-      publication::EventPublication &publication
+      publication::EventPublication &publication,
+      runtime::EnabledStreams enabled_streams
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
       ,
       std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
 #endif
   ) {
     UsdMTransportOptions options;
+    options.enabled_streams = enabled_streams;
+    options.defer_depth_request = true;
     auto sink =
         [&publication](
             std::shared_ptr<const protocol::NormalizedMarketEvent> event,
@@ -178,14 +194,19 @@ private:
 }
 
 [[nodiscard]] recovery::RecoveryCoordinatorOptions coordinator_options(
-    MarketKey key, publication::EventPublication &publication
+    MarketKey key, publication::EventPublication &publication,
+    runtime::EnabledStreams enabled_streams
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     ,
     std::shared_ptr<performance::ProductTraceBuffer> performance_baseline
 #endif
 ) {
+  const bool is_usdm = key.market == common_wire::MARKET_USD_M_PERPETUAL;
   recovery::RecoveryCoordinatorOptions options;
-  options.attempt_factory = [key = std::move(key), &publication
+  options.require_orderbook_projection = enabled_streams.orderbook;
+  options.require_public_ws = enabled_streams.uses_public_ws(is_usdm);
+  options.require_market_ws = enabled_streams.uses_market_ws(is_usdm);
+  options.attempt_factory = [key = std::move(key), &publication, enabled_streams
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                              ,
                              performance_baseline
@@ -195,7 +216,8 @@ private:
       -> std::unique_ptr<recovery::detail::RecoveryAttempt> {
     if (key.market == common_wire::MARKET_SPOT) {
       return std::make_unique<SpotProductAttempt>(runtime, clock, generation,
-                                                  key.symbol, publication
+                                                  key.symbol, publication,
+                                                  enabled_streams
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                                   ,
                                                   performance_baseline
@@ -203,7 +225,8 @@ private:
       );
     }
     return std::make_unique<UsdMProductAttempt>(runtime, clock, generation,
-                                                key.symbol, publication
+                                                key.symbol, publication,
+                                                enabled_streams
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
                                                 ,
                                                 performance_baseline
@@ -235,6 +258,13 @@ private:
         return publication.close_generation_permanently(generation);
       };
   return options;
+}
+
+[[nodiscard]] runtime::RuntimeLimits resolved_runtime_limits(
+    runtime::RuntimeLimits limits,
+    const runtime::EnabledStreams &enabled_streams) noexcept {
+  limits.market_only = limits.market_only || !enabled_streams.orderbook;
+  return limits;
 }
 
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
@@ -315,26 +345,34 @@ ProductRuntime::ProductRuntime(MarketKey key, core::NumericSpec numeric_spec,
                                ProductRuntimeOptions options)
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
     : key_{validate_product_key(std::move(key))}, numeric_spec_{numeric_spec},
+      enabled_streams_{options.enabled_streams.value_or(
+          runtime::EnabledStreams::all_for(key_.market))},
       performance_baseline_{make_performance_baseline(
           key_, clock, options.performance_baseline_limits)},
-      runtime_{runtime_limits_with_baseline(options.runtime_limits,
-                                            performance_baseline_),
+      runtime_{resolved_runtime_limits(
+                   runtime_limits_with_baseline(options.runtime_limits,
+                                                performance_baseline_),
+                   enabled_streams_),
                clock, numeric_spec, identity_for(key_),
                std::move(options.runtime_test)},
       event_publication_{std::move(gateway_instance_id), clock,
                          options.event_limits, performance_baseline_},
       recovery_{
           runtime_, std::move(clock), options.planned_rotation,
-          coordinator_options(key_, event_publication_, performance_baseline_),
+          coordinator_options(key_, event_publication_, enabled_streams_,
+                              performance_baseline_),
           std::move(options.recovery_test)} {}
 #else
     : key_{validate_product_key(std::move(key))}, numeric_spec_{numeric_spec},
-      runtime_{options.runtime_limits, clock, numeric_spec, identity_for(key_),
+      enabled_streams_{options.enabled_streams.value_or(
+          runtime::EnabledStreams::all_for(key_.market))},
+      runtime_{resolved_runtime_limits(options.runtime_limits, enabled_streams_),
+               clock, numeric_spec, identity_for(key_),
                std::move(options.runtime_test)},
       event_publication_{std::move(gateway_instance_id), clock,
                          options.event_limits},
       recovery_{runtime_, std::move(clock), options.planned_rotation,
-                coordinator_options(key_, event_publication_),
+                coordinator_options(key_, event_publication_, enabled_streams_),
                 std::move(options.recovery_test)} {
 }
 #endif
@@ -368,6 +406,11 @@ const MarketKey &ProductRuntime::key() const noexcept { return key_; }
 
 const core::NumericSpec &ProductRuntime::numeric_spec() const noexcept {
   return numeric_spec_;
+}
+
+const runtime::EnabledStreams &
+ProductRuntime::enabled_streams() const noexcept {
+  return enabled_streams_;
 }
 
 ProductKind ProductRuntime::kind() const noexcept {
@@ -451,7 +494,7 @@ std::vector<MarketServices> ConfiguredProductRuntimeSet::make_registry_entries(
   entries.reserve(owners.size());
   for (const auto &owner : owners) {
     entries.push_back({owner->key(), &owner->runtime(), &owner->recovery(),
-                       &owner->event_publication()});
+                       &owner->event_publication(), owner->enabled_streams()});
   }
   return entries;
 }

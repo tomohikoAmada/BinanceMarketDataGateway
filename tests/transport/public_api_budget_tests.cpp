@@ -91,6 +91,10 @@ int main(int argc, char **argv) {
   require(budget.admit(true, false, 20, zero + 42s) == 0s);
   budget.reject(true, 418, "", zero + 50s);
   require(budget.admit(true, false, 1, zero + 51s) == 86399s);
+  // C7.2: Retry-After: 0 still enforces >= 1s cooldown floor.
+  budget.reject(false, 429, "0", zero);
+  require(budget.admit(false, false, 1, zero) == 1s);
+  require(budget.admit(false, false, 1, zero + 1s) == 0s);
   bool invalid = false;
   try {
     static_cast<void>(budget.admit(false, false, 3001, zero));

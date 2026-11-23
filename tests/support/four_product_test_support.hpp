@@ -171,6 +171,8 @@ public:
     result.stopped = stopped_.load();
     result.tls_verified = true;
     result.websocket_handshake = true;
+    result.market_websocket_handshake =
+        key_.market == support::common::MARKET_USD_M_PERPETUAL;
     result.rest_depth_fetched = mode_ == support::AttemptMode::Live;
     result.depth_frame_count = result.rest_depth_fetched ? 1U : 0U;
     result.connection_id = key_.symbol + "-g" + std::to_string(generation_);

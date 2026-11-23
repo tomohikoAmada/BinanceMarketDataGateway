@@ -682,6 +682,10 @@ void OrderBookGrpcService::release_status_slot() noexcept {
       return finalize({::grpc::StatusCode::INVALID_ARGUMENT,
                        "unsupported order-book market"});
     }
+    if (!selected_services->enabled_streams.orderbook) {
+      return finalize({::grpc::StatusCode::FAILED_PRECONDITION,
+                       "stream disabled by gateway channel switch"});
+    }
     selected_runtime = selected_services->runtime;
   }
 #endif
@@ -839,6 +843,35 @@ void OrderBookGrpcService::release_status_slot() noexcept {
     if (selected_services == nullptr) {
       return finalize(
           {::grpc::StatusCode::INVALID_ARGUMENT, "unsupported event market"});
+    }
+    const auto &enabled = selected_services->enabled_streams;
+    bool stream_enabled = false;
+    switch (selector.stream()) {
+    case common_wire::STREAM_DIFF_DEPTH:
+      stream_enabled = enabled.diff_depth;
+      break;
+    case common_wire::STREAM_AGG_TRADE:
+      stream_enabled = enabled.agg_trade;
+      break;
+    case common_wire::STREAM_BOOK_TICKER:
+      stream_enabled = enabled.book_ticker;
+      break;
+    case common_wire::STREAM_MARK_PRICE:
+      stream_enabled = enabled.mark_price;
+      break;
+    case common_wire::STREAM_LIQUIDATION:
+      stream_enabled = enabled.liquidation;
+      break;
+    case common_wire::STREAM_REFERENCE_DATA:
+      stream_enabled = enabled.reference_data;
+      break;
+    default:
+      stream_enabled = false;
+      break;
+    }
+    if (!stream_enabled) {
+      return finalize({::grpc::StatusCode::FAILED_PRECONDITION,
+                       "stream disabled by gateway channel switch"});
     }
     selected_event_publication = selected_services->event_publication;
   }

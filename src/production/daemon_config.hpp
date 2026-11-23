@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <iosfwd>
+#include <map>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -13,9 +14,13 @@ namespace binance_market_data::gateway::production {
 
 inline constexpr std::size_t kMaximumDaemonConfigBytes = 64U * 1024U;
 
+using StreamSwitchMap =
+    std::map<runtime::MarketKey, runtime::EnabledStreams, runtime::MarketKeyLess>;
+
 struct DaemonConfig final {
   std::string grpc_listen;
   std::vector<runtime::MarketKey> market_keys;
+  StreamSwitchMap stream_switches{};
 };
 
 struct HelpRequested final {};

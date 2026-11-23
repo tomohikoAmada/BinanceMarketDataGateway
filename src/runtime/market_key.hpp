@@ -39,4 +39,34 @@ struct MarketKeyLess final {
 [[nodiscard]] MarketKey spot_btcusdt_key();
 [[nodiscard]] MarketKey usdm_btcusdt_key();
 
+struct EnabledStreams final {
+  bool orderbook{true};
+  bool diff_depth{true};
+  bool agg_trade{true};
+  bool book_ticker{true};
+  bool mark_price{true};
+  bool liquidation{true};
+  bool reference_data{true};
+
+  [[nodiscard]] static constexpr EnabledStreams all_for(common_wire::Market market) noexcept {
+    if (market == common_wire::MARKET_SPOT) {
+      return {true, true, true, true, false, false, true};
+    }
+    return {true, true, true, true, true, true, true};
+  }
+
+  [[nodiscard]] constexpr bool uses_public_ws(bool is_usdm) const noexcept {
+    if (!is_usdm) {
+      return orderbook || diff_depth || book_ticker || agg_trade;
+    }
+    return orderbook || diff_depth || book_ticker;
+  }
+
+  [[nodiscard]] constexpr bool uses_market_ws(bool is_usdm) const noexcept {
+    return is_usdm && (agg_trade || mark_price || liquidation);
+  }
+
+  friend bool operator==(const EnabledStreams &, const EnabledStreams &) = default;
+};
+
 } // namespace binance_market_data::gateway::runtime

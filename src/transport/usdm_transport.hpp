@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 
@@ -58,10 +59,15 @@ inline const UsdMTransportRoutes kUsdMTransportRoutes{
 make_usdm_transport_routes(std::string_view exact_symbol);
 
 [[nodiscard]] transport::ExchangeInfoResult fetch_usdm_exchange_info_https();
+[[nodiscard]] transport::ExchangeInfoResult
+fetch_usdm_exchange_info_https_cancellable(std::stop_token stop_token);
 
 struct UsdMTransportOptions final {
   transport::NormalizedEventSink normalized_event_sink;
   transport::NormalizedEventSink reference_event_sink;
+  runtime::EnabledStreams enabled_streams{
+      runtime::EnabledStreams::all_for(runtime::common_wire::MARKET_USD_M_PERPETUAL)};
+  bool defer_depth_request{false};
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   std::shared_ptr<performance::ProductTraceBuffer> performance_baseline;
 #endif
@@ -84,6 +90,7 @@ public:
   UsdMTransport &operator=(UsdMTransport &&) = delete;
 
   [[nodiscard]] transport::TransportStartResult start();
+  void begin_depth_bootstrap();
   void stop() noexcept;
   [[nodiscard]] transport::TransportObservation observe() const;
 

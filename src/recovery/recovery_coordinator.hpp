@@ -129,6 +129,7 @@ class RecoveryAttempt {
 public:
   virtual ~RecoveryAttempt() = default;
   [[nodiscard]] virtual transport::TransportStartResult start() = 0;
+  virtual void begin_depth_bootstrap() {}
   virtual void stop() noexcept = 0;
   [[nodiscard]] virtual transport::TransportObservation observe() const = 0;
 };
@@ -160,6 +161,9 @@ normal_backoff_delay(std::size_t recovery_attempt);
 struct RecoveryCoordinatorOptions final {
   detail::AttemptFactory attempt_factory;
   SourceGenerationLifecycle source_generation_lifecycle;
+  bool require_orderbook_projection{true};
+  bool require_public_ws{true};
+  bool require_market_ws{false};
 };
 
 // Product-independent G5/G6 lifecycle authority. Each instance owns only one

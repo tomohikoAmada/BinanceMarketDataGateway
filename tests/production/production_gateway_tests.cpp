@@ -1125,6 +1125,15 @@ void incompatible_usdm_reference_stops_only_affected_product() {
         return transport::ExchangeInfoResult{transport::ExchangeInfoResponse{
             body, true, rt::ClockSample{9500U, 9600U}}};
       };
+  configured.gateway.usdm_reference_sources.spot_exchange_info_fetch =
+      [](std::span<const std::string>) {
+        const std::string body =
+            R"json({"serverTime":1700000002000,"symbols":[
+              {"symbol":"BTCUSDT","status":"TRADING","isSpotTradingAllowed":true,"baseAsset":"BTC","quoteAsset":"USDT","filters":[{"filterType":"PRICE_FILTER","tickSize":"0.01"},{"filterType":"LOT_SIZE","stepSize":"0.001"}]}
+            ]})json";
+        return transport::ExchangeInfoResult{transport::ExchangeInfoResponse{
+            body, true, rt::ClockSample{9500U, 9600U}}};
+      };
 
   auto gateway = make_gateway(std::move(configured));
   REQUIRE(gateway.start().code == production::StartCode::Serving);

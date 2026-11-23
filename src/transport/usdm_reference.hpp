@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -92,6 +93,7 @@ struct UsdMReferenceProduct final {
   publication::EventPublication *publication{nullptr};
   std::optional<projection::v1::NumericSpec> baseline_numeric_spec{};
   std::function<void(std::string_view reason)> on_incompatible_definition{};
+  bool enable_periodic_reference{true};
 };
 
 struct UsdMReferenceOptions final {
@@ -104,6 +106,8 @@ struct UsdMReferenceOptions final {
 struct UsdMReferenceSources final {
   std::function<HttpsJsonResult(std::string_view target)> fetch;
   std::function<ExchangeInfoResult()> exchange_info_fetch;
+  std::function<ExchangeInfoResult(std::span<const std::string> symbols)>
+      spot_exchange_info_fetch;
 };
 
 struct UsdMReferenceObservation final {
@@ -132,6 +136,7 @@ public:
   UsdMReferenceService &operator=(UsdMReferenceService &&) = delete;
 
   [[nodiscard]] bool start();
+  void publish_seeds();
   void stop() noexcept;
 
   [[nodiscard]] UsdMReferenceObservation observe() const noexcept;

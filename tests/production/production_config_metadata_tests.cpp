@@ -440,6 +440,39 @@ void metadata_fails_all_or_nothing() {
   }
 }
 
+void channel_switch_config_parsing() {
+  const auto cfg = require_config(load(R"json({
+    "grpc_listen": "127.0.0.1:50051",
+    "spot_symbols": ["BTCUSDT"],
+    "usdm_symbols": ["BTCUSDT"],
+    "spot_streams": ["book_ticker"],
+    "usdm_streams": ["agg_trade", "mark_price", "liquidation", "reference_data"]
+  })json"));
+  REQUIRE(cfg.stream_switches.size() == 2U);
+  const auto spot_it = cfg.stream_switches.find(rt::spot_btcusdt_key());
+  REQUIRE(spot_it != cfg.stream_switches.end());
+  REQUIRE(!spot_it->second.orderbook);
+  REQUIRE(!spot_it->second.diff_depth);
+  REQUIRE(!spot_it->second.agg_trade);
+  REQUIRE(spot_it->second.book_ticker);
+  const auto usdm_it = cfg.stream_switches.find(rt::usdm_btcusdt_key());
+  REQUIRE(usdm_it != cfg.stream_switches.end());
+  REQUIRE(!usdm_it->second.orderbook);
+  REQUIRE(!usdm_it->second.uses_public_ws(true));
+  REQUIRE(usdm_it->second.uses_market_ws(true));
+  REQUIRE(usdm_it->second.agg_trade);
+  REQUIRE(usdm_it->second.mark_price);
+  REQUIRE(usdm_it->second.liquidation);
+  REQUIRE(usdm_it->second.reference_data);
+
+  const auto invalid_channel = load(R"json({
+    "grpc_listen": "127.0.0.1:50051",
+    "spot_symbols": ["BTCUSDT"],
+    "spot_streams": ["mark_price"]
+  })json");
+  REQUIRE(std::holds_alternative<production::DaemonConfigError>(invalid_channel));
+}
+
 } // namespace
 
 int main() {
@@ -450,6 +483,7 @@ int main() {
       {"CONFIG_NUMERIC_LOOPBACK_ONLY", numeric_loopback_only},
       {"CONFIG_IDENTITY_AND_CARDINALITY",
        configuration_identity_and_cardinality},
+      {"CONFIG_CHANNEL_SWITCH_PARSING", channel_switch_config_parsing},
       {"METADATA_FETCH_COUNTS_AND_PAIRING", metadata_fetch_counts_and_pairing},
       {"METADATA_TWENTY_PRODUCT_BATCH_PARSE",
        metadata_twenty_product_batch_parse},

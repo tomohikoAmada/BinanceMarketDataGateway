@@ -1,6 +1,7 @@
 #pragma once
 
 #include "protocol/spot_protocol.hpp"
+#include "runtime/market_key.hpp"
 #include "runtime/market_runtime.hpp"
 
 #include <chrono>
@@ -9,6 +10,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -92,6 +95,8 @@ fetch_exchange_info_https(std::string_view exact_symbol);
 // G12-C set-level metadata acquisition. This intentionally fetches the full
 // Spot exchangeInfo document once for all configured Spot products.
 [[nodiscard]] ExchangeInfoResult fetch_spot_exchange_info_set_https();
+[[nodiscard]] ExchangeInfoResult fetch_spot_exchange_info_for_symbols_https(
+    std::span<const std::string> symbols, std::stop_token stop_token = {});
 [[nodiscard]] runtime::ClockSample sample_real_clock() noexcept;
 
 // Blocking one-shot GET for low-frequency reference polling. It reuses the
@@ -101,6 +106,27 @@ fetch_exchange_info_https(std::string_view exact_symbol);
                                                std::string port,
                                                std::string target,
                                                std::string user_agent);
+[[nodiscard]] HttpsJsonResult fetch_https_json_cancellable(
+    std::string host, std::string port, std::string target,
+    std::string user_agent, std::stop_token stop_token);
+
+// Reusable HTTP/1.1 TLS keep-alive client for sequential polling on one thread.
+class KeepAliveHttpsClient final {
+public:
+  KeepAliveHttpsClient(std::string host, std::string port,
+                       std::string user_agent);
+  ~KeepAliveHttpsClient();
+
+  KeepAliveHttpsClient(const KeepAliveHttpsClient &) = delete;
+  KeepAliveHttpsClient &operator=(const KeepAliveHttpsClient &) = delete;
+
+  [[nodiscard]] HttpsJsonResult get(std::string target,
+                                    std::stop_token stop_token = {});
+
+private:
+  class Impl;
+  std::unique_ptr<Impl> impl_;
+};
 
 enum class TransportStartResult : std::uint8_t {
   Started,
@@ -135,6 +161,9 @@ using NormalizedEventSink = std::function<NormalizedEventSinkResult(
 struct SpotTransportOptions final {
   SpotTransportProfile profile{SpotTransportProfile::DepthOnly};
   NormalizedEventSink normalized_event_sink;
+  runtime::EnabledStreams enabled_streams{
+      runtime::EnabledStreams::all_for(runtime::common_wire::MARKET_SPOT)};
+  bool defer_depth_request{false};
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   std::shared_ptr<performance::ProductTraceBuffer> performance_baseline;
 #endif
@@ -217,6 +246,10 @@ struct BinanceTransportConfig final {
   std::string snapshot_request_id;
   std::string user_agent;
   BinanceTransportProfile profile{BinanceTransportProfile::DepthOnly};
+  std::chrono::seconds websocket_idle_timeout{kWebSocketIdleTimeout};
+  bool use_keep_alive_pings{kWebSocketKeepAlivePings};
+  bool defer_depth_request{false};
+  bool market_only{false};
   NormalizedEventSink normalized_event_sink;
   NormalizedEventSink reference_event_sink;
   DepthFrameParser depth_frame_parser;
@@ -245,6 +278,7 @@ public:
   BinanceTransport &operator=(BinanceTransport &&) = delete;
 
   [[nodiscard]] TransportStartResult start();
+  void begin_depth_bootstrap();
   void stop() noexcept;
   [[nodiscard]] TransportObservation observe() const;
 
@@ -284,6 +318,7 @@ public:
   SpotTransport &operator=(SpotTransport &&) = delete;
 
   [[nodiscard]] TransportStartResult start();
+  void begin_depth_bootstrap();
   void stop() noexcept;
   [[nodiscard]] TransportObservation observe() const;
 

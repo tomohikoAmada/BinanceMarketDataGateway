@@ -23,7 +23,56 @@ struct CollectedMarket final {
   runtime::RuntimeObservation runtime;
   recovery::RecoveryObservation recovery;
   publication::EventPublicationObservation event_publication;
+  runtime::EnabledStreams enabled_streams{};
 };
+
+void populate_enabled_streams(gateway_wire::MarketRuntimeStatus *market,
+                              common_wire::Market market_kind,
+                              const runtime::EnabledStreams &enabled) {
+  auto *caps = market->mutable_enabled_streams();
+  caps->set_orderbook_rpc_enabled(enabled.orderbook);
+  if (enabled.diff_depth) {
+    caps->add_streams(common_wire::STREAM_DIFF_DEPTH);
+  }
+  if (enabled.agg_trade) {
+    caps->add_streams(common_wire::STREAM_AGG_TRADE);
+  }
+  if (enabled.book_ticker) {
+    caps->add_streams(common_wire::STREAM_BOOK_TICKER);
+  }
+  if (market_kind == common_wire::MARKET_USD_M_PERPETUAL) {
+    if (enabled.mark_price) {
+      caps->add_streams(common_wire::STREAM_MARK_PRICE);
+    }
+    if (enabled.liquidation) {
+      caps->add_streams(common_wire::STREAM_LIQUIDATION);
+    }
+  }
+  if (enabled.reference_data) {
+    caps->add_streams(common_wire::STREAM_REFERENCE_DATA);
+    if (market_kind == common_wire::MARKET_USD_M_PERPETUAL) {
+      caps->add_reference_source_kinds(
+          common_wire::REFERENCE_SOURCE_KIND_OPEN_INTEREST);
+      caps->add_reference_source_kinds(
+          common_wire::REFERENCE_SOURCE_KIND_TOP_LONG_SHORT_ACCOUNT_RATIO);
+      caps->add_reference_source_kinds(
+          common_wire::REFERENCE_SOURCE_KIND_TOP_LONG_SHORT_POSITION_RATIO);
+      caps->add_reference_source_kinds(
+          common_wire::REFERENCE_SOURCE_KIND_GLOBAL_LONG_SHORT_ACCOUNT_RATIO);
+      caps->add_reference_source_kinds(
+          common_wire::REFERENCE_SOURCE_KIND_TAKER_BUY_SELL_VOLUME);
+      caps->add_reference_source_kinds(
+          common_wire::REFERENCE_SOURCE_KIND_INSTRUMENT);
+      if (enabled.orderbook) {
+        caps->add_reference_source_kinds(
+            common_wire::REFERENCE_SOURCE_KIND_DEPTH_BASELINE);
+      }
+    } else if (market_kind == common_wire::MARKET_SPOT) {
+      caps->add_reference_source_kinds(
+          common_wire::REFERENCE_SOURCE_KIND_INSTRUMENT);
+    }
+  }
+}
 
 } // namespace
 
@@ -116,7 +165,8 @@ GatewayStatusAssembler::collect(std::chrono::steady_clock::time_point deadline,
       }
       markets.push_back(CollectedMarket{entry.key.venue, entry.key.market,
                                         entry.key.symbol, *runtime, *recovery,
-                                        entry.event_publication->observe()});
+                                        entry.event_publication->observe(),
+                                        entry.enabled_streams});
     }
   } else
 #endif
@@ -135,7 +185,8 @@ GatewayStatusAssembler::collect(std::chrono::steady_clock::time_point deadline,
     }
     markets.push_back(CollectedMarket{
         common_wire::VENUE_BINANCE, common_wire::MARKET_SPOT, "BTCUSDT",
-        *runtime, *recovery, event_publication_->observe()});
+        *runtime, *recovery, event_publication_->observe(),
+        runtime::EnabledStreams::all_for(common_wire::MARKET_SPOT)});
   }
 
   for (const auto &market : markets) {
@@ -208,6 +259,8 @@ GatewayStatusAssembler::collect(std::chrono::steady_clock::time_point deadline,
     }
     market->set_active_subscription_count(
         static_cast<std::uint64_t>(active_subscriptions));
+    populate_enabled_streams(market, observation.market,
+                             observation.enabled_streams);
     total_active_subscriptions +=
         static_cast<std::uint64_t>(active_subscriptions);
   }

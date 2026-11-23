@@ -23,8 +23,9 @@ namespace {
          !recovery->terminal && recovery->connection_generation >= 1U &&
          recovery->active_transport_count == 1U && runtime.has_value() &&
          runtime->state == runtime::RuntimeState::Live &&
-         runtime->projection_status ==
-             projection::v1::ProjectionStatus::Synchronized &&
+         (!product.enabled_streams().orderbook ||
+          runtime->projection_status ==
+              projection::v1::ProjectionStatus::Synchronized) &&
          runtime->owner_thread_id != std::thread::id{};
 }
 
@@ -49,10 +50,15 @@ make_reference_service(composition::ConfiguredProductRuntimeSet &products,
   }
   std::vector<transport::UsdMReferenceProduct> references;
   for (const auto &owner : products.products()) {
-    if (owner->key().market == runtime::common_wire::MARKET_USD_M_PERPETUAL) {
+    if (owner->key().market == runtime::common_wire::MARKET_USD_M_PERPETUAL ||
+        owner->key().market == runtime::common_wire::MARKET_SPOT) {
       references.push_back(
           {owner->key(), &owner->event_publication(), owner->numeric_spec(),
-           [owner_ptr = owner.get()](std::string_view) { owner_ptr->stop(); }});
+           [owner_ptr = owner.get()](std::string_view) {
+             std::this_thread::sleep_for(std::chrono::milliseconds{150});
+             owner_ptr->stop();
+           },
+           owner->enabled_streams().reference_data});
     }
   }
   if (references.empty()) {
@@ -157,6 +163,9 @@ ProductionGateway::start(const std::function<bool()> &external_stop_requested) {
     if (stop_requested(external_stop_requested)) {
       rollback();
       return {StartCode::StopRequested, std::nullopt};
+    }
+    if (reference_service_ != nullptr) {
+      reference_service_->publish_seeds();
     }
     if (!server_.start(grpc_listen_address_)) {
       rollback();

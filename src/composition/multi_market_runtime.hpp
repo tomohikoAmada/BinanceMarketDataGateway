@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <iosfwd>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,7 @@ struct ProductRuntimeOptions final {
   recovery::PlannedRotationPolicy planned_rotation{
       recovery::production_policy()};
   recovery::detail::RecoveryTestOptions recovery_test;
+  std::optional<runtime::EnabledStreams> enabled_streams{};
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   performance::PerformanceBaselineLimits performance_baseline_limits{};
 #endif
@@ -77,6 +79,7 @@ public:
 
   [[nodiscard]] const MarketKey &key() const noexcept;
   [[nodiscard]] const core::NumericSpec &numeric_spec() const noexcept;
+  [[nodiscard]] const runtime::EnabledStreams &enabled_streams() const noexcept;
   [[nodiscard]] ProductKind kind() const noexcept;
   [[nodiscard]] runtime::MarketRuntime &runtime() noexcept;
   [[nodiscard]] recovery::RecoveryCoordinator &recovery() noexcept;
@@ -89,6 +92,7 @@ public:
 private:
   const MarketKey key_;
   const core::NumericSpec numeric_spec_;
+  const runtime::EnabledStreams enabled_streams_;
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
   std::shared_ptr<performance::ProductTraceBuffer> performance_baseline_;
 #endif

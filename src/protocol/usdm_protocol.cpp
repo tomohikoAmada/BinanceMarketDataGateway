@@ -491,7 +491,7 @@ parse_mark_price_object(const Json &data, runtime::ClockSample received_at,
   }
   if (!mark_price.has_value() || !plain_decimal(*mark_price, false) ||
       !index_price.has_value() || !plain_decimal(*index_price, false) ||
-      !settle_price.has_value() || !plain_decimal(*settle_price, false) ||
+      !settle_price.has_value() || !plain_decimal(*settle_price, true) ||
       !funding_rate.has_value() || !signed_decimal(*funding_rate) ||
       !event_time.has_value() || !funding_time.has_value()) {
     return error(protocol::ProtocolErrorCode::InvalidField, "markPrice",
@@ -518,7 +518,20 @@ parse_mark_price_object(const Json &data, runtime::ClockSample received_at,
   price.set_mark_price(std::string{*mark_price});
   price.set_index_price(std::string{*index_price});
   price.set_estimated_settle_price(std::string{*settle_price});
-  price.set_funding_rate(std::string{*funding_rate});
+  const auto normalized_funding_rate = [&]() -> std::string {
+    std::string_view value = *funding_rate;
+    if (!value.empty() && value.front() == '-') {
+      auto rest = value.substr(1U);
+      const bool all_zero = std::all_of(rest.begin(), rest.end(), [](char ch) {
+        return ch == '0' || ch == '.';
+      });
+      if (all_zero) {
+        return "0";
+      }
+    }
+    return std::string{value};
+  }();
+  price.set_funding_rate(normalized_funding_rate);
   price.set_next_funding_time_ms(*funding_time);
   if (moving_average.has_value()) {
     price.set_mark_price_moving_average(std::string{*moving_average});
@@ -584,6 +597,8 @@ parse_liquidation_object(const Json &data, runtime::ClockSample received_at,
   populate_metadata(liquidation, common_wire::STREAM_LIQUIDATION,
                     "liquidation.v1", requested_symbol, connection_id,
                     received_at, *event_time);
+  liquidation.mutable_metadata()->set_exchange_trade_time_ms(
+      *order_trade_time);
   liquidation.set_side(std::string{*side});
   liquidation.set_order_type(std::string{*order_type});
   liquidation.set_time_in_force(std::string{*time_in_force});
