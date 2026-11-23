@@ -26,9 +26,7 @@ public:
     return transport_.start();
   }
 
-  void begin_depth_bootstrap() override {
-    transport_.begin_depth_bootstrap();
-  }
+  void begin_depth_bootstrap() override { transport_.begin_depth_bootstrap(); }
 
   void stop() noexcept override { transport_.stop(); }
 
@@ -110,11 +108,10 @@ classify_failure(const runtime::RuntimeObservation &runtime,
     decision.recoverable = true;
     decision.cause =
         status == 429U ? RecoveryCause::Http429 : RecoveryCause::Http418;
-    decision.minimum_delay = std::chrono::seconds{
-        std::max<std::chrono::seconds::rep>(
-            1, retry_after.has_value()
-                   ? retry_after->count()
-                   : (status == 418U ? 86400 : 60))};
+    decision.minimum_delay =
+        std::chrono::seconds{std::max<std::chrono::seconds::rep>(
+            1, retry_after.has_value() ? retry_after->count()
+                                       : (status == 418U ? 86400 : 60))};
     return decision;
   }
   if (status >= 500U && status <= 599U) {

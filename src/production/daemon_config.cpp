@@ -94,9 +94,9 @@ parse_stream_list(const Json &value, runtime::common_wire::Market market,
   if (!value.is_array()) {
     return error(std::string{field_name} + " must be an array of strings");
   }
-  const bool is_usdm =
-      market == runtime::common_wire::MARKET_USD_M_PERPETUAL;
-  runtime::EnabledStreams result{false, false, false, false, false, false, false};
+  const bool is_usdm = market == runtime::common_wire::MARKET_USD_M_PERPETUAL;
+  runtime::EnabledStreams result{false, false, false, false,
+                                 false, false, false};
   std::set<std::string> seen;
   for (const auto &entry : value) {
     if (!entry.is_string()) {
@@ -104,8 +104,8 @@ parse_stream_list(const Json &value, runtime::common_wire::Market market,
     }
     const auto name = entry.get<std::string>();
     if (!seen.insert(name).second) {
-      return error(std::string{field_name} + " contains duplicate stream: " +
-                   name);
+      return error(std::string{field_name} +
+                   " contains duplicate stream: " + name);
     }
     if (name == "orderbook") {
       result.orderbook = true;
@@ -122,8 +122,8 @@ parse_stream_list(const Json &value, runtime::common_wire::Market market,
     } else if (name == "reference_data") {
       result.reference_data = true;
     } else {
-      return error(std::string{field_name} + " contains unsupported stream: " +
-                   name);
+      return error(std::string{field_name} +
+                   " contains unsupported stream: " + name);
     }
   }
   if (!result.uses_public_ws(is_usdm) && !result.uses_market_ws(is_usdm)) {
@@ -246,9 +246,9 @@ DaemonConfigResult load_daemon_config(std::string_view config_path) {
   auto spot_default =
       runtime::EnabledStreams::all_for(runtime::common_wire::MARKET_SPOT);
   if (root.contains("spot_streams")) {
-    auto parsed_spot = parse_stream_list(root.at("spot_streams"),
-                                         runtime::common_wire::MARKET_SPOT,
-                                         "spot_streams");
+    auto parsed_spot =
+        parse_stream_list(root.at("spot_streams"),
+                          runtime::common_wire::MARKET_SPOT, "spot_streams");
     if (const auto *failure = std::get_if<DaemonConfigError>(&parsed_spot)) {
       return *failure;
     }
@@ -258,8 +258,8 @@ DaemonConfigResult load_daemon_config(std::string_view config_path) {
       runtime::common_wire::MARKET_USD_M_PERPETUAL);
   if (root.contains("usdm_streams")) {
     auto parsed_usdm = parse_stream_list(
-        root.at("usdm_streams"),
-        runtime::common_wire::MARKET_USD_M_PERPETUAL, "usdm_streams");
+        root.at("usdm_streams"), runtime::common_wire::MARKET_USD_M_PERPETUAL,
+        "usdm_streams");
     if (const auto *failure = std::get_if<DaemonConfigError>(&parsed_usdm)) {
       return *failure;
     }
@@ -267,9 +267,9 @@ DaemonConfigResult load_daemon_config(std::string_view config_path) {
   }
   StreamSwitchMap stream_switches;
   for (const auto &key : keys) {
-    stream_switches.emplace(
-        key, key.market == runtime::common_wire::MARKET_SPOT ? spot_default
-                                                             : usdm_default);
+    stream_switches.emplace(key, key.market == runtime::common_wire::MARKET_SPOT
+                                     ? spot_default
+                                     : usdm_default);
   }
   if (root.contains("symbol_streams")) {
     const auto &overrides = root.at("symbol_streams");
@@ -290,8 +290,8 @@ DaemonConfigResult load_daemon_config(std::string_view config_path) {
       for (const auto &key : keys) {
         if (key.symbol == sym &&
             (!target_market.has_value() || key.market == *target_market)) {
-          auto parsed_symbol = parse_stream_list(val, key.market,
-                                                 "symbol_streams." + raw_key);
+          auto parsed_symbol =
+              parse_stream_list(val, key.market, "symbol_streams." + raw_key);
           if (const auto *failure =
                   std::get_if<DaemonConfigError>(&parsed_symbol)) {
             return *failure;
@@ -302,8 +302,9 @@ DaemonConfigResult load_daemon_config(std::string_view config_path) {
         }
       }
       if (!matched) {
-        return error("symbol_streams key does not match any configured product: " +
-                     raw_key);
+        return error(
+            "symbol_streams key does not match any configured product: " +
+            raw_key);
       }
     }
   }

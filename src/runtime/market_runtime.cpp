@@ -45,8 +45,8 @@ struct MarketOnlyReadyInput final {
   SourceProvenance provenance;
 };
 
-using RuntimeInput =
-    std::variant<DepthUpdateInput, SnapshotInput, MarketOnlyReadyInput, InjectedFailure>;
+using RuntimeInput = std::variant<DepthUpdateInput, SnapshotInput,
+                                  MarketOnlyReadyInput, InjectedFailure>;
 
 struct IngressItem final {
   std::uint64_t ticket;
@@ -307,9 +307,8 @@ public:
       return PlannedRebootstrapResetResult::Stopping;
     }
     if (observation_.state != RuntimeState::Live ||
-        (!limits_.market_only &&
-         observation_.projection_status !=
-             core::ProjectionStatus::Synchronized) ||
+        (!limits_.market_only && observation_.projection_status !=
+                                     core::ProjectionStatus::Synchronized) ||
         observation_.fault_reason.has_value()) {
       return PlannedRebootstrapResetResult::InvalidState;
     }
@@ -994,9 +993,8 @@ private:
           observation_.state == RuntimeState::NeedsResync;
       const bool valid_planned =
           observation_.state == RuntimeState::Live &&
-          (limits_.market_only ||
-           observation_.projection_status ==
-               core::ProjectionStatus::Synchronized) &&
+          (limits_.market_only || observation_.projection_status ==
+                                      core::ProjectionStatus::Synchronized) &&
           !observation_.fault_reason.has_value();
       if ((reset_kind == ResetKind::Recovery && !valid_recovery) ||
           (reset_kind == ResetKind::Planned && !valid_planned)) {

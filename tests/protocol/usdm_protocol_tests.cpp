@@ -589,8 +589,8 @@ void usdm_public_and_market_event_payloads() {
   REQUIRE(order.metadata().has_exchange_trade_time_ms());
   REQUIRE_EQ(order.metadata().exchange_trade_time_ms(), 1568014460893U);
 
-  // C8.5: Zero settle_price ("0") and negative-zero funding_rate ("-0.00000000")
-  // must parse cleanly with normalized funding_rate "0".
+  // C8.5: Zero settle_price ("0") and negative-zero funding_rate
+  // ("-0.00000000") must parse cleanly with normalized funding_rate "0".
   const auto zero_mark = protocol::parse_usdm_market_event_frame(
       R"json({"stream":"btcusdt@markPrice@1s","data":{"e":"markPriceUpdate","E":1562305380000,"s":"BTCUSDT","p":"11794.15000000","i":"11784.62659091","P":"0","r":"-0.00000000","T":1562306400000}})json",
       received, "usdm-market", "BTCUSDT");

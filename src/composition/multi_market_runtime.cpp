@@ -37,9 +37,7 @@ public:
     return transport_.start();
   }
 
-  void begin_depth_bootstrap() override {
-    transport_.begin_depth_bootstrap();
-  }
+  void begin_depth_bootstrap() override { transport_.begin_depth_bootstrap(); }
 
   void stop() noexcept override { transport_.stop(); }
 
@@ -113,9 +111,7 @@ public:
     return transport_.start();
   }
 
-  void begin_depth_bootstrap() override {
-    transport_.begin_depth_bootstrap();
-  }
+  void begin_depth_bootstrap() override { transport_.begin_depth_bootstrap(); }
 
   void stop() noexcept override { transport_.stop(); }
 
@@ -215,21 +211,19 @@ private:
                             std::uint64_t generation)
       -> std::unique_ptr<recovery::detail::RecoveryAttempt> {
     if (key.market == common_wire::MARKET_SPOT) {
-      return std::make_unique<SpotProductAttempt>(runtime, clock, generation,
-                                                  key.symbol, publication,
-                                                  enabled_streams
+      return std::make_unique<SpotProductAttempt>(
+          runtime, clock, generation, key.symbol, publication, enabled_streams
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
-                                                  ,
-                                                  performance_baseline
+          ,
+          performance_baseline
 #endif
       );
     }
-    return std::make_unique<UsdMProductAttempt>(runtime, clock, generation,
-                                                key.symbol, publication,
-                                                enabled_streams
+    return std::make_unique<UsdMProductAttempt>(
+        runtime, clock, generation, key.symbol, publication, enabled_streams
 #if defined(BMDG_PERFORMANCE_BASELINE_ENABLED)
-                                                ,
-                                                performance_baseline
+        ,
+        performance_baseline
 #endif
     );
   };
@@ -357,18 +351,18 @@ ProductRuntime::ProductRuntime(MarketKey key, core::NumericSpec numeric_spec,
                std::move(options.runtime_test)},
       event_publication_{std::move(gateway_instance_id), clock,
                          options.event_limits, performance_baseline_},
-      recovery_{
-          runtime_, std::move(clock), options.planned_rotation,
-          coordinator_options(key_, event_publication_, enabled_streams_,
-                              performance_baseline_),
-          std::move(options.recovery_test)} {}
+      recovery_{runtime_, std::move(clock), options.planned_rotation,
+                coordinator_options(key_, event_publication_, enabled_streams_,
+                                    performance_baseline_),
+                std::move(options.recovery_test)} {}
 #else
     : key_{validate_product_key(std::move(key))}, numeric_spec_{numeric_spec},
       enabled_streams_{options.enabled_streams.value_or(
           runtime::EnabledStreams::all_for(key_.market))},
-      runtime_{resolved_runtime_limits(options.runtime_limits, enabled_streams_),
-               clock, numeric_spec, identity_for(key_),
-               std::move(options.runtime_test)},
+      runtime_{
+          resolved_runtime_limits(options.runtime_limits, enabled_streams_),
+          clock, numeric_spec, identity_for(key_),
+          std::move(options.runtime_test)},
       event_publication_{std::move(gateway_instance_id), clock,
                          options.event_limits},
       recovery_{runtime_, std::move(clock), options.planned_rotation,

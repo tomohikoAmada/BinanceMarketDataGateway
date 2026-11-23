@@ -95,8 +95,9 @@ fetch_exchange_info_https(std::string_view exact_symbol);
 // G12-C set-level metadata acquisition. This intentionally fetches the full
 // Spot exchangeInfo document once for all configured Spot products.
 [[nodiscard]] ExchangeInfoResult fetch_spot_exchange_info_set_https();
-[[nodiscard]] ExchangeInfoResult fetch_spot_exchange_info_for_symbols_https(
-    std::span<const std::string> symbols, std::stop_token stop_token = {});
+[[nodiscard]] ExchangeInfoResult
+fetch_spot_exchange_info_for_symbols_https(std::span<const std::string> symbols,
+                                           std::stop_token stop_token = {});
 [[nodiscard]] runtime::ClockSample sample_real_clock() noexcept;
 
 // Blocking one-shot GET for low-frequency reference polling. It reuses the
@@ -106,9 +107,10 @@ fetch_exchange_info_https(std::string_view exact_symbol);
                                                std::string port,
                                                std::string target,
                                                std::string user_agent);
-[[nodiscard]] HttpsJsonResult fetch_https_json_cancellable(
-    std::string host, std::string port, std::string target,
-    std::string user_agent, std::stop_token stop_token);
+[[nodiscard]] HttpsJsonResult
+fetch_https_json_cancellable(std::string host, std::string port,
+                             std::string target, std::string user_agent,
+                             std::stop_token stop_token);
 
 // Reusable HTTP/1.1 TLS keep-alive client for sequential polling on one thread.
 class KeepAliveHttpsClient final {

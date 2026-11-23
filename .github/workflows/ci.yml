@@ -105,7 +105,7 @@ jobs:
       - name: Fetch pinned Contracts generated Python
         run: |
           mkdir -p build/contracts-src/src
-          curl -fsSL "https://github.com/tomohikoAmada/BinanceMarketDataContracts/archive/b4af96a29ade080bc92d65d5a7dc64184f139424.tar.gz" -o build/contracts-src.tar.gz
+          curl -fsSL "https://github.com/tomohikoAmada/BinanceMarketDataContracts/archive/05911f863525dc341f063a1d5bf1aaa6b3f8cd25.tar.gz" -o build/contracts-src.tar.gz
           tar -xzf build/contracts-src.tar.gz -C build
           cp -R build/BinanceMarketDataContracts-*/src/binance_market_data build/contracts-src/src/
       - name: Run consumer probe tests
@@ -220,7 +220,7 @@ jobs:
           install -D -m 0644 tools/README.md build/production-package/tools/README.md
           install -D -m 0644 deployment/bmdg-consumer.service build/production-package/deployment/bmdg-consumer.service
           mkdir -p build/production-package/contracts-src/src
-          curl -fsSL "https://github.com/tomohikoAmada/BinanceMarketDataContracts/archive/b4af96a29ade080bc92d65d5a7dc64184f139424.tar.gz" -o build/contracts-src.tar.gz
+          curl -fsSL "https://github.com/tomohikoAmada/BinanceMarketDataContracts/archive/05911f863525dc341f063a1d5bf1aaa6b3f8cd25.tar.gz" -o build/contracts-src.tar.gz
           tar -xzf build/contracts-src.tar.gz -C build
           cp -R build/BinanceMarketDataContracts-*/src/binance_market_data build/production-package/contracts-src/src/
           test -f build/production-package/tools/consume_gateway.py

@@ -48,7 +48,8 @@ struct EnabledStreams final {
   bool liquidation{true};
   bool reference_data{true};
 
-  [[nodiscard]] static constexpr EnabledStreams all_for(common_wire::Market market) noexcept {
+  [[nodiscard]] static constexpr EnabledStreams
+  all_for(common_wire::Market market) noexcept {
     if (market == common_wire::MARKET_SPOT) {
       return {true, true, true, true, false, false, true};
     }
@@ -66,7 +67,8 @@ struct EnabledStreams final {
     return is_usdm && (agg_trade || mark_price || liquidation);
   }
 
-  friend bool operator==(const EnabledStreams &, const EnabledStreams &) = default;
+  friend bool operator==(const EnabledStreams &,
+                         const EnabledStreams &) = default;
 };
 
 } // namespace binance_market_data::gateway::runtime

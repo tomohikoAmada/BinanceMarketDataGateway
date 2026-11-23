@@ -17,7 +17,8 @@ struct MarketServices final {
   MarketRuntime *runtime{nullptr};
   recovery::RecoveryCoordinator *recovery{nullptr};
   publication::EventPublication *event_publication{nullptr};
-  EnabledStreams enabled_streams{EnabledStreams::all_for(common_wire::MARKET_USD_M_PERPETUAL)};
+  EnabledStreams enabled_streams{
+      EnabledStreams::all_for(common_wire::MARKET_USD_M_PERPETUAL)};
 };
 
 // A finite immutable non-owning view. ProductRuntime owners must outlive it.

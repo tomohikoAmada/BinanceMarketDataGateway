@@ -14,8 +14,8 @@ namespace binance_market_data::gateway::production {
 
 inline constexpr std::size_t kMaximumDaemonConfigBytes = 64U * 1024U;
 
-using StreamSwitchMap =
-    std::map<runtime::MarketKey, runtime::EnabledStreams, runtime::MarketKeyLess>;
+using StreamSwitchMap = std::map<runtime::MarketKey, runtime::EnabledStreams,
+                                 runtime::MarketKeyLess>;
 
 struct DaemonConfig final {
   std::string grpc_listen;

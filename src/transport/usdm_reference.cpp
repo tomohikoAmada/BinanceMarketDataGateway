@@ -963,10 +963,9 @@ private:
       const auto err_code = network_error_code(*failure);
       for (std::size_t offset = 0; offset < active_indices.size(); ++offset) {
         const auto &product = products_[active_indices[offset]];
-        auto observation =
-            make_error_observation(UsdMReferenceKind::Instrument, now,
-                                   request_ids[offset], product.key.symbol,
-                                   err_code);
+        auto observation = make_error_observation(UsdMReferenceKind::Instrument,
+                                                  now, request_ids[offset],
+                                                  product.key.symbol, err_code);
         static_cast<void>(publish(product, std::move(observation)));
         record_request(true, false);
       }
@@ -1037,7 +1036,8 @@ private:
     const auto started = std::chrono::steady_clock::now();
     std::size_t ordinal = 0U;
     for (std::size_t product = 0; product < products_.size(); ++product) {
-      if (products_[product].key.market != common_wire::MARKET_USD_M_PERPETUAL ||
+      if (products_[product].key.market !=
+              common_wire::MARKET_USD_M_PERPETUAL ||
           !products_[product].enable_periodic_reference) {
         continue;
       }

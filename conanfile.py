@@ -24,7 +24,7 @@ class BinanceMarketDataGatewayRuntimeDependencies(ConanFile):
             "binance-market-data-contracts-cpp/0.1.0#0029d6a497ad77201966ef85bfaf228e"
         )
         self.requires(
-            "binance-market-data-projection/0.1.0#a330ca46ddb45c1e17cdadcea250442c"
+            "binance-market-data-projection/0.1.0#f1dc6264e7820d9d968536b4839a7bb5"
         )
         self.requires("boost/1.91.0")
         self.requires("nlohmann_json/3.12.0")

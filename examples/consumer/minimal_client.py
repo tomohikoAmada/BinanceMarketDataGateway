@@ -147,7 +147,7 @@ async def consume_order_book(
             stats["rpc_errors"] += 1
             print(f"[order_book] rpc error {exc.code().name}: {exc.details()}")
         finally:
-            if call is not None:
+            if call is not None and callable(getattr(call, "cancel", None)):
                 call.cancel()
         if not stop.is_set() and not resubscribe:
             await asyncio.sleep(1.0)
@@ -216,7 +216,7 @@ async def consume_events(
             stats["rpc_errors"] += 1
             print(f"[{stream_name}] rpc error {exc.code().name}: {exc.details()}")
         finally:
-            if call is not None:
+            if call is not None and callable(getattr(call, "cancel", None)):
                 call.cancel()
         if not stop.is_set() and not resubscribe:
             await asyncio.sleep(1.0)

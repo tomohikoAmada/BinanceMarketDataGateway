@@ -207,8 +207,7 @@ acquire_production_metadata(const std::vector<runtime::MarketKey> &market_keys,
   return result;
 }
 
-std::vector<composition::ProductRuntimeSpec>
-make_product_runtime_specs(
+std::vector<composition::ProductRuntimeSpec> make_product_runtime_specs(
     ProductionMetadata metadata,
     const std::map<runtime::MarketKey, runtime::EnabledStreams,
                    runtime::MarketKeyLess> *stream_switches) {
@@ -229,8 +228,8 @@ make_product_runtime_specs(
         options.enabled_streams = found->second;
       }
     }
-    specifications.push_back({std::move(product.key), product.numeric_spec,
-                              std::move(options)});
+    specifications.push_back(
+        {std::move(product.key), product.numeric_spec, std::move(options)});
   }
   return specifications;
 }

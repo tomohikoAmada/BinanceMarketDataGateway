@@ -470,7 +470,8 @@ void channel_switch_config_parsing() {
     "spot_symbols": ["BTCUSDT"],
     "spot_streams": ["mark_price"]
   })json");
-  REQUIRE(std::holds_alternative<production::DaemonConfigError>(invalid_channel));
+  REQUIRE(
+      std::holds_alternative<production::DaemonConfigError>(invalid_channel));
 }
 
 } // namespace

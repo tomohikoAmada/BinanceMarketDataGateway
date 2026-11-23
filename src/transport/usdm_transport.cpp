@@ -164,17 +164,16 @@ fetch_usdm_exchange_info_https_cancellable(std::stop_token stop_token) {
   auto fetched = transport::fetch_https_json_cancellable(
       std::string{kUsdMTransportRoutes.rest_host},
       std::string{kUsdMTransportRoutes.rest_port},
-      std::string{kUsdMTransportRoutes.exchange_info_target},
-      "bmdg-usdm/1.0.0", stop_token);
+      std::string{kUsdMTransportRoutes.exchange_info_target}, "bmdg-usdm/1.0.0",
+      stop_token);
   if (const auto *failure = std::get_if<transport::NetworkError>(&fetched)) {
     return *failure;
   }
   auto ok = std::get<transport::HttpsJsonResponse>(std::move(fetched));
   if (!ok.tls_verified) {
-    return transport::NetworkError{transport::NetworkErrorCode::HttpStatus,
-                                   "exchange-info-http-status",
-                                   "Binance exchangeInfo returned non-200",
-                                   std::nullopt, std::nullopt};
+    return transport::NetworkError{
+        transport::NetworkErrorCode::HttpStatus, "exchange-info-http-status",
+        "Binance exchangeInfo returned non-200", std::nullopt, std::nullopt};
   }
   return transport::ExchangeInfoResponse{std::move(ok.body), true,
                                          ok.received_at};

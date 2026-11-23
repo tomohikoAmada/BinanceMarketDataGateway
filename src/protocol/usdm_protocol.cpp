@@ -597,8 +597,7 @@ parse_liquidation_object(const Json &data, runtime::ClockSample received_at,
   populate_metadata(liquidation, common_wire::STREAM_LIQUIDATION,
                     "liquidation.v1", requested_symbol, connection_id,
                     received_at, *event_time);
-  liquidation.mutable_metadata()->set_exchange_trade_time_ms(
-      *order_trade_time);
+  liquidation.mutable_metadata()->set_exchange_trade_time_ms(*order_trade_time);
   liquidation.set_side(std::string{*side});
   liquidation.set_order_type(std::string{*order_type});
   liquidation.set_time_in_force(std::string{*time_in_force});

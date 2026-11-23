@@ -929,8 +929,7 @@ void stop_during_418_long_backoff_exits_fast() {
   }
   const auto stop_started = std::chrono::steady_clock::now();
   recovery.stop();
-  const auto stop_elapsed =
-      std::chrono::steady_clock::now() - stop_started;
+  const auto stop_elapsed = std::chrono::steady_clock::now() - stop_started;
   REQUIRE(stop_elapsed < std::chrono::seconds{2});
   REQUIRE_EQ(recovery.observe().state, recovery::RecoveryState::Stopped);
 }

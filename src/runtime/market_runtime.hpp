@@ -30,15 +30,13 @@ namespace core = projection::v1;
 namespace market = ::binance_market_data::market::v1;
 
 struct RuntimeLimits final {
-  constexpr RuntimeLimits(
-      std::size_t ingress_capacity_value = 64U,
-      std::size_t bootstrap_capacity_value = 64U,
-      publication::PublicationLimits publication_value = {},
-      bool market_only_value = false) noexcept
+  constexpr RuntimeLimits(std::size_t ingress_capacity_value = 64U,
+                          std::size_t bootstrap_capacity_value = 64U,
+                          publication::PublicationLimits publication_value = {},
+                          bool market_only_value = false) noexcept
       : ingress_capacity{ingress_capacity_value},
         bootstrap_capacity{bootstrap_capacity_value},
-        publication{publication_value},
-        market_only{market_only_value} {}
+        publication{publication_value}, market_only{market_only_value} {}
 
   std::size_t ingress_capacity;
   std::size_t bootstrap_capacity;

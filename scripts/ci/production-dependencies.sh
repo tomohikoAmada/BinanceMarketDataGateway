@@ -11,8 +11,8 @@ args=(--lockfile=conan.lock -pr:h="$profile" -pr:b=profiles/production-ci-build 
 if [[ "$mode" == prepare ]]; then
     mkdir -p build/ci-upstream
     for item in \
-        'BinanceMarketDataContracts b4af96a29ade080bc92d65d5a7dc64184f139424' \
-        'BinanceMarketDataProjection c335c33a10a347bf9575e3f3d25fcaf202ec8490'; do
+        'BinanceMarketDataContracts 05911f863525dc341f063a1d5bf1aaa6b3f8cd25' \
+        'BinanceMarketDataProjection b682d59a5ec6cd4b0d3f9a5da69665eb1ee397a9'; do
         read -r repository revision <<< "$item"
         directory="build/ci-upstream/$repository"
         if [[ ! -d "$directory/.git" ]]; then
@@ -31,11 +31,11 @@ if [[ "$mode" == prepare ]]; then
     for ref in \
         'binance-market-data-contracts-cpp/0.1.0#0029d6a497ad77201966ef85bfaf228e' \
         'binance-market-data-contracts-grpc-cpp/0.1.0#c1da6283935080279e4ac59f69515e4a' \
-        'binance-market-data-projection/0.1.0#a330ca46ddb45c1e17cdadcea250442c'; do
+        'binance-market-data-projection/0.1.0#f1dc6264e7820d9d968536b4839a7bb5'; do
         conan cache path "$ref"
     done
     # Only this explicitly requested preparation may build missing binaries.
-    BMD_CONTRACTS_SOURCE_REVISION=b4af96a29ade080bc92d65d5a7dc64184f139424 \
+    BMD_CONTRACTS_SOURCE_REVISION=05911f863525dc341f063a1d5bf1aaa6b3f8cd25 \
         conan install . "${args[@]}" --build=missing --output-folder=build/production-deps
     conan cache clean '*' --source --build --download --temp
 elif [[ "$mode" != consume ]]; then

@@ -1392,59 +1392,59 @@ void channel_switch_gating_and_status_capabilities() {
   const rt::MarketKey usdm_btc = rt::usdm_btcusdt_key();
 
   rt::EnabledStreams usdm_market_only{false, false, true, false,
-                                          true,  true,  true};
+                                      true,  true,  true};
   rt::EnabledStreams spot_book_only{true,  true,  false, false,
-                                        false, false, true};
+                                    false, false, true};
 
   const auto make_spec = [&](rt::MarketKey key, rt::EnabledStreams streams) {
     composition::ProductRuntimeOptions options;
     options.enabled_streams = streams;
     options.recovery_test = recovery_options(key);
     if (!streams.orderbook && !streams.diff_depth) {
-      // Market-only attempts report market_websocket_handshake without REST depth.
-      options.recovery_test.attempt_factory =
-          [key](rt::MarketRuntime &runtime, const rt::RuntimeClock &,
-                std::uint64_t generation) {
-            class MarketOnlyAttempt final
-                : public recovery::detail::RecoveryAttempt {
-            public:
-              MarketOnlyAttempt(rt::MarketRuntime &rt_ref,
-                                std::uint64_t gen)
-                  : runtime_{rt_ref}, generation_{gen} {
-                obs_.connection_generation = gen;
-                obs_.connection_id = "usdm-market-only-g" + std::to_string(gen);
-              }
-              transport::TransportStartResult start() override {
-                if (runtime_.submit_market_only_ready({generation_}) !=
-                    rt::AdmissionResult::Accepted) {
-                  return transport::TransportStartResult::Failed;
-                }
-                std::lock_guard lock{mutex_};
-                obs_.started = true;
-                obs_.running = true;
-                obs_.tls_verified = true;
-                obs_.market_websocket_handshake = true;
-                obs_.last_event_utc_ns = 1'700'000'000'002'000'000U;
-                return transport::TransportStartResult::Started;
-              }
-              void stop() noexcept override {
-                std::lock_guard lock{mutex_};
-                obs_.running = false;
-                obs_.stopped = true;
-              }
-              transport::TransportObservation observe() const override {
-                std::lock_guard lock{mutex_};
-                return obs_;
-              }
+      // Market-only attempts report market_websocket_handshake without REST
+      // depth.
+      options.recovery_test.attempt_factory = [key](rt::MarketRuntime &runtime,
+                                                    const rt::RuntimeClock &,
+                                                    std::uint64_t generation) {
+        class MarketOnlyAttempt final
+            : public recovery::detail::RecoveryAttempt {
+        public:
+          MarketOnlyAttempt(rt::MarketRuntime &rt_ref, std::uint64_t gen)
+              : runtime_{rt_ref}, generation_{gen} {
+            obs_.connection_generation = gen;
+            obs_.connection_id = "usdm-market-only-g" + std::to_string(gen);
+          }
+          transport::TransportStartResult start() override {
+            if (runtime_.submit_market_only_ready({generation_}) !=
+                rt::AdmissionResult::Accepted) {
+              return transport::TransportStartResult::Failed;
+            }
+            std::lock_guard lock{mutex_};
+            obs_.started = true;
+            obs_.running = true;
+            obs_.tls_verified = true;
+            obs_.market_websocket_handshake = true;
+            obs_.last_event_utc_ns = 1'700'000'000'002'000'000U;
+            return transport::TransportStartResult::Started;
+          }
+          void stop() noexcept override {
+            std::lock_guard lock{mutex_};
+            obs_.running = false;
+            obs_.stopped = true;
+          }
+          transport::TransportObservation observe() const override {
+            std::lock_guard lock{mutex_};
+            return obs_;
+          }
 
-            private:
-              rt::MarketRuntime &runtime_;
-              std::uint64_t generation_;
-              mutable std::mutex mutex_;
-              transport::TransportObservation obs_;
-            };
-            return std::make_unique<MarketOnlyAttempt>(runtime, generation);
-          };
+        private:
+          rt::MarketRuntime &runtime_;
+          std::uint64_t generation_;
+          mutable std::mutex mutex_;
+          transport::TransportObservation obs_;
+        };
+        return std::make_unique<MarketOnlyAttempt>(runtime, generation);
+      };
     }
     return composition::ProductRuntimeSpec{std::move(key), numeric_spec(),
                                            std::move(options)};
@@ -1457,11 +1457,13 @@ void channel_switch_gating_and_status_capabilities() {
                                                     "gw-c10-channels"};
   for (const auto &start : products.start()) {
     REQUIRE_EQ(start.result, recovery::RecoveryStartResult::Started);
-    REQUIRE_EQ(products.find(start.key)->recovery().wait_for_generation_live(1U).state,
-               recovery::RecoveryState::Live);
+    REQUIRE_EQ(
+        products.find(start.key)->recovery().wait_for_generation_live(1U).state,
+        recovery::RecoveryState::Live);
   }
 
-  rpc::OrderBookGrpcServer server{products.registry(), clock, "gw-c10-channels"};
+  rpc::OrderBookGrpcServer server{products.registry(), clock,
+                                  "gw-c10-channels"};
   REQUIRE(server.start("127.0.0.1:0"));
   auto stub = make_stub(server.selected_port());
 
@@ -1507,7 +1509,8 @@ void channel_switch_gating_and_status_capabilities() {
   REQUIRE_EQ(dis_book->Finish().error_code(),
              ::grpc::StatusCode::FAILED_PRECONDITION);
 
-  // Disabled SubscribeEvents(STREAM_AGG_TRADE) on book-only Spot -> FAILED_PRECONDITION
+  // Disabled SubscribeEvents(STREAM_AGG_TRADE) on book-only Spot ->
+  // FAILED_PRECONDITION
   ::grpc::ClientContext dis_ev_ctx;
   set_deadline(dis_ev_ctx);
   auto dis_ev = stub->SubscribeEvents(
