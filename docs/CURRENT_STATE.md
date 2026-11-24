@@ -200,6 +200,22 @@ DATA_PARITY_REST_SIDE_DATA=ALIGNED_R4_G7_PARITY_OK
   retaining cumulative counts so reconnected sessions cannot pass coverage
   before fresh session observations arrive (`G9-b`). `pytest tools/tests -q`:
   **33 passed**.
+- **M7-C 24h co-location soak (`dacc477`, 2026-11-23 07:59:12Z -> 2026-11-24 08:10:43Z):**
+  `bmdg` (`20261123-dacc477`) ran `24h 11m 31s` continuously with `0` restarts,
+  keeping all `10/10` products (`5` Spot + `5` USD-M) `live` and
+  `synchronized`, consuming `47,630.57 s` CPU (`~54.6%` single-core average)
+  with RSS `91.5 MiB` (down from prior `c2ecbcd` peak RSS `264.5 MiB` /
+  `225.1 MiB` swap). Logged events were `1` startup Spot forward-gap resync,
+  `4` USD-M WS `End of file` disconnects (all recovered cleanly), and `8`
+  `product owner observation deadline exceeded` warnings (`03:32–07:59 UTC`)
+  correlating with shared-host KVM steal peaking at `74.9%–82.3%`
+  (`mpstat` avg `78.87%` steal). Co-located `sbmdr-recorder` (`20261123-31b296ad`)
+  ran `26.07 h` across UTC midnight rollover before `apt-daily-upgrade`
+  triggered a clean `SIGNAL` restart at `06:59:27Z`: Spot logged `62,523,034`
+  records with `0` drops (peak RSS `36.8 MiB`, `17.0%` CPU) while USD-M logged
+  `212,749,738` records (peak RSS `180.3 MiB`, `45.9%` CPU) with `190,774`
+  (`0.09%`) ingress WS drops when the `128 MiB` write queue saturated under
+  host CPU steal (`0` drops after `06:59:41Z` restart through `08:12Z`).
 - **BMDG/BMDR data parity**: Spot and configured USD-M WS + REST streams
   (excluding raw payload bytes) are aligned and `R4↔G7` parity-verified. See
   [DATA_PARITY](DATA_PARITY.md).

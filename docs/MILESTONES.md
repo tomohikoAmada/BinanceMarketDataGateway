@@ -20,6 +20,7 @@ archived; the v0.3/v0.4 G0-G3 labels do not reopen that history.
 | G5–G6 | USD-M 5 WS families, typed `REFERENCE_DATA` & quarantine | Complete (`fa76a4c`, CI `433905...` + `43582864682` pass) |
 | G7 / G8 | 45-stream probe, 11 shards, `R4↔G7` parity, `G8-c` test-seam cleanup | Complete (`0a8426b` / `325efee`, CI `43582864682` pass) |
 | G9 | `consume_gateway.py` `Decimal` price keys (`G9-a`) & session-reset reference state cleanup (`G9-b`) | Complete locally (`tools/tests` 33/33) |
+| M7-C | Tier-1 HTTPS keep-alive/24h stagger/`enabled_streams` (`dacc477`) + 24h Tokyo soak (`24h11m` `NRestarts=0`, RSS `91.5 MiB`, high host steal ~78.9% observed) | Deployed (`20261123-dacc477`), CI (`45126671397` / `45124850781`) pass, 24h soak recorded with shared-host steal attribution |
 | G3-c | Shared VPS, real network, Recorder co-load, resource budget | Mitigated / relaxed by deployment policy (off-host/optimized client) |
 
 ## Current design boundaries
